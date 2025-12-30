@@ -7,3 +7,4 @@ extern SystemState state;
 extern LocalConfig config;
 extern rele cooler;
 extern rele heater;
+extern bool useFirebase;
