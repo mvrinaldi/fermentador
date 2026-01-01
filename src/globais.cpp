@@ -2,8 +2,8 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-SystemState state;
 LocalConfig config;
+FermentacaoState fermentacaoState;
 
 // Inicialização dos objetos rele
 rele cooler = {PINO_COOLER, false, true, "COOLER"};
@@ -13,3 +13,5 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 
 bool useFirebase = false;
+
+SystemState state;

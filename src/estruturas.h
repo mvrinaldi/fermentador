@@ -20,6 +20,7 @@ struct SystemState {
   unsigned long lastUpdate;
   char mode[8];
   char configName[20];
+  bool active;        // ← fermentação ativa ou não
   bool relayState;
 };
 
@@ -57,3 +58,26 @@ struct FermentationConfig {
   unsigned long startedAt;
   bool active;
 };
+
+struct FermentacaoState {
+    bool active = false;
+    char configName[50] = "";
+    float tempTarget = 20.0;
+    String activeId = "";
+    unsigned long lastUpdate = 0;
+    
+    void clear() {
+        active = false;
+        configName[0] = '\0';
+        tempTarget = 20.0;
+        activeId = "";
+        lastUpdate = millis();
+    }
+    
+    bool hasChanged(const String& newId, bool newActive) const {
+        return (active != newActive) || (activeId != newId);
+    }
+};
+
+// Declaração externa (definida em globais.cpp)
+extern FermentacaoState fermentacaoState;

@@ -1,155 +1,222 @@
 #include "gerenciador_sensores.h"
 #include <ArduinoJson.h>
-#include <ESP8266WiFi.h> // CORREÇÃO: Necessário para WiFi.status()
+#include <ESP8266WiFi.h>
 
-// Referenciando o cliente assíncrono que está no firebase_conexao.cpp
-extern AsyncClientClass aClient; 
+// Firebase async client
+extern AsyncClientClass aClient;
 
-const char* SENSOR_TYPES[] = {"FERMENTADOR", "GELADEIRA"};
-const int NUM_SENSOR_TYPES = 2;
+// ================= EEPROM LAYOUT =================
+#define EEPROM_SIZE          128
+#define SENSOR_ADDR_SIZE     17   // 16 chars + '\0'
 
-// --- Implementação das Funções ---
+#define ADDR_SENSOR_FERMENTADOR   0
+#define ADDR_SENSOR_GELADEIRA   32
+
+// =================================================
+
+// Converte chave em endereço fixo da EEPROM
+int keyToEEPROMAddr(const char* key) {
+    if (strcmp(key, SENSOR1_NOME) == 0) return ADDR_SENSOR_FERMENTADOR;
+    if (strcmp(key, SENSOR2_NOME) == 0) return ADDR_SENSOR_GELADEIRA;
+    return -1;
+}
+
+// =================================================
+// Utils
+// =================================================
 
 String addressToString(DeviceAddress deviceAddress) {
-  String str = "";
-  for (uint8_t i = 0; i < 8; i++) {
-    if (deviceAddress[i] < 16) str += "0";
-    str += String(deviceAddress[i], HEX);
-  }
-  str.toUpperCase();
-  return str;
+    char buffer[17];
+    for (uint8_t i = 0; i < 8; i++) {
+        sprintf(&buffer[i * 2], "%02X", deviceAddress[i]);
+    }
+    buffer[16] = '\0';
+    return String(buffer);
 }
 
-void scanAndSendSensors() {
-  if (WiFi.status() != WL_CONNECTED || !app.ready()) return;
-
-  Serial.println("🔍 Escaneando barramento OneWire...");
-  sensors.begin();
-  int count = sensors.getDeviceCount();
-  
-  JsonDocument doc;
-  JsonArray arr = doc.to<JsonArray>();
-
-  for (int i = 0; i < count; i++) {
-    DeviceAddress tempAddress;
-    if (sensors.getAddress(tempAddress, i)) {
-      arr.add(addressToString(tempAddress));
-    }
-  }
-
-  String jsonStr;
-  serializeJson(doc, jsonStr);
-
-  Database.set<String>(aClient, "/status/detected_sensors", jsonStr, [](AsyncResult &aResult) {
-    if (!aResult.isError()) {
-      Serial.println("✅ Lista de sensores detectados enviada!");
-    } else {
-      Serial.printf("❌ Erro ao enviar scan: %s\n", aResult.error().message().c_str());
-    }
-  });
-}
+// =================================================
+// Inicialização
+// =================================================
 
 void setupSensorManager() {
-    if (!prefs.begin("ferment_sns", false)) {
-        Serial.println("❌ Erro ao abrir Preferences");
-    } else {
-        Serial.println("✅ Preferences iniciada");
+    EEPROM.begin(EEPROM_SIZE);
+    Serial.println(F("✅ EEPROM iniciada"));
+}
+
+// =================================================
+// Scan OneWire
+// =================================================
+
+void scanAndSendSensors() {
+    if (WiFi.status() != WL_CONNECTED || !app.ready()) return;
+
+    Serial.println(F("🔍 Escaneando sensores OneWire..."));
+
+    sensors.begin();
+    int count = sensors.getDeviceCount();
+
+    JsonDocument doc;
+    JsonArray arr = doc.to<JsonArray>();
+
+    for (int i = 0; i < count; i++) {
+        DeviceAddress addr;
+        if (sensors.getAddress(addr, i)) {
+            arr.add(addressToString(addr));
+        }
     }
+
+    String payload;
+    serializeJson(doc, payload);
+
+    Database.set<String>(
+        aClient,
+        "/status/detected_sensors",
+        payload,
+        [](AsyncResult &r) {
+            if (r.isError()) {
+                Serial.printf("❌ Erro scan: %s\n", r.error().message().c_str());
+            } else {
+                Serial.println(F("✅ Scan enviado ao Firebase"));
+            }
+        }
+    );
 }
 
-bool saveSensorToPreferences(const String& sensorKey, const String& sensorAddress) {
-    if (sensorKey.length() == 0) return false;
-    return prefs.putString(sensorKey.c_str(), sensorAddress) > 0;
+// =================================================
+// EEPROM helpers
+// =================================================
+
+bool saveSensorToEEPROM(const char* sensorKey, const String& sensorAddress) {
+    int addr = keyToEEPROMAddr(sensorKey);
+    if (addr < 0) return false;
+
+    char buffer[SENSOR_ADDR_SIZE] = {0};
+    sensorAddress.toCharArray(buffer, SENSOR_ADDR_SIZE);
+
+    EEPROM.put(addr, buffer);
+    return EEPROM.commit();
 }
 
-bool removeSensorFromPreferences(const String& sensorKey) {
-    return prefs.remove(sensorKey.c_str());
+bool removeSensorFromEEPROM(const char* sensorKey) {
+    int addr = keyToEEPROMAddr(sensorKey);
+    if (addr < 0) return false;
+
+    char empty[SENSOR_ADDR_SIZE] = {0};
+    EEPROM.put(addr, empty);
+    return EEPROM.commit();
 }
+
+String getSensorAddress(const char* sensorKey) {
+    int addr = keyToEEPROMAddr(sensorKey);
+    if (addr < 0) return "";
+
+    char buffer[SENSOR_ADDR_SIZE];
+    EEPROM.get(addr, buffer);
+
+    if (buffer[0] == '\0') return "";
+    return String(buffer);
+}
+
+// =================================================
+// Lista sensores configurados
+// =================================================
 
 std::vector<SensorInfo> listSensors() {
     std::vector<SensorInfo> lista;
-    const char* chavesPadrao[] = {"sensor_cooler", "sensor_heater", "sensor_aux"};
-    
-    for (const char* chave : chavesPadrao) {
-        String addr = prefs.getString(chave, "");
+
+    const char* keys[] = {SENSOR1_NOME, SENSOR2_NOME};
+
+    for (const char* key : keys) {
+        String addr = getSensorAddress(key);
         if (addr.length() > 0) {
-            SensorInfo info;
-            strncpy(info.nome, chave, sizeof(info.nome));
-            strncpy(info.endereco, addr.c_str(), sizeof(info.endereco));
-            lista.push_back(info);
+            SensorInfo s;
+            strncpy(s.nome, key, sizeof(s.nome));
+            strncpy(s.endereco, addr.c_str(), sizeof(s.endereco));
+            lista.push_back(s);
         }
     }
+
     return lista;
 }
 
+// =================================================
+// Firebase → EEPROM
+// =================================================
+
 bool loadSensorsFromFirebase() {
-    Serial.println(F("📥 Buscando configurações de sensores no Firebase..."));
-    
-    Database.get(aClient, "/config/sensores", [](AsyncResult &aResult) {
-        // 1. Verificamos se NÃO houve erro
-        if (!aResult.isError()) {
-            JsonDocument doc;
-            DeserializationError error = deserializeJson(doc, aResult.c_str());
-            
-            if (!error) {
-                JsonObject root = doc.as<JsonObject>();
-                // Inicia as preferências para salvar
-                prefs.begin("ferment_sns", false); 
-                
-                for (JsonPair kv : root) {
-                    const char* key = kv.key().c_str();
-                    String val = kv.value().as<String>();
-                    prefs.putString(key, val);
-                    Serial.printf("💾 Atualizado localmente: %s -> %s\n", key, val.c_str());
-                }
-                prefs.end();
-                Serial.println(F("✅ Sensores atualizados e salvos no ESP8266"));
-            } else {
-                Serial.print(F("❌ Erro no Parse JSON: "));
-                Serial.println(error.c_str());
+    Serial.println(F("📥 Buscando sensores no Firebase..."));
+
+    Database.get(
+        aClient,
+        "/config/sensores",
+        [](AsyncResult &r) {
+
+            if (r.isError()) {
+                Serial.printf("❌ Firebase erro: %s\n", r.error().message().c_str());
+                return;
             }
-        } else {
-            Serial.printf("❌ Erro ao buscar do Firebase: %s\n", aResult.error().message().c_str());
+
+            JsonDocument doc;
+            if (deserializeJson(doc, r.c_str())) {
+                Serial.println(F("❌ Erro parse JSON sensores"));
+                return;
+            }
+
+            JsonObject root = doc.as<JsonObject>();
+
+            for (JsonPair kv : root) {
+                saveSensorToEEPROM(
+                    kv.key().c_str(),
+                    kv.value().as<String>()
+                );
+
+                Serial.printf(
+                    "💾 EEPROM: %s -> %s\n",
+                    kv.key().c_str(),
+                    kv.value().as<const char*>()
+                );
+            }
+
+            Serial.println(F("✅ Sensores atualizados"));
         }
-    });
-    
+    );
+
     return true;
 }
 
+// =================================================
+// Comando remoto de refresh
+// =================================================
+
 void verificarComandoUpdateSensores() {
-    static unsigned long ultimaVerificacao = 0;
-    
-    // Verifica a flag no Firebase a cada 10 segundos
-    if (millis() - ultimaVerificacao > 10000) {
-        ultimaVerificacao = millis();
+    static unsigned long ultima = 0;
+    if (millis() - ultima < 10000) return;
+    ultima = millis();
 
-        if (WiFi.status() != WL_CONNECTED || !app.ready()) return;
+    if (WiFi.status() != WL_CONNECTED || !app.ready()) return;
 
-        // Note: Removi o template <String> para evitar ambiguidades
-        Database.get(aClient, "/commands/refresh_sensors", [](AsyncResult &aResult) {
-            if (!aResult.isError()) {
-                
-                // CORREÇÃO: Usamos c_str() para pegar o valor bruto e comparar.
-                // No Firebase, booleanos retornam "true" ou "false" como texto no c_str()
-                String val = aResult.c_str();
-                
-                if (val == "true") {
-                    Serial.println(F("🔄 Comando de atualização recebido!"));
-                    
-                    // 1. Carrega os novos endereços do Firebase para o Preferences
-                    loadSensorsFromFirebase();
-                    
-                    // 2. Reseta a flag para "false" para evitar repetições infinitas
-                    // Usamos Database.set com tipo bool explicitamente
-                    Database.set<bool>(aClient, "/commands/refresh_sensors", false, [](AsyncResult &r){
-                        if (r.isError()) {
-                            Serial.printf("❌ Erro ao resetar flag: %s\n", r.error().message().c_str());
-                        } else {
-                            Serial.println(F("✅ Flag de comando resetada."));
+    Database.get(
+        aClient,
+        "/commands/refresh_sensors",
+        [](AsyncResult &r) {
+            if (r.isError()) return;
+
+            if (String(r.c_str()) == "true") {
+                Serial.println(F("🔄 Comando refresh recebido"));
+
+                loadSensorsFromFirebase();
+
+                Database.set<bool>(
+                    aClient,
+                    "/commands/refresh_sensors",
+                    false,
+                    [](AsyncResult &res) {
+                        if (!res.isError()) {
+                            Serial.println(F("✅ Flag resetada"));
                         }
-                    });
-                }
+                    }
+                );
             }
-        });
-    }
+        }
+    );
 }

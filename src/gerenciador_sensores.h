@@ -1,29 +1,30 @@
 #pragma once
 
 #include <Arduino.h>
-#include <Preferences.h>
+#include <EEPROM.h>
 #include <DallasTemperature.h>
 #include <vector>
+
 #include "estruturas.h"
 #include "firebase_conexao.h"
+#include "definitions.h"
 
-// Referências externas
-extern Preferences prefs; 
+// Referência ao barramento OneWire já criado em globais.cpp
 extern DallasTemperature sensors;
 
-// --- Funções Principais de Inicialização e Loop ---
+// --- Inicialização ---
 void setupSensorManager();
 void verificarComandoUpdateSensores();
 
-// --- Funções de Hardware ---
-void scanAndSendSensors(); // Adicionado: Essencial para o scan aparecer no HTML
+// --- Scan ---
+void scanAndSendSensors();
 String addressToString(DeviceAddress deviceAddress);
 
-// --- Funções de Dados e Firebase ---
+// --- Dados ---
 std::vector<SensorInfo> listSensors();
 bool loadSensorsFromFirebase();
 
-// --- Helpers de Armazenamento Local (Preferences) ---
-bool saveSensorToPreferences(const String& sensorKey, const String& sensorAddress);
-bool removeSensorFromPreferences(const String& sensorKey);
-String getSensorAddress(const String& sensorKey);
+// --- EEPROM ---
+bool saveSensorToEEPROM(const char* sensorKey, const String& sensorAddress);
+bool removeSensorFromEEPROM(const char* sensorKey);
+String getSensorAddress(const char* sensorKey);
