@@ -5,6 +5,7 @@
 
 #include <FirebaseClient.h>
 #include "globais.h"
+#include "estruturas.h"
 
 // Objetos globais do Firebase
 extern FirebaseApp app;

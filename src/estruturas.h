@@ -71,15 +71,13 @@ struct FermentationStage {
       durationDays(0),
       rampTimeHours(0),
       targetGravity(0.0),
-      timeoutDays(0),
-      startTime(0),
-      completed(false) {}
+      timeoutDays(0) {}
 };
 
 // === Estado da Fermentação (ESTRUTURA PRINCIPAL) === //
 struct FermentacaoState {
     bool active;
-    String activeId;
+    char activeId[64];
     char configName[64];
     float tempTarget;
     int currentStageIndex;
@@ -99,7 +97,7 @@ struct FermentacaoState {
     
     void clear() {
         active = false;
-        activeId = "";
+        activeId[0] = '\0';
         configName[0] = '\0';
         tempTarget = 20.0;
         currentStageIndex = 0;
@@ -112,9 +110,10 @@ struct FermentacaoState {
         }
     }
     
-    bool hasChanged(const String& newId, bool newActive) const {
-        return (active != newActive) || (activeId != newId);
+    bool hasChanged(const char* newId, bool newActive) const {
+        return (active != newActive) || strcmp(activeId, newId) != 0;
     }
+
 };
 
 // Declarações externas (definidas em globais.cpp)

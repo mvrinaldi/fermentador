@@ -3,134 +3,125 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
+#include <cstring>
+
 #include "firebase_conexao.h"
 #include "fermentacao_firebase.h"
 #include "globais.h"
-#include "eeprom_layout.h"  // ← Layout unificado da EEPROM
+#include "eeprom_layout.h"
+#include "fermentacao_stages.h"
+#include "estruturas.h"
 
-// Variáveis de controle
+// =====================================================
+// VARIÁVEIS DE CONTROLE
+// =====================================================
 unsigned long lastActiveCheck = 0;
-String lastActiveId = "";
+char lastActiveId[64] = "";
 bool isFirstCheck = true;
 bool listenerSetup = false;
 unsigned long lastListenerCheck = 0;
+bool targetReachedSent = false; 
 
 // Controle de fases
 unsigned long stageStartTime = 0;
 bool stageStarted = false;
-float rampStartTemp = 0;
-unsigned long rampStartTime = 0;
 
-// Função para salvar estado na EEPROM - SEÇÃO DE FERMENTAÇÃO (64-127)
+// =====================================================
+// EEPROM
+// =====================================================
 void saveStateToEEPROM() {
     EEPROM.begin(EEPROM_SIZE);
 
-    // Salva ID ativo (bytes 64-95)
-    // Alterado de 'int i' para 'unsigned int i' para evitar o warning de signedness
-    for (unsigned int i = 0; i < 32; i++) { 
-        EEPROM.write(ADDR_ACTIVE_ID + i,
-                    i < fermentacaoState.activeId.length() ?
-                    fermentacaoState.activeId[i] : 0);
+    // ID ativo (64–95)
+    size_t len = strlen(fermentacaoState.activeId);
+    for (unsigned int i = 0; i < 32; i++) {
+        EEPROM.write(
+            ADDR_ACTIVE_ID + i,
+            i < len ? fermentacaoState.activeId[i] : 0
+        );
     }
 
-    // Salva índice da etapa (bytes 96-99)
     EEPROM.put(ADDR_STAGE_INDEX, fermentacaoState.currentStageIndex);
 
-    // Salva tempo de início da etapa (bytes 100-107)
     unsigned long long startMillis = stageStartTime;
     EEPROM.put(ADDR_STAGE_START_TIME, startMillis);
 
-    // Salva flag de etapa iniciada (byte 108)
     EEPROM.put(ADDR_STAGE_STARTED_FLAG, stageStarted);
 
-    // Flag de configuração salva (byte 109)
     EEPROM.write(ADDR_CONFIG_SAVED, 1);
-
     EEPROM.commit();
-    Serial.println(F("[EEPROM] ✅ Estado salvo (Seção Fermentação: 64-127)"));
+
+    Serial.println(F("[EEPROM] ✅ Estado salvo"));
 }
 
-// Função para carregar estado da EEPROM
 void loadStateFromEEPROM() {
     EEPROM.begin(EEPROM_SIZE);
-    
-    // Verifica se há dados salvos (byte 109)
+
     if (EEPROM.read(ADDR_CONFIG_SAVED) != 1) {
-        Serial.println(F("[EEPROM] Nenhum estado de fermentação salvo"));
+        Serial.println(F("[EEPROM] Nenhum estado salvo"));
         return;
     }
-    
-    // Carrega ID ativo (bytes 64-95)
-    char idBuffer[32];
+
     for (int i = 0; i < 32; i++) {
-        idBuffer[i] = EEPROM.read(ADDR_ACTIVE_ID + i);
+        fermentacaoState.activeId[i] =
+            EEPROM.read(ADDR_ACTIVE_ID + i);
     }
-    fermentacaoState.activeId = String(idBuffer);
-    
-    // Carrega índice da etapa (bytes 96-99)
-    EEPROM.get(ADDR_STAGE_INDEX, fermentacaoState.currentStageIndex);
-    
-    // Carrega tempo de início (bytes 100-107)
+    fermentacaoState.activeId[31] = '\0';
+
+    EEPROM.get(
+        ADDR_STAGE_INDEX,
+        fermentacaoState.currentStageIndex
+    );
+
     unsigned long long startMillis;
     EEPROM.get(ADDR_STAGE_START_TIME, startMillis);
     stageStartTime = (unsigned long)startMillis;
-    
-    // Carrega flag de etapa iniciada (byte 108)
+
     EEPROM.get(ADDR_STAGE_STARTED_FLAG, stageStarted);
-    
-    Serial.printf("[EEPROM] ✅ Estado recuperado:\n");
-    Serial.printf("   ID: %s\n", fermentacaoState.activeId.c_str());
-    Serial.printf("   Etapa: %d\n", fermentacaoState.currentStageIndex);
-    Serial.printf("   Iniciada: %s\n", stageStarted ? "SIM" : "NÃO");
-    Serial.printf("   Timestamp: %lu\n", stageStartTime);
+
+    fermentacaoState.active = strlen(fermentacaoState.activeId) > 0;
+
+    Serial.println(F("[EEPROM] ✅ Estado restaurado"));
 }
 
-// Função para limpar EEPROM - Apenas seção de fermentação
 void clearEEPROM() {
     EEPROM.begin(EEPROM_SIZE);
-    
-    // Limpa apenas a seção de fermentação (64-127)
     for (int i = ADDR_FERMENTATION_START; i <= 127; i++) {
         EEPROM.write(i, 0);
     }
-    
     EEPROM.commit();
-    Serial.println(F("[EEPROM] 🧹 Seção de fermentação limpa (bytes 64-127)"));
+    Serial.println(F("[EEPROM] 🧹 Seção de fermentação limpa"));
 }
 
-// ===============================================
-// FUNÇÕES DE CONTROLE
-// ===============================================
-
-// Atualiza temperatura alvo
+// =====================================================
+// CONTROLE DE ESTADO
+// =====================================================
 void updateTargetTemperature(float temp) {
     fermentacaoState.tempTarget = temp;
     state.targetTemp = temp;
 }
 
-// Desativa fermentação atual
 void deactivateCurrentFermentation() {
-    Serial.println(F("[Firebase] 🧹 Limpando configuração ativa..."));
-    
+    Serial.println(F("[Firebase] 🧹 Desativando fermentação"));
+
     fermentacaoState.clear();
-    lastActiveId = "";
+    lastActiveId[0] = '\0';
+
     stageStartTime = 0;
     stageStarted = false;
+
     updateTargetTemperature(20.0);
     clearEEPROM();
-    
-    Serial.println(F("[Firebase] ✅ Configuração limpa."));
 }
 
-// Configura listener
 void setupActiveListener() {
     if (listenerSetup) return;
-    Serial.println(F("[Firebase] Monitoramento ativo"));
+
     listenerSetup = true;
-    loadStateFromEEPROM(); // Recupera estado ao iniciar
+    Serial.println(F("[Firebase] Listener ativo"));
+    loadStateFromEEPROM();
 }
 
-// Mantém listener ativo
 void keepListenerAlive() {
     unsigned long now = millis();
     if (now - lastListenerCheck >= 60000) {
@@ -139,282 +130,229 @@ void keepListenerAlive() {
     }
 }
 
-// Para listener
-void stopActiveListener() {
-    listenerSetup = false;
-    Serial.println(F("[Firebase] Monitoramento desabilitado."));
-}
-
-// ===============================================
-// BUSCA FERMENTAÇÃO ATIVA NO FIREBASE
-// ===============================================
+// =====================================================
+// FIREBASE – FERMENTAÇÃO ATIVA
+// =====================================================
 void getTargetFermentacao() {
     unsigned long now = millis();
-    
-    if (!isFirstCheck && (now - lastActiveCheck < ACTIVE_CHECK_INTERVAL)) {
+
+    if (!isFirstCheck &&
+        (now - lastActiveCheck < ACTIVE_CHECK_INTERVAL)) {
         return;
     }
-    
+
     lastActiveCheck = now;
-    Serial.println(F("[Firebase] Buscando fermentação ativa..."));
+    Serial.println(F("[Firebase] Buscando fermentação ativa"));
 
     String result = Database.get<String>(aClient, "/active");
-    
-    if (result.length() > 0) {
-        JsonDocument doc;
-        if (deserializeJson(doc, result)) {
-            Serial.println(F("[Firebase] Erro ao parsear JSON."));
-            return;
-        }
-        
-        bool active = doc["active"] | false;
-        String idFermentacao = doc["id"] | "";
-        
-        Serial.printf("[Firebase] Status: %s, ID: %s\n", 
-                     active ? "ATIVA" : "INATIVA", idFermentacao.c_str());
-        
-        if (active && idFermentacao.length() > 0) {
-            if (idFermentacao != lastActiveId) {
-                Serial.println(F("[Firebase] 🎯 Nova fermentação ativada!"));
-                
-                fermentacaoState.active = true;
-                fermentacaoState.activeId = idFermentacao;
-                fermentacaoState.currentStageIndex = 0;
-                strlcpy(fermentacaoState.configName, idFermentacao.c_str(), 
-                       sizeof(fermentacaoState.configName));
-                lastActiveId = idFermentacao;
-                
-                // Carrega configuração completa
-                loadConfigParameters(idFermentacao);
-                
-                // Reseta início de etapa
-                stageStartTime = 0;
-                stageStarted = false;
-                
-                saveStateToEEPROM();
-            }
-        } else if (fermentacaoState.active && !active) {
-            deactivateCurrentFermentation();
-        } else {
-            fermentacaoState.clear();
-            updateTargetTemperature(20.0);
-        }
-    } else {
-        Serial.println(F("[Firebase] Nenhuma resposta do Firebase."));
+    if (result.isEmpty()) {
+        Serial.println(F("[Firebase] Sem resposta"));
+        return;
     }
-    
+
+    JsonDocument doc;
+    if (deserializeJson(doc, result)) {
+        Serial.println(F("[Firebase] JSON inválido"));
+        return;
+    }
+
+    bool active = doc["active"] | false;
+    const char* id = doc["id"] | "";
+
+    if (active && strlen(id) > 0) {
+
+        if (strcmp(id, lastActiveId) != 0) {
+            Serial.println(F("[Firebase] 🎯 Nova fermentação"));
+
+            fermentacaoState.active = true;
+            strncpy(
+                fermentacaoState.activeId,
+                id,
+                sizeof(fermentacaoState.activeId) - 1
+            );
+            fermentacaoState.activeId[63] = '\0';
+
+            fermentacaoState.currentStageIndex = 0;
+            strncpy(
+                lastActiveId,
+                id,
+                sizeof(lastActiveId) - 1
+            );
+            lastActiveId[sizeof(lastActiveId) - 1] = '\0';
+
+            loadConfigParameters(id);
+
+            stageStartTime = 0;
+            stageStarted = false;
+
+            saveStateToEEPROM();
+        }
+
+    } else if (fermentacaoState.active && !active) {
+        deactivateCurrentFermentation();
+    }
+
     isFirstCheck = false;
 }
 
-// Carrega todos os parâmetros e etapas da configuração
-void loadConfigParameters(const String& configId) {
-    if (configId.isEmpty()) return;
-    
-    String path = "/configurations/" + configId;
-    Serial.printf("[Firebase] Carregando configuração completa: %s\n", path.c_str());
-    
+// =====================================================
+// CONFIGURAÇÃO DE ETAPAS
+// =====================================================
+void loadConfigParameters(const char* configId) {
+    if (!configId || strlen(configId) == 0) return;
+
+    String path = String("/configurations/") + configId;
+    Serial.printf("[Firebase] Config: %s\n", path.c_str());
+
     String result = Database.get<String>(aClient, path.c_str());
-    
-    if (result.length() > 0) {
-        JsonDocument doc;
-        if (deserializeJson(doc, result)) {
-            Serial.println(F("[Firebase] Erro ao parsear configuração."));
-            return;
-        }
-        
-        const char* name = doc["name"] | "Sem nome";
-        int currentStageIndex = doc["currentStageIndex"] | 0;
-        
-        fermentacaoState.currentStageIndex = currentStageIndex;
-        strlcpy(fermentacaoState.configName, name, sizeof(fermentacaoState.configName));
-        
-        Serial.printf("[Firebase] 📋 Configuração: %s\n", name);
-        
-        // Carrega todas as etapas
-        JsonArray stages = doc["stages"];
-        int stageCount = 0;
-        
-        for (JsonVariant stage : stages) {
-            if (stageCount >= MAX_STAGES) break;
-            FermentationStage& s = fermentacaoState.stages[stageCount];
+    if (result.isEmpty()) return;
 
-            const char* type = stage["type"] | "temperature";
-            s.targetTemp = stage["targetTemp"] | 20.0;
-            
-            // CORREÇÃO: Mapeando startTemp que existe no seu Firebase
-            s.startTemp = stage["startTemp"] | 20.0; 
+    JsonDocument doc;
+    if (deserializeJson(doc, result)) return;
 
-            // CORREÇÃO: Firebase usa "rampTime", ESP usava "rampTimeHours" ou "durationDays"
-            s.rampTimeHours = stage["rampTime"] | 0; 
-            
-            // Se for uma etapa comum (não rampa), você pode precisar de durationDays
-            s.durationDays = stage["durationDays"] | 0; 
+    fermentacaoState.currentStageIndex =
+        doc["currentStageIndex"] | 0;
 
-            s.targetGravity = stage["targetGravity"] | 0.0;
-            s.timeoutDays = stage["timeoutDays"] | 0;
-            
-            // Define tipo
-            if (strcmp(type, "temperature") == 0) { 
-                s.type = STAGE_TEMPERATURE;
-            } else if (strcmp(type, "ramp") == 0) {
-                s.type = STAGE_RAMP;
-            } else if (strcmp(type, "gravity") == 0) {
-                s.type = STAGE_GRAVITY;
-            } else if (strcmp(type, "gravity_time") == 0) {
-                s.type = STAGE_GRAVITY_TIME;
-            }
-            
-            Serial.printf("  Etapa %d: %s | Temp=%.1f°C | Duração=%d dias\n", 
-                         stageCount + 1, type, s.targetTemp, s.durationDays);
-            
-            stageCount++;
-        }
-        
-        fermentacaoState.totalStages = stageCount;
-        Serial.printf("[Firebase] ✅ %d etapas carregadas\n", stageCount);
-        
-        // Define temperatura da etapa atual
-        if (currentStageIndex < stageCount) {
-            updateTargetTemperature(fermentacaoState.stages[currentStageIndex].targetTemp);
-        }
+    const char* name = doc["name"] | "Sem nome";
+    strncpy(
+        fermentacaoState.configName,
+        name,
+        sizeof(fermentacaoState.configName) - 1
+    );
+    fermentacaoState.configName[
+        sizeof(fermentacaoState.configName) - 1
+    ] = '\0';
+
+    JsonArray stages = doc["stages"];
+    int count = 0;
+
+    for (JsonVariant stage : stages) {
+        if (count >= MAX_STAGES) break;
+
+        FermentationStage& s =
+            fermentacaoState.stages[count];
+
+        const char* type = stage["type"] | "temperature";
+
+        s.targetTemp     = stage["targetTemp"] | 20.0;
+        s.startTemp      = stage["startTemp"] | 20.0;
+        s.rampTimeHours  = stage["rampTime"] | 0;
+        s.durationDays   = stage["durationDays"] | 0;
+        s.targetGravity  = stage["targetGravity"] | 0.0;
+        s.timeoutDays    = stage["timeoutDays"] | 0;
+
+        if (!strcmp(type, "ramp")) s.type = STAGE_RAMP;
+        else if (!strcmp(type, "gravity")) s.type = STAGE_GRAVITY;
+        else if (!strcmp(type, "gravity_time")) s.type = STAGE_GRAVITY_TIME;
+        else s.type = STAGE_TEMPERATURE;
+
+        count++;
     }
+
+    fermentacaoState.totalStages = count;
+
+    if (count > 0 &&
+        fermentacaoState.currentStageIndex < count) {
+        updateTargetTemperature(
+            fermentacaoState.stages[
+                fermentacaoState.currentStageIndex
+            ].targetTemp
+        );
+    }
+    fermentacaoState.totalStages = count;
+    sendStageTimers(); // Envia os tempos assim que a configuração é baixada
 }
 
-// Atualiza índice de etapa no Firebase
-void updateStageIndexInFirebase(int newIndex) {
-    if (fermentacaoState.activeId.isEmpty()) return;
-    
-    String path = "/configurations/" + fermentacaoState.activeId + "/currentStageIndex";
-    
-    if (Database.set<int>(aClient, path.c_str(), newIndex)) {
-        Serial.printf("[Firebase] ✅ Etapa atualizada no Firebase: %d\n", newIndex);
-    } else {
-        Serial.println(F("[Firebase] ❌ Erro ao atualizar etapa no Firebase"));
-    }
-}
-
-// Verifica e processa troca de fase (FUNÇÃO PRINCIPAL)
+// =====================================================
+// TROCA DE FASE
+// =====================================================
 void verificarTrocaDeFase() {
-    // 1. Verificações de segurança iniciais
     if (!fermentacaoState.active) return;
-    if (fermentacaoState.currentStageIndex >= fermentacaoState.totalStages) {
-        Serial.println(F("[Fase] ✅ Todas as etapas concluídas!"));
-        return;
-    }
+    if (fermentacaoState.currentStageIndex >=
+        fermentacaoState.totalStages) return;
 
-    FermentationStage& currentStage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
+    FermentationStage& stage =
+        fermentacaoState.stages[
+            fermentacaoState.currentStageIndex
+        ];
+
     unsigned long now = millis();
-    float currentTemp = state.currentTemp;
 
-    // 2. Lógica de início da etapa (Gatilho de tempo)
     if (!stageStarted) {
-        float tolerance = 0.5; // Definido em TEMPERATURE_TOLERANCE
-        
-        // Se for RAMPA, o tempo começa imediatamente para permitir a subida gradual
-        // Se for outro tipo, aguarda a temperatura do fermentador atingir o alvo
-        if (currentStage.type == STAGE_RAMP || abs(currentTemp - currentStage.targetTemp) <= tolerance) {
-            stageStartTime = now;
-            stageStarted = true;
-            Serial.printf("[Fase] 🎯 Iniciando contagem da etapa %d (Tipo: %d)\n", 
-                          fermentacaoState.currentStageIndex + 1, currentStage.type);
-            saveStateToEEPROM(); // Persiste o início na EEPROM
-        } else {
-            return; // Aguardando atingir a temperatura para começar a contar
-        }
+        stageStartTime = now;
+        stageStarted = true;
+        targetReachedSent = false; 
+        saveStateToEEPROM();
     }
 
-    // 3. Cálculos de tempo decorrido
-    unsigned long elapsedMillis = now - stageStartTime;
-    float elapsedHours = elapsedMillis / 3600000.0; // Conversão para horas (3.6m ms)
-    float elapsedDays = elapsedMillis / 86400000.0;  // Conversão para dias (86.4m ms)
-    bool shouldAdvance = false;
+    float elapsedH =
+        (now - stageStartTime) / 3600000.0;
+    float elapsedD =
+        (now - stageStartTime) / 86400000.0;
 
-    // 4. Lógica de verificação por tipo de estágio
-    switch (currentStage.type) {
-        case STAGE_TEMPERATURE:
-            // Avança quando os dias de duração completarem
-            if (elapsedDays >= (float)currentStage.durationDays) {
-                Serial.printf("[Fase] ⏰ Etapa %d concluída por tempo (%.2f/ %d dias)\n",
-                              fermentacaoState.currentStageIndex + 1, elapsedDays, currentStage.durationDays);
-                shouldAdvance = true;
-            }
-            break;
+    if (processCurrentStage(stage, elapsedD, elapsedH)) {
 
-        case STAGE_RAMP:
-            // Rampa baseada em HORAS (campo rampTimeHours do Firebase)
-            if (elapsedHours >= (float)currentStage.rampTimeHours) {
-                Serial.printf("[Fase] 📈 Rampa %d concluída (%d horas)\n",
-                              fermentacaoState.currentStageIndex + 1, currentStage.rampTimeHours);
-                shouldAdvance = true;
-            } else {
-                // Cálculo da temperatura intermediária da rampa
-                float tempInicial;
-                if (fermentacaoState.currentStageIndex > 0) {
-                    // Pega o alvo da etapa anterior como início
-                    tempInicial = fermentacaoState.stages[fermentacaoState.currentStageIndex - 1].targetTemp;
-                } else {
-                    // Se for a primeira etapa, usa o startTemp definido
-                    tempInicial = currentStage.startTemp;
-                }
-
-                float tempFinal = currentStage.targetTemp;
-                // Evita divisão por zero se a rampa for 0 horas
-                float divisor = (currentStage.rampTimeHours > 0) ? (float)currentStage.rampTimeHours : 1.0;
-                float progresso = elapsedHours / divisor;
-                
-                float tempRampa = tempInicial + (tempFinal - tempInicial) * progresso;
-                updateTargetTemperature(tempRampa); // Atualiza o setpoint do PID 
-            }
-            break;
-
-        case STAGE_GRAVITY:
-            // Avança por densidade do iSpindel
-            if (mySpindel.gravity > 0 && mySpindel.gravity <= currentStage.targetGravity) {
-                Serial.printf("[Fase] 🎯 Etapa %d concluída por gravidade (%.3f)\n",
-                              fermentacaoState.currentStageIndex + 1, mySpindel.gravity);
-                shouldAdvance = true;
-            }
-            break;
-
-        case STAGE_GRAVITY_TIME:
-            // Avança por gravidade OU timeout em dias
-            if (mySpindel.gravity > 0 && mySpindel.gravity <= currentStage.targetGravity) {
-                Serial.printf("[Fase] 🎯 Etapa %d concluída por gravidade (%.3f)\n",
-                              fermentacaoState.currentStageIndex + 1, mySpindel.gravity);
-                shouldAdvance = true;
-            } else if (elapsedDays >= (float)currentStage.timeoutDays) {
-                Serial.printf("[Fase] ⏰ Etapa %d concluída por timeout (%.1f dias)\n",
-                              fermentacaoState.currentStageIndex + 1, elapsedDays);
-                shouldAdvance = true;
-            }
-            break;
-    }
-
-    // 5. Avanço de etapa e sincronização 
-    if (shouldAdvance) {
         fermentacaoState.currentStageIndex++;
+        stageStarted = false;
+        stageStartTime = 0;
 
-        if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
-            // Prepara a próxima etapa 
-            FermentationStage& nextStage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-            updateTargetTemperature(nextStage.targetTemp);
-            
-            Serial.printf("[Fase] ➡️ Avançando para etapa %d/%d (Alvo: %.1f°C)\n",
-                          fermentacaoState.currentStageIndex + 1,
-                          fermentacaoState.totalStages,
-                          nextStage.targetTemp);
+        if (fermentacaoState.currentStageIndex <
+            fermentacaoState.totalStages) {
 
-            // Reseta flags para o próximo estágio
-            stageStartTime = 0;
-            stageStarted = false;
-            
-            // Atualiza nuvem e memória local
-            updateStageIndexInFirebase(fermentacaoState.currentStageIndex);
+            FermentationStage& next =
+                fermentacaoState.stages[
+                    fermentacaoState.currentStageIndex
+                ];
+
+            updateTargetTemperature(next.targetTemp);
             saveStateToEEPROM();
         } else {
-            // Finalização total do processo
-            Serial.println(F("[Fase] 🎉 FERMENTAÇÃO CONCLUÍDA!"));
-            deactivateCurrentFermentation(); // Limpa estado e EEPROM
+            Serial.println(F("[Fase] 🎉 Concluída"));
+            deactivateCurrentFermentation();
         }
     }
+}
+
+void verificarTargetAtingido() {
+    // Só verifica se a fermentação está ativa e se ainda não enviamos nesta fase
+    if (!fermentacaoState.active || targetReachedSent) return;
+
+    // Calcula a diferença entre temperatura atual e alvo [2, 3]
+    float diff = abs(state.currentTemp - fermentacaoState.tempTarget);
+
+    if (diff <= TEMPERATURE_TOLERANCE) { // Tolerância de 0.5°C [2]
+        JsonDocument doc;
+        doc["targetReachedTime"][".sv"] = "timestamp"; // Timestamp do servidor Firebase
+        
+        // Envia para o nó fermentationState
+        String payload;
+        serializeJson(doc, payload);
+        Database.update(aClient, "/fermentationState", payload);
+
+        targetReachedSent = true; // Impede envios duplicados na mesma fase
+        Serial.println(F("[Firebase] 🎯 Temperatura alvo atingida!"));
+    }
+}
+
+// =====================================================
+// LEITURAS
+// =====================================================
+void enviarLeituraAtual() {
+    if (!fermentacaoState.active ||
+        strlen(fermentacaoState.activeId) == 0) return;
+
+    JsonDocument doc;
+    doc["tempFridge"]     = sensors.getTempCByIndex(1);
+    doc["tempFermenter"]  = state.currentTemp;
+    doc["gravity"]        = mySpindel.gravity;
+    doc["tempTarget"]     = fermentacaoState.tempTarget;
+    doc["timestamp"][".sv"] = "timestamp";
+
+    String path =
+        String("/readings/") +
+        fermentacaoState.activeId;
+
+    String payload;
+    serializeJson(doc, payload);
+    Database.push(aClient, path.c_str(), payload);
 }

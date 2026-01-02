@@ -1,21 +1,27 @@
 #pragma once
 
-#include <Arduino.h>
-
-// Declaração das funções públicas
-void setupActiveListener();
-void keepListenerAlive();
-void stopActiveListener();
-void getTargetFermentacao();
-void loadConfigParameters(const String& configId);
-
-// NOVA FUNÇÃO PRINCIPAL - Chamada no loop()
-void verificarTrocaDeFase();
-
-// Funções de persistência
+// EEPROM
 void saveStateToEEPROM();
 void loadStateFromEEPROM();
 void clearEEPROM();
 
-// Atualização do Firebase
+// Controle geral
+void updateTargetTemperature(float temp);
+void deactivateCurrentFermentation();
+
+// Firebase / Listener
+void setupActiveListener();
+void keepListenerAlive();
+void getTargetFermentacao();
+
+// Configuração
+void loadConfigParameters(const char* configId);
+
+// Etapas
+void verificarTrocaDeFase();
 void updateStageIndexInFirebase(int newIndex);
+
+// Leituras
+void enviarLeituraAtual();
+
+void verificarTargetAtingido();

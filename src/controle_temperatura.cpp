@@ -1,8 +1,11 @@
 #include <Arduino.h>
 #include <DallasTemperature.h>
+#include <ESP8266WiFi.h>
+#include <ArduinoJson.h>
 #include "globais.h"
 #include "estruturas.h"
 #include "definitions.h"
+#include "firebase_conexao.h"
 
 // Parâmetros PID e Variáveis de Controle
 static float integral = 0;
@@ -77,6 +80,20 @@ void controle_temperatura() {
 
     cooler.atualizar();
     heater.atualizar();
+
+    if (fermentacaoState.active && WiFi.status() == WL_CONNECTED) {
+        JsonDocument doc;
+
+        doc["setpoint"] = fermentacaoState.tempTarget;
+        doc["cooling"]  = cooler.estado;
+        doc["heating"]  = heater.estado;
+        doc["updatedAt"][".sv"] = "timestamp";
+
+        String payload;
+        serializeJson(doc, payload);
+
+        Database.set(aClient, "/control", payload);
+    }
 
     // Uso da variável tempGel para eliminar o Warning e monitorar a geladeira
     Serial.printf("Ferm: %.2fC | Gel: %.2fC | Alvo: %.2fC | PID: %.2f\n", 

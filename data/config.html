@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuração de Fermentação</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        #login-screen {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            z-index: 1000;
+        }
+        .login-container {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 400px;
+        }
+        .input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 16px;
+            margin-bottom: 16px;
+        }
+        
+        /* Modal de Rampa */
+        .ramp-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .ramp-modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        
+        .ramp-visualization {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border: 2px solid #e2e8f0;
+        }
+        
+        .ramp-graph {
+            height: 80px;
+            position: relative;
+            margin: 20px 0;
+        }
+        
+        .ramp-line {
+            position: absolute;
+            height: 4px;
+            background: linear-gradient(90deg, #3b82f6, #10b981);
+            border-radius: 2px;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+        
+        .ramp-point {
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: white;
+            border: 3px solid;
+            transform: translate(-50%, -50%);
+        }
+        
+        .ramp-point-start {
+            border-color: #3b82f6;
+            left: 0;
+            top: 50%;
+        }
+        
+        .ramp-point-end {
+            border-color: #10b981;
+            right: 0;
+            top: 50%;
+        }
+        
+        .ramp-info {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+            font-size: 14px;
+            color: #64748b;
+        }
+        
+        .btn-compact i {
+            margin-right: 4px !important;
+        }
+    </style>
+</head>
+<body>
+    <!-- Tela de Login -->
+    <div id="login-screen">
+        <div class="min-h-screen flex items-center justify-center p-4">
+            <div class="login-container">
+                <div class="text-center mb-8">
+                    <i class="fas fa-cog text-4xl text-purple-600 mb-4"></i>
+                    <h1 class="text-3xl font-bold text-gray-800">Configuração</h1>
+                    <p class="text-gray-600 mt-2">Autentique-se para acessar</p>
+                </div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                        <input type="email" id="login-email" placeholder="seu@email.com" 
+                               class="input" value="fermentador@mvrinaldi.com.br">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Senha</label>
+                        <input type="password" id="login-password" placeholder="••••••••" 
+                               class="input" value="">
+                    </div>
+                    <button id="login-btn" class="w-full py-3 bg-purple-600 text-white rounded-lg 
+                           hover:bg-purple-700 transition font-semibold text-lg">
+                        <i class="fas fa-sign-in-alt"></i> Entrar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Configuração de Rampa -->
+    <div id="ramp-modal" class="ramp-modal">
+        <div class="ramp-modal-content">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800">Configurar Rampa de Temperatura</h2>
+                <button onclick="closeRampModal()" class="text-gray-500 hover:text-gray-700">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            
+            <div class="ramp-visualization">
+                <h3 class="text-lg font-semibold text-gray-700 mb-4">Visualização da Rampa</h3>
+                <div class="ramp-graph">
+                    <div id="ramp-line" class="ramp-line"></div>
+                    <div id="ramp-point-start" class="ramp-point ramp-point-start"></div>
+                    <div id="ramp-point-end" class="ramp-point ramp-point-end"></div>
+                </div>
+                <div class="ramp-info">
+                    <div id="ramp-info-start" class="text-center">
+                        <div class="font-semibold text-blue-600">Etapa Anterior</div>
+                        <div id="prev-temp-display">18°C</div>
+                    </div>
+                    <div id="ramp-info-middle" class="text-center">
+                        <div class="font-semibold text-purple-600">Rampa</div>
+                        <div id="ramp-time-display">24 horas</div>
+                        <div id="ramp-rate-display" class="text-xs">0.5°C/dia</div>
+                    </div>
+                    <div id="ramp-info-end" class="text-center">
+                        <div class="font-semibold text-green-600">Nova Etapa</div>
+                        <div id="next-temp-display">10°C</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Tempo da Rampa (horas)
+                    </label>
+                    <input type="number" id="ramp-time" min="1" max="720" step="1" value="24"
+                           class="w-full px-4 py-2 border border-gray-300 rounded-lg" 
+                           oninput="updateRampVisualization()">
+                    <p class="text-sm text-gray-500 mt-1">
+                        Tempo para transicionar gradualmente entre as temperaturas (1-720 horas)
+                    </p>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Taxa de Variação Máxima (°C/dia)
+                    </label>
+                    <input type="number" id="max-ramp-rate" min="0.1" max="10" step="0.1" value="2"
+                           class="w-full px-4 py-2 border border-gray-300 rounded-lg" 
+                           oninput="updateRampVisualization()">
+                    <p class="text-sm text-gray-500 mt-1">
+                        Limite de variação diária para evitar choque térmico
+                    </p>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Temperatura Inicial (°C)
+                        </label>
+                        <input type="number" id="ramp-start-temp" step="0.1" 
+                               class="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-50"
+                               readonly>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Temperatura Alvo (°C)
+                        </label>
+                        <input type="number" id="ramp-target-temp" step="0.1" 
+                               class="w-full px-4 py-2 border border-gray-300 rounded-lg" 
+                               oninput="updateRampVisualization()">
+                    </div>
+                </div>
+                
+                <div id="ramp-warning" class="hidden p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <div class="flex items-center gap-2 text-yellow-800">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <span id="ramp-warning-text"></span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flex gap-3 mt-8">
+                <button onclick="closeRampModal()" class="flex-1 py-3 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">
+                    Cancelar
+                </button>
+                <button onclick="saveRampConfiguration()" class="flex-1 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    <i class="fas fa-check mr-2"></i>Aplicar Rampa
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Container principal -->
+    <div class="container">
+        <!-- Aviso sobre fermentação ativa -->
+        <div id="active-warning" class="active-warning" style="display: none;">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span id="active-warning-text"></span>
+        </div>
+
+        <!-- Card de Configuração -->
+        <div class="card mb-6">
+            <h1 class="text-3xl mb-6">Configuração de Fermentação</h1>
+
+            <div class="input-group">
+                <label for="fermentation-name">Nome da Fermentação</label>
+                <input type="text" id="fermentation-name" placeholder="Ex: IPA Amarela 2024" class="input">
+            </div>
+
+            <div class="mb-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl">Etapas</h2>
+                    <button onclick="addStageWithRamp()" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Adicionar Etapa
+                    </button>
+                </div>
+
+                <div id="stages-container"></div>
+
+                <div id="no-stages-message" class="text-center py-12 text-gray-500">
+                    Nenhuma etapa adicionada. Clique em "Adicionar Etapa" para começar.
+                </div>
+            </div>
+
+            <button onclick="saveConfiguration()" class="btn btn-success w-full">
+                <i class="fas fa-save"></i> Salvar Configuração
+            </button>
+        </div>
+
+        <!-- Card de Configurações Salvas -->
+        <div class="card mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl">Configurações Salvas</h2>
+                <div class="flex gap-2">
+                    <button onclick="refreshData()" class="btn btn-secondary">
+                        <i class="fas fa-sync-alt"></i> Atualizar
+                    </button>
+                </div>
+            </div>
+            <div id="saved-configs"></div>
+        </div>
+
+        <!-- Navegação -->
+        <div class="flex justify-between mt-4">
+            <button onclick="location.href='index.html'" class="btn btn-primary">
+                <i class="fas fa-chart-line"></i> Voltar para Monitor
+            </button>
+            <button onclick="window.logout()" class="btn btn-danger" id="logout-btn">
+                <i class="fas fa-sign-out-alt"></i> Sair
+            </button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const loginBtn = document.getElementById('login-btn');
+            if (loginBtn) {
+                loginBtn.addEventListener('click', function() {
+                    if (window.login) {
+                        window.login();
+                    } else {
+                        console.error('Função login() não encontrada');
+                    }
+                });
+            }
+            
+            const logoutBtn = document.getElementById('logout-btn');
+            if (logoutBtn) {
+                logoutBtn.addEventListener('click', function() {
+                    if (window.logout) {
+                        window.logout();
+                    }
+                });
+            }
+        });
+    </script>
+    
+    <script type="module" src="config.js"></script>
+</body>
+</html>

@@ -12,6 +12,6 @@ rele heater = {PINO_HEATER, false, true, "HEATER"};
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 
-bool useFirebase = false;
-
 SystemState state;
+
+bool useFirebase = false;
