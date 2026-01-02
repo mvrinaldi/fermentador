@@ -1,20 +1,16 @@
 #include "gerenciador_sensores.h"
+#include "eeprom_layout.h"  // ← NOVO: Layout unificado
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
 
 // Firebase async client
 extern AsyncClientClass aClient;
 
-// ================= EEPROM LAYOUT =================
-#define EEPROM_SIZE          128
-#define SENSOR_ADDR_SIZE     17   // 16 chars + '\0'
-
-#define ADDR_SENSOR_FERMENTADOR   0
-#define ADDR_SENSOR_GELADEIRA   32
-
 // =================================================
+// MAPEAMENTO DE SENSORES → EEPROM
+// =================================================
+// Agora usando endereços do eeprom_layout.h
 
-// Converte chave em endereço fixo da EEPROM
 int keyToEEPROMAddr(const char* key) {
     if (strcmp(key, SENSOR1_NOME) == 0) return ADDR_SENSOR_FERMENTADOR;
     if (strcmp(key, SENSOR2_NOME) == 0) return ADDR_SENSOR_GELADEIRA;
@@ -39,8 +35,14 @@ String addressToString(DeviceAddress deviceAddress) {
 // =================================================
 
 void setupSensorManager() {
-    EEPROM.begin(EEPROM_SIZE);
-    Serial.println(F("✅ EEPROM iniciada"));
+    EEPROM.begin(EEPROM_SIZE); // Usa EEPROM_SIZE do layout unificado (512)
+    Serial.println(F("✅ EEPROM iniciada (Gerenciador de Sensores)"));
+    
+    // Debug opcional do layout
+    #ifdef DEBUG_EEPROM
+    printEEPROMLayout();
+    debugEEPROMContents();
+    #endif
 }
 
 // =================================================
@@ -83,18 +85,30 @@ void scanAndSendSensors() {
 }
 
 // =================================================
-// EEPROM helpers
+// EEPROM helpers - SEÇÃO DE SENSORES (0-63)
 // =================================================
 
 bool saveSensorToEEPROM(const char* sensorKey, const String& sensorAddress) {
     int addr = keyToEEPROMAddr(sensorKey);
-    if (addr < 0) return false;
+    if (addr < 0) {
+        Serial.printf("❌ Sensor key inválida: %s\n", sensorKey);
+        return false;
+    }
 
     char buffer[SENSOR_ADDR_SIZE] = {0};
     sensorAddress.toCharArray(buffer, SENSOR_ADDR_SIZE);
 
     EEPROM.put(addr, buffer);
-    return EEPROM.commit();
+    bool success = EEPROM.commit();
+    
+    if (success) {
+        Serial.printf("💾 Sensor salvo na EEPROM: %s -> %s (addr %d)\n", 
+                     sensorKey, sensorAddress.c_str(), addr);
+    } else {
+        Serial.printf("❌ Erro ao salvar sensor: %s\n", sensorKey);
+    }
+    
+    return success;
 }
 
 bool removeSensorFromEEPROM(const char* sensorKey) {
@@ -103,7 +117,13 @@ bool removeSensorFromEEPROM(const char* sensorKey) {
 
     char empty[SENSOR_ADDR_SIZE] = {0};
     EEPROM.put(addr, empty);
-    return EEPROM.commit();
+    bool success = EEPROM.commit();
+    
+    if (success) {
+        Serial.printf("🗑️ Sensor removido da EEPROM: %s\n", sensorKey);
+    }
+    
+    return success;
 }
 
 String getSensorAddress(const char* sensorKey) {

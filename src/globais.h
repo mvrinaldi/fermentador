@@ -5,6 +5,7 @@
 #include "definitions.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include "ispindel_struct.h"
 
 // Declaração das variáveis globais (extern)
 extern SystemState state;
@@ -13,4 +14,4 @@ extern FermentacaoState fermentacaoState;
 extern rele cooler;
 extern rele heater;
 extern bool useFirebase;
-extern DallasTemperature sensors; 
+extern DallasTemperature sensors;
