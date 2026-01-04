@@ -1,7 +1,7 @@
 #include "gerenciador_sensores.h"
 #include "eeprom_layout.h"  // ← NOVO: Layout unificado
 #include <ArduinoJson.h>
-#include <ESP8266WiFi.h>
+#include "network_manager.h"
 
 // Firebase async client
 extern AsyncClientClass aClient;
@@ -49,13 +49,22 @@ void setupSensorManager() {
 // Scan OneWire
 // =================================================
 
+
 void scanAndSendSensors() {
-    if (WiFi.status() != WL_CONNECTED || !app.ready()) return;
+    if (!canUseFirebase()) {
+        Serial.println(F("⏸ Scan sensores bloqueado pelo NetworkManager"));
+        return;
+    }
 
     Serial.println(F("🔍 Escaneando sensores OneWire..."));
 
     sensors.begin();
     int count = sensors.getDeviceCount();
+
+    if (count == 0) {
+        Serial.println(F("⚠️ Nenhum sensor encontrado"));
+        return;
+    }
 
     JsonDocument doc;
     JsonArray arr = doc.to<JsonArray>();
@@ -67,18 +76,20 @@ void scanAndSendSensors() {
         }
     }
 
-    String payload;
-    serializeJson(doc, payload);
+    Serial.printf("📡 Enviando %d sensores ao Firebase...\n", arr.size());
 
-    Database.set<String>(
+    String payload;
+    serializeJson(doc, payload); // Converte o documento para texto
+
+    Database.set(
         aClient,
         "/status/detected_sensors",
-        payload,
+        payload, // <--- Agora enviando a String serializada
         [](AsyncResult &r) {
             if (r.isError()) {
-                Serial.printf("❌ Erro scan: %s\n", r.error().message().c_str());
+                Serial.printf("❌ Erro scan Firebase: %s\n", r.error().message().c_str());
             } else {
-                Serial.println(F("✅ Scan enviado ao Firebase"));
+                Serial.println(F("✅ Sensores enviados ao Firebase"));
             }
         }
     );
@@ -213,7 +224,15 @@ void verificarComandoUpdateSensores() {
     if (millis() - ultima < 10000) return;
     ultima = millis();
 
-    if (WiFi.status() != WL_CONNECTED || !app.ready()) return;
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println(F("❌ WiFi offline, scan cancelado"));
+        return;
+    }
+
+    if (!app.ready()) {
+        Serial.println(F("❌ Firebase não pronto, scan cancelado"));
+        return;
+    }
 
     Database.get(
         aClient,
@@ -223,9 +242,8 @@ void verificarComandoUpdateSensores() {
 
             if (String(r.c_str()) == "true") {
                 Serial.println(F("🔄 Comando refresh recebido"));
-
-                loadSensorsFromFirebase();
-
+                scanAndSendSensors();
+                    
                 Database.set<bool>(
                     aClient,
                     "/commands/refresh_sensors",

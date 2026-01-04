@@ -17,6 +17,9 @@
 #include "ispindel_envio.h"
 #include "fermentacao_firebase.h"
 #include "controle_temperatura.h"
+#include "ota.h"
+#include "wifi_manager.h"
+#include "network_manager.h"
 
 ESP8266WebServer server(80);
 
@@ -33,11 +36,11 @@ void setup() {
     Serial.println("\n🚀 Iniciando Fermentador Inteligente AUTÔNOMO");
     Serial.println("================================================");
 
-    // 1. EEPROM
+    // EEPROM
     EEPROM.begin(512);
     Serial.println("✅ EEPROM inicializada (512 bytes)");
 
-    // 2. Relés
+    // Relés
     pinMode(cooler.pino, OUTPUT);
     pinMode(heater.pino, OUTPUT);
     cooler.atualizar();
@@ -49,52 +52,26 @@ void setup() {
     Serial.printf("   • Heater: Pino %d (%s)\n",
                   heater.pino, heater.invertido ? "invertido" : "normal");
 
-    // 3. Sensores
+    // Sensores
     setupSensorManager();
     Serial.println("✅ Sensores inicializados");
 
-    // 4. WiFi
-    Serial.print("📡 Conectando ao WiFi");
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    // === Network Manager (WiFi + OTA + Firebase) ===
+    networkSetup(server);
 
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-        delay(500);
-        Serial.print(".");
-        attempts++;
+    if (isFirebaseOnline()) {
+        scanAndSendSensors();
     }
 
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\n✅ WiFi conectado");
-        Serial.println(WiFi.localIP());
-    } else {
-        Serial.println("\n⚠️ WiFi offline — modo autônomo");
-    }
-
-    // 5. Firebase
-    Serial.print("🔥 Inicializando Firebase... ");
-    setupFirebase();
-    Serial.println(WiFi.status() == WL_CONNECTED ? "OK" : "OFFLINE");
-
-    // 6. Sensores do Firebase
-    if (WiFi.status() == WL_CONNECTED && config.useFirebase) {
-        loadSensorsFromFirebase();
-    }
-
-    // 7. WebServer / iSpindel
+    // WebServer / iSpindel
     setupSpindelRoutes(server);
     server.begin();
     Serial.println("🌐 Servidor Web ativo");
 
-    // 8. Estado salvo
+    // Estado salvo (local, não depende de Wi-Fi)
     setupActiveListener();
 
-    // 9. Fermentação ativa
-    if (WiFi.status() == WL_CONNECTED && config.useFirebase) {
-        getTargetFermentacao();
-    }
-
-    // 10. Log inicial
+    // Log inicial
     Serial.println("\n================================================");
     Serial.println("✅ Sistema pronto");
     Serial.printf("Fermentação ativa: %s\n",
@@ -115,28 +92,32 @@ void setup() {
 void loop() {
     unsigned long now = millis();
 
+    // === Network Manager ===
+    networkLoop();
+
+    // WebServer (OTA + iSpindel)
     server.handleClient();
-    app.loop();
-    Database.loop();
 
-    verificarComandoUpdateSensores();
-    keepListenerAlive();
+    // Firebase SÓ quando estiver realmente online
+    if (isFirebaseOnline()) {
+        app.loop();
+        Database.loop();
+    }
 
-    // 🔁 Verificação Firebase
+    if (isFirebaseOnline()) {
+        keepListenerAlive();
+    }
+
+
+    // 🔁 Verificação Firebase (somente online)
     static unsigned long lastCheck = 0;
-    if (now - lastCheck >= 30000 && WiFi.status() == WL_CONNECTED && config.useFirebase) {
+    if (isFirebaseOnline() && config.useFirebase &&
+        now - lastCheck >= ACTIVE_CHECK_INTERVAL) {
         lastCheck = now;
         getTargetFermentacao();
     }
 
-    // 🌡️ Controle de temperatura
-    if (now - lastTemperatureControl >= TEMPERATURE_CONTROL_INTERVAL) {
-        lastTemperatureControl = now;
-        controle_temperatura();
-        enviarLeituraAtual();
-    }
-
-    // 🍺 Troca de fase
+    // 🍺 Troca de fase (local)
     if (now - lastPhaseCheck >= PHASE_CHECK_INTERVAL) {
         lastPhaseCheck = now;
         verificarTrocaDeFase();
@@ -149,22 +130,14 @@ void loop() {
         processCloudUpdatesiSpindel();
     }
 
-    // 📶 WiFi watchdog
-    static unsigned long lastWiFi = 0;
-    if (now - lastWiFi >= 60000) {
-        lastWiFi = now;
-        if (WiFi.status() != WL_CONNECTED) {
-            WiFi.reconnect();
-        }
-    }
-    // Registro de quando a temperatura alvo é atingida
+    // 🌡️ Controle de temperatura (core do sistema)
     if (now - lastTemperatureControl >= TEMPERATURE_CONTROL_INTERVAL) {
         lastTemperatureControl = now;
         controle_temperatura();
         enviarLeituraAtual();
-        
-        // Adicione esta linha:
-        verificarTargetAtingido(); 
+        verificarTargetAtingido();
     }
-    delay(50);
+
+    yield();
+
 }

@@ -4,7 +4,7 @@
 #define MAX_STAGES 10
 
 // === Estrutura de Relé === //
-struct rele {
+struct Rele {
   uint8_t pino;
   bool estado;
   bool invertido;
@@ -18,30 +18,37 @@ struct rele {
 // === Estado Geral do Sistema === //
 struct SystemState {
   float currentTemp;
-  float currentHumidity;
   float targetTemp;
-  float hysteresis;
   unsigned long lastUpdate;
-  char mode[8];
   char configName[20];
   bool active;
-  bool relayState;
+  
+  SystemState() : currentTemp(0.0), targetTemp(20.0), lastUpdate(0), active(false) {
+    configName[0] = '\0';
+  }
 };
 
 // === Configuração Local === //
 struct LocalConfig {
-  char wifiSSID[32];
-  char wifiPass[64];
   float targetTemp;
   float hysteresis;
   char fbApiKey[64];
   bool useFirebase;
+  
+  LocalConfig() : targetTemp(20.0), hysteresis(0.5), useFirebase(false) {
+    fbApiKey[0] = '\0';
+  }
 };
 
 // === Informação de Sensor === //
 struct SensorInfo {
   char nome[20];
   char endereco[17];
+  
+  SensorInfo() {
+    nome[0] = '\0';
+    endereco[0] = '\0';
+  }
 };
 
 // === Tipos de Etapa === //
@@ -71,36 +78,44 @@ struct FermentationStage {
       durationDays(0),
       rampTimeHours(0),
       targetGravity(0.0),
-      timeoutDays(0) {}
+      timeoutDays(0),
+      startTime(0),
+      completed(false) {}
 };
 
 // === Estado da Fermentação (ESTRUTURA PRINCIPAL) === //
 struct FermentacaoState {
     bool active;
-    char activeId[64];
+    char activeId[32];
     char configName[64];
     float tempTarget;
     int currentStageIndex;
+    bool targetReachedSent;
     int totalStages;
     FermentationStage stages[MAX_STAGES];
     unsigned long lastUpdate;
     
     FermentacaoState() : 
         active(false),
-        activeId(""),
         tempTarget(20.0),
         currentStageIndex(0),
+        targetReachedSent(false),
         totalStages(0),
         lastUpdate(0) {
+        activeId[0] = '\0';
         configName[0] = '\0';
+        for (int i = 0; i < MAX_STAGES; i++) {
+            stages[i] = FermentationStage();
+        }
     }
     
     void clear() {
         active = false;
-        activeId[0] = '\0';
-        configName[0] = '\0';
+        memset(activeId, 0, sizeof(activeId));
+        memset(configName, 0, sizeof(configName));
         tempTarget = 20.0;
         currentStageIndex = 0;
+        targetReachedSent = false;
         totalStages = 0;
         lastUpdate = millis();
         
@@ -111,13 +126,33 @@ struct FermentacaoState {
     }
     
     bool hasChanged(const char* newId, bool newActive) const {
-        return (active != newActive) || strcmp(activeId, newId) != 0;
+        if (active != newActive) return true;
+        if (strcmp(activeId, newId) != 0) return true;
+        return false;
     }
 
+    // Funções auxiliares para manipulação segura de strings
+    void setActiveId(const char* id) {
+        if (id) {
+            strncpy(activeId, id, sizeof(activeId) - 1);
+            activeId[sizeof(activeId) - 1] = '\0';
+        } else {
+            activeId[0] = '\0';
+        }
+    }
+    
+    void setConfigName(const char* name) {
+        if (name) {
+            strncpy(configName, name, sizeof(configName) - 1);
+            configName[sizeof(configName) - 1] = '\0';
+        } else {
+            configName[0] = '\0';
+        }
+    }
 };
 
 // Declarações externas (definidas em globais.cpp)
 extern FermentacaoState fermentacaoState;
 extern SystemState state;
-extern rele cooler;
-extern rele heater;
+extern Rele cooler;
+extern Rele heater;

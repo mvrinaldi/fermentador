@@ -1,39 +1,19 @@
 #pragma once
 #include <Arduino.h>
-#include <ArduinoJson.h>
-#include "globais.h"
 
-// Throttle de atualização no Firebase
+// Forward declarations para estruturas usadas
+struct FermentationStage;
+struct FermentacaoState;
+struct SystemState;
+
+// Constantes
+#ifndef TEMPERATURE_TOLERANCE
+#define TEMPERATURE_TOLERANCE 0.5f
+#endif
+
+// Funções de controle de estágios
 bool canSendFirebaseUpdate();
-
-// Envio padronizado para o Firebase
-void updateFermentationState(JsonDocument& doc);
-
-// Processamento da etapa atual
-bool processCurrentStage(
-    const FermentationStage& stage,
-    float elapsedDays,
-    float elapsedHours
-);
-
-// Handlers por tipo de etapa
-bool handleTemperatureStage(
-    const FermentationStage& stage,
-    float elapsedDays
-);
-
-bool handleRampStage(
-    const FermentationStage& stage,
-    float elapsedHours
-);
-
-bool handleGravityStage(
-    const FermentationStage& stage
-);
-
-bool handleGravityTimeStage(
-    const FermentationStage& stage,
-    float elapsedDays
-);
-
+void checkAndSendTargetReached();
 void sendStageTimers();
+bool processCurrentStage(const FermentationStage& stage, float elapsedDays, float elapsedHours);
+
