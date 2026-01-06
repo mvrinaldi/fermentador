@@ -13,5 +13,4 @@ extern LocalConfig config;
 extern FermentacaoState fermentacaoState;
 extern Rele cooler;
 extern Rele heater;
-extern bool useFirebase;
 extern DallasTemperature sensors;

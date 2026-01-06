@@ -196,3 +196,35 @@ CREATE TABLE fermentation_stats (
     
     FOREIGN KEY (config_id) REFERENCES configurations(id) ON DELETE CASCADE
 );
+
+-- Tabela para armazenar configurações do sistema (incluindo sensores)
+CREATE TABLE IF NOT EXISTS system_config (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    config_key VARCHAR(50) UNIQUE NOT NULL,
+    config_value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_key (config_key)
+);
+
+-- Atualiza tabela devices para incluir sensor_data
+ALTER TABLE devices 
+ADD COLUMN IF NOT EXISTS sensor_data TEXT AFTER firmware_version;
+
+-- Inserir configurações padrão de sensores (vazias inicialmente)
+INSERT INTO system_config (config_key, config_value) VALUES
+('sensor_fermentador', '')
+ON DUPLICATE KEY UPDATE config_key = config_key;
+
+INSERT INTO system_config (config_key, config_value) VALUES
+('sensor_geladeira', '')
+ON DUPLICATE KEY UPDATE config_key = config_key;
+
+-- View para facilitar consulta de sensores configurados
+CREATE OR REPLACE VIEW v_sensors_config AS
+SELECT 
+    config_key as sensor_role,
+    config_value as sensor_address,
+    updated_at
+FROM system_config
+WHERE config_key IN ('sensor_fermentador', 'sensor_geladeira')
+AND config_value != '';

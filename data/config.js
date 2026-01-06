@@ -494,17 +494,17 @@ function getStageSummary(stage) {
     
     switch(stage.type) {
         case 'temperature':
-            return `Manter ${stage.target_temp}°C por ${stage.duration || 7} dias`;
+            return `Manter ${stage.targetTemp}°C por ${stage.duration || 7} dias`;
         case 'gravity':
-            return `Manter ${stage.target_temp}°C até atingir ${stage.target_gravity} SG`;
+            return `Manter ${stage.targetTemp}°C até atingir ${stage.target_gravity} SG`;
         case 'gravity_time':
-            return `Manter ${stage.target_temp}°C até atingir ${stage.target_gravity} SG ou ${stage.max_duration} dias`;
+            return `Manter ${stage.targetTemp}°C até atingir ${stage.target_gravity} SG ou ${stage.max_duration} dias`;
         case 'ramp':
             const direction = stage.direction === 'up' ? 'subir' : 'descer';
             const rampTimeDisplay = stage.ramp_time < 24 
                 ? `${stage.ramp_time} horas` 
                 : `${(stage.ramp_time / 24).toFixed(1)} dias`;
-            return `Rampa: ${direction} de ${stage.start_temp}°C para ${stage.target_temp}°C em ${rampTimeDisplay}`;
+            return `Rampa: ${direction} de ${stage.startTemp}°C para ${stage.targetTemp}°C em ${rampTimeDisplay}`;
         default:
             return '';
     }

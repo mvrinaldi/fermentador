@@ -1,19 +1,29 @@
+// fermentacao_mysql.h
 #pragma once
+
 #include <Arduino.h>
 #include "estruturas.h"
 
-// Constantes
+// Constantes (apenas se não definidas em definitions.h)
+#ifndef ACTIVE_CHECK_INTERVAL
 #define ACTIVE_CHECK_INTERVAL 30000UL  // 30 segundos
-#define TEMPERATURE_TOLERANCE 0.5f
+#endif
 
-// Variáveis globais (definidas no .cpp)
+#ifndef TEMPERATURE_TOLERANCE
+#define TEMPERATURE_TOLERANCE 0.5f
+#endif
+
+#ifndef PHASE_CHECK_INTERVAL
+#define PHASE_CHECK_INTERVAL 10000UL   // 10 segundos
+#endif
+
+// Variáveis globais
 extern unsigned long lastActiveCheck;
 extern char lastActiveId[64];
 extern bool isFirstCheck;
-extern bool listenerSetup;
-extern unsigned long lastListenerCheck;
 extern unsigned long stageStartTime;
 extern bool stageStarted;
+extern bool targetReachedTime; // Marca quando atingiu temperatura alvo
 
 // Funções EEPROM
 void saveStateToEEPROM();
@@ -24,10 +34,10 @@ void clearEEPROM();
 void updateTargetTemperature(float temp);
 void deactivateCurrentFermentation();
 void setupActiveListener();
-void keepListenerAlive();
 
-// Firebase - Fermentação ativa
+// HTTP – Fermentação ativa
 void getTargetFermentacao();
+void checkPauseOrComplete(); // Verifica comandos do site
 
 // Configuração de etapas
 void loadConfigParameters(const char* configId);

@@ -13,7 +13,7 @@ void networkSetup(ESP8266WebServer &server);
 
 /**
  * @brief Loop principal do gerenciador de rede
- *        Gerencia WiFi, Firebase, OTA e sensores
+ *        Gerencia WiFi, HTTP, OTA e sensores
  *        Deve ser chamado frequentemente no loop()
  */
 void networkLoop();
@@ -29,10 +29,10 @@ void networkLoop();
 bool isWiFiOnline();
 
 /**
- * @brief Verifica se o Firebase está online e pronto
- * @return true se Firebase autenticado e app.ready() == true
+ * @brief Verifica se o HTTP/MySQL está online e pronto
+ * @return true se MySQL respondendo
  */
-bool isFirebaseOnline();
+bool isHTTPOnline();
 
 /**
  * @brief Verifica se o OTA está habilitado e pronto
@@ -41,7 +41,7 @@ bool isFirebaseOnline();
 bool isOTAOnline();
 
 /**
- * @brief Verifica se é seguro usar o Firebase
- * @return true se WiFi e Firebase estão ambos online
+ * @brief Verifica se é seguro usar o HTTP/MySQL
+ * @return true se WiFi e HTTP estão ambos online
  */
-bool canUseFirebase();
+bool canUseHTTP();

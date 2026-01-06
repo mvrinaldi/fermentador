@@ -32,12 +32,9 @@ struct SystemState {
 struct LocalConfig {
   float targetTemp;
   float hysteresis;
-  char fbApiKey[64];
-  bool useFirebase;
+  bool useHTTP;  // Mudado de useFirebase
   
-  LocalConfig() : targetTemp(20.0), hysteresis(0.5), useFirebase(false) {
-    fbApiKey[0] = '\0';
-  }
+  LocalConfig() : targetTemp(20.0), hysteresis(0.5), useHTTP(true) {}
 };
 
 // === Informação de Sensor === //
@@ -53,9 +50,9 @@ struct SensorInfo {
 
 // === Tipos de Etapa === //
 enum StageType {
-    STAGE_TEMPERATURE,    // Por tempo
-    STAGE_RAMP,          // Rampa gradual
-    STAGE_GRAVITY,       // Por gravidade
+    STAGE_TEMPERATURE,    // Por tempo (mantém temperatura por X dias)
+    STAGE_RAMP,          // Rampa gradual de temperatura
+    STAGE_GRAVITY,       // Por gravidade (aguarda iSpindel)
     STAGE_GRAVITY_TIME   // Por gravidade com timeout
 };
 
@@ -64,10 +61,10 @@ struct FermentationStage {
   StageType type;
   float targetTemp;
   float startTemp;         // Temperatura inicial (para rampas)
-  int durationDays;
-  int rampTimeHours;       // Duração da rampa em horas
-  float targetGravity;
-  int timeoutDays;
+  int durationDays;        // Duração em dias (para STAGE_TEMPERATURE)
+  int rampTimeHours;       // Duração da rampa em horas (para STAGE_RAMP)
+  float targetGravity;     // Gravidade alvo (para STAGE_GRAVITY*)
+  int timeoutDays;         // Timeout em dias (para STAGE_GRAVITY_TIME)
   unsigned long startTime;
   bool completed;
   

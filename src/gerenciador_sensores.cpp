@@ -1,15 +1,15 @@
 #include "gerenciador_sensores.h"
-#include "eeprom_layout.h"  // ← NOVO: Layout unificado
+#include "eeprom_layout.h"
 #include <ArduinoJson.h>
 #include "network_manager.h"
+#include "http_client.h"
 
-// Firebase async client
-extern AsyncClientClass aClient;
+// Cliente HTTP
+extern FermentadorHTTPClient httpClient;
 
 // =================================================
 // MAPEAMENTO DE SENSORES → EEPROM
 // =================================================
-// Agora usando endereços do eeprom_layout.h
 
 int keyToEEPROMAddr(const char* key) {
     if (strcmp(key, SENSOR1_NOME) == 0) return ADDR_SENSOR_FERMENTADOR;
@@ -35,10 +35,9 @@ String addressToString(DeviceAddress deviceAddress) {
 // =================================================
 
 void setupSensorManager() {
-    EEPROM.begin(EEPROM_SIZE); // Usa EEPROM_SIZE do layout unificado (512)
+    EEPROM.begin(EEPROM_SIZE);
     Serial.println(F("✅ EEPROM iniciada (Gerenciador de Sensores)"));
     
-    // Debug opcional do layout
     #ifdef DEBUG_EEPROM
     printEEPROMLayout();
     debugEEPROMContents();
@@ -49,10 +48,9 @@ void setupSensorManager() {
 // Scan OneWire
 // =================================================
 
-
 void scanAndSendSensors() {
-    if (!canUseFirebase()) {
-        Serial.println(F("⏸ Scan sensores bloqueado pelo NetworkManager"));
+    if (!canUseHTTP()) {
+        Serial.println(F("⏸ Scan bloqueado - HTTP offline"));
         return;
     }
 
@@ -67,7 +65,7 @@ void scanAndSendSensors() {
     }
 
     JsonDocument doc;
-    JsonArray arr = doc.to<JsonArray>();
+    JsonArray arr = doc["sensors"].to<JsonArray>();
 
     for (int i = 0; i < count; i++) {
         DeviceAddress addr;
@@ -76,27 +74,20 @@ void scanAndSendSensors() {
         }
     }
 
-    Serial.printf("📡 Enviando %d sensores ao Firebase...\n", arr.size());
+    Serial.printf("📡 Enviando %d sensores...\n", arr.size());
 
     String payload;
-    serializeJson(doc, payload); // Converte o documento para texto
+    serializeJson(doc, payload);
 
-    Database.set(
-        aClient,
-        "/status/detected_sensors",
-        payload, // <--- Agora enviando a String serializada
-        [](AsyncResult &r) {
-            if (r.isError()) {
-                Serial.printf("❌ Erro scan Firebase: %s\n", r.error().message().c_str());
-            } else {
-                Serial.println(F("✅ Sensores enviados ao Firebase"));
-            }
-        }
-    );
+    if (httpClient.sendSensors(payload)) {
+        Serial.println(F("✅ Sensores enviados"));
+    } else {
+        Serial.println(F("❌ Erro ao enviar sensores"));
+    }
 }
 
 // =================================================
-// EEPROM helpers - SEÇÃO DE SENSORES (0-63)
+// EEPROM helpers
 // =================================================
 
 bool saveSensorToEEPROM(const char* sensorKey, const String& sensorAddress) {
@@ -113,7 +104,7 @@ bool saveSensorToEEPROM(const char* sensorKey, const String& sensorAddress) {
     bool success = EEPROM.commit();
     
     if (success) {
-        Serial.printf("💾 Sensor salvo na EEPROM: %s -> %s (addr %d)\n", 
+        Serial.printf("💾 Sensor salvo: %s -> %s (addr %d)\n", 
                      sensorKey, sensorAddress.c_str(), addr);
     } else {
         Serial.printf("❌ Erro ao salvar sensor: %s\n", sensorKey);
@@ -131,7 +122,7 @@ bool removeSensorFromEEPROM(const char* sensorKey) {
     bool success = EEPROM.commit();
     
     if (success) {
-        Serial.printf("🗑️ Sensor removido da EEPROM: %s\n", sensorKey);
+        Serial.printf("🗑️ Sensor removido: %s\n", sensorKey);
     }
     
     return success;
@@ -171,90 +162,11 @@ std::vector<SensorInfo> listSensors() {
 }
 
 // =================================================
-// Firebase → EEPROM
-// =================================================
-
-bool loadSensorsFromFirebase() {
-    Serial.println(F("📥 Buscando sensores no Firebase..."));
-
-    Database.get(
-        aClient,
-        "/config/sensores",
-        [](AsyncResult &r) {
-
-            if (r.isError()) {
-                Serial.printf("❌ Firebase erro: %s\n", r.error().message().c_str());
-                return;
-            }
-
-            JsonDocument doc;
-            if (deserializeJson(doc, r.c_str())) {
-                Serial.println(F("❌ Erro parse JSON sensores"));
-                return;
-            }
-
-            JsonObject root = doc.as<JsonObject>();
-
-            for (JsonPair kv : root) {
-                saveSensorToEEPROM(
-                    kv.key().c_str(),
-                    kv.value().as<String>()
-                );
-
-                Serial.printf(
-                    "💾 EEPROM: %s -> %s\n",
-                    kv.key().c_str(),
-                    kv.value().as<const char*>()
-                );
-            }
-
-            Serial.println(F("✅ Sensores atualizados"));
-        }
-    );
-
-    return true;
-}
-
-// =================================================
-// Comando remoto de refresh
+// Comando remoto de refresh (removido - não aplicável)
 // =================================================
 
 void verificarComandoUpdateSensores() {
-    static unsigned long ultima = 0;
-    if (millis() - ultima < 10000) return;
-    ultima = millis();
-
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println(F("❌ WiFi offline, scan cancelado"));
-        return;
-    }
-
-    if (!app.ready()) {
-        Serial.println(F("❌ Firebase não pronto, scan cancelado"));
-        return;
-    }
-
-    Database.get(
-        aClient,
-        "/commands/refresh_sensors",
-        [](AsyncResult &r) {
-            if (r.isError()) return;
-
-            if (String(r.c_str()) == "true") {
-                Serial.println(F("🔄 Comando refresh recebido"));
-                scanAndSendSensors();
-                    
-                Database.set<bool>(
-                    aClient,
-                    "/commands/refresh_sensors",
-                    false,
-                    [](AsyncResult &res) {
-                        if (!res.isError()) {
-                            Serial.println(F("✅ Flag resetada"));
-                        }
-                    }
-                );
-            }
-        }
-    );
+    // Esta função era específica do Firebase
+    // Com MySQL, o scan é feito localmente ou via comando direto
+    // Pode ser removida ou adaptada para polling HTTP se necessário
 }

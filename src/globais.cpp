@@ -13,5 +13,3 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 
 SystemState state;
-
-bool useFirebase = false;

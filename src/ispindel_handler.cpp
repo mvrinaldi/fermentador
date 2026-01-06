@@ -1,6 +1,7 @@
+#include <ArduinoJson.h>
+
 #include "ispindel_handler.h"
 #include "ispindel_struct.h"
-#include <ArduinoJson.h>
 
 // Definição real da variável global
 SpindelData mySpindel;
