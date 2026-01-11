@@ -173,11 +173,15 @@ void setup() {
     Serial.printf("   • Heater: Pino %d (%s)\n",
                   heater.pino, heater.invertido ? "invertido" : "normal");
     
-    // Sensores
+    // ✅ 1. INICIALIZAÇÃO BÁSICA DOS SENSORES
     setupSensorManager();
     Serial.println("✅ Sensores inicializados");
     
-    // === Network Manager (WiFi + OTA + HTTP) ===
+    // ✅ 2. CARREGAR ESTADO SALVO (ANTES de qualquer conexão de rede)
+    // Isso garante que temos um estado válido mesmo sem WiFi
+    setupActiveListener();
+    
+    // ✅ 3. CONFIGURAÇÃO DE REDE
     Serial.println("\n📡 Conectando à rede...");
     networkSetup(server);
     
@@ -186,11 +190,12 @@ void setup() {
         setupNTP();
     }
     
+    // ✅ 4. SINCRONIZAR COM SERVIDOR (se online)
     if (isHTTPOnline()) {
         Serial.println(F("\n📡 Enviando sensores detectados ao servidor..."));
         scanAndSendSensors();
         
-        // ===== BUSCAR SENSORES CONFIGURADOS DO SERVIDOR =====
+        // Buscar sensores configurados do servidor
         Serial.println(F("\n📥 Buscando configuração de sensores do servidor..."));
         String fermenterAddr, fridgeAddr;
         
@@ -215,13 +220,23 @@ void setup() {
             
             if (updated) {
                 Serial.println(F("✅ Sensores sincronizados do servidor!"));
+                
+                // ✅ RECARREGAR SENSORES após atualização
+                setupSensorManager();
             }
         } else {
             Serial.println(F("⚠️ Nenhum sensor configurado no servidor"));
         }
+        
+        // ✅ 5. VERIFICAR FERMENTAÇÃO ATIVA NO SERVIDOR
+        // Se acabamos de carregar um estado local, verificar se ainda está válido
+        if (fermentacaoState.active) {
+            Serial.println(F("\n🔍 Verificando se fermentação ainda está ativa no servidor..."));
+            getTargetFermentacao();  // Esta função também reseta o PID se necessário
+        }
     }
     
-    // Lista sensores já configurados
+    // ✅ 6. LISTAR SENSORES CONFIGURADOS
     auto lista = listSensors();
     if (lista.empty()) {
         Serial.println(F("\n⚠️ Nenhum sensor configurado"));
@@ -233,13 +248,30 @@ void setup() {
         }
     }
 
-    // WebServer / iSpindel
+    // ✅ 7. WEBSERVER / ISPINDEL
     setupSpindelRoutes(server);
     server.begin();
     Serial.println("🌐 Servidor Web ativo");
     
-    // Estado salvo (local, não depende de Wi-Fi)
-    setupActiveListener();
+    // ✅ 8. VALIDAÇÃO FINAL DO ESTADO
+    // Garantir temperatura segura se não houver fermentação ativa
+    if (!fermentacaoState.active) {
+        // Se não há fermentação ativa, garantir temperatura padrão
+        if (state.targetTemp != DEFAULT_TEMPERATURE) {
+            Serial.printf("[Setup] ⚠️  Ajustando temperatura para padrão: %.1f°C\n", DEFAULT_TEMPERATURE);
+            updateTargetTemperature(DEFAULT_TEMPERATURE);
+            resetPIDState();  // Reset adicional por segurança
+        }
+    } else {
+        // Se há fermentação ativa, validar temperatura
+        if (fermentacaoState.tempTarget < MIN_SAFE_TEMPERATURE || 
+            fermentacaoState.tempTarget > MAX_SAFE_TEMPERATURE) {
+            Serial.printf("[Setup] ⚠️  Temperatura alvo inválida: %.1f°C, ajustando para %.1f°C\n",
+                         fermentacaoState.tempTarget, DEFAULT_TEMPERATURE);
+            updateTargetTemperature(DEFAULT_TEMPERATURE);
+            resetPIDState();
+        }
+    }
     
     // Log inicial
     Serial.println("\n==============================================");
@@ -263,6 +295,12 @@ void setup() {
                 Serial.printf("Tempo decorrido: %.1f horas\n", elapsedH);
             }
         }
+        
+        // ✅ LOG ESPECÍFICO PARA PID
+        Serial.println("[PID] 🔄 Sistema carregado com fermentação ativa - PID pronto");
+    } else {
+        Serial.printf("Temperatura padrão: %.1f°C\n", DEFAULT_TEMPERATURE);
+        Serial.println("[PID] 🛑 Sistema em standby - PID resetado");
     }
     Serial.println("==============================================");
 }

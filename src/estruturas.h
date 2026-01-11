@@ -95,6 +95,7 @@ struct FermentationStage {
 // === Estado da Fermentação === //
 struct FermentacaoState {
     bool active;
+    bool concluidaMantendoTemp;  // ✅ ADICIONADO: Concluída mas mantendo temperatura
     char activeId[32];
     char configName[64];
     float tempTarget;
@@ -107,7 +108,8 @@ struct FermentacaoState {
     
     FermentacaoState() : 
         active(false),
-        tempTarget(20.0),
+        concluidaMantendoTemp(false),  // ✅ ADICIONADO
+        tempTarget(DEFAULT_TEMPERATURE),  // ✅ USANDO DEFAULT_TEMPERATURE
         currentStageIndex(0),
         targetReachedSent(false),
         totalStages(0),
@@ -122,9 +124,10 @@ struct FermentacaoState {
     
     void clear() {
         active = false;
+        concluidaMantendoTemp = false;  // ✅ ADICIONADO
         memset(activeId, 0, sizeof(activeId));
         memset(configName, 0, sizeof(configName));
-        tempTarget = 20.0;
+        tempTarget = DEFAULT_TEMPERATURE;  // ✅ USANDO DEFAULT_TEMPERATURE
         currentStageIndex = 0;
         targetReachedSent = false;
         totalStages = 0;

@@ -257,7 +257,6 @@ bool FermentadorHTTPClient::getAssignedSensors(String& fermenterAddr, String& fr
     fermenterAddr = "";
     fridgeAddr = "";
     
-    // ✅ CORRIGIDO: Usa is<String>() ao invés de containsKey() (depreciado)
     if (sensors["sensor_fermentador"].is<String>()) {
         fermenterAddr = sensors["sensor_fermentador"].as<String>();
         Serial.printf("[HTTP] Sensor fermentador: %s\n", fermenterAddr.c_str());

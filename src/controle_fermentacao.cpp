@@ -13,6 +13,8 @@
 #include "eeprom_layout.h"
 #include "fermentacao_stages.h"
 #include "gerenciador_sensores.h"
+#include "controle_temperatura.h"
+#include "rampa_suave.h"  // ✅ NOVO: Inclui sistema de rampa suave
 
 // Extern do cliente HTTP
 extern FermentadorHTTPClient httpClient;
@@ -44,27 +46,6 @@ static void safe_strcpy(char* dest, const char* src, size_t destSize) {
 
 bool isValidString(const char* str) {
     return str && str[0] != '\0';
-}
-
-// =====================================================
-// FUNÇÃO AUXILIAR: CONVERTER STRING PARA ENDEREÇO DE SENSOR
-// =====================================================
-static bool parseAddressString(const char* addrStr, uint8_t* addrBytes) {
-    if (!addrStr || strlen(addrStr) < 16) return false;
-    
-    // Remove '0x' se presente
-    const char* start = addrStr;
-    if (strncmp(addrStr, "0x", 2) == 0) {
-        start += 2;
-    }
-    
-    // Converte string hexadecimal para bytes
-    for (int i = 0; i < 8; i++) {
-        char byteStr[3] = {start[i*2], start[i*2+1], '\0'};
-        addrBytes[i] = strtoul(byteStr, NULL, 16);
-    }
-    
-    return true;
 }
 
 // =====================================================
@@ -217,25 +198,87 @@ void clearEEPROM() {
 // CONTROLE DE ESTADO
 // =====================================================
 void updateTargetTemperature(float temp) {
+    // ✅ APLICA LIMITES DE SEGURANÇA
+    if (temp < MIN_SAFE_TEMPERATURE) {
+        temp = MIN_SAFE_TEMPERATURE;
+        Serial.printf("[Segurança] ⚠️ Temperatura limitada para mínimo seguro: %.1f°C\n", temp);
+    }
+    if (temp > MAX_SAFE_TEMPERATURE) {
+        temp = MAX_SAFE_TEMPERATURE;
+        Serial.printf("[Segurança] ⚠️ Temperatura limitada para máximo seguro: %.1f°C\n", temp);
+    }
+    
     fermentacaoState.tempTarget = temp;
     state.targetTemp = temp;
 }
 
+// ✅ NOVA FUNÇÃO: Concluir fermentação sem desativar o controle de temperatura
+void concluirFermentacaoMantendoTemperatura() {
+    Serial.println(F("[Fase] ✅ Fermentação concluída - mantendo temperatura atual"));
+    
+    // ✅ NÃO limpa o PID - mantém o controle ativo
+    // ✅ NÃO muda a temperatura - mantém na última etapa
+    // ✅ NÃO limpa EEPROM - mantém histórico
+    // ✅ NÃO desativa fermentacaoState.active - mantém como "ativa" no controle local
+    
+    // Apenas marca como concluída e envia notificação
+    JsonDocument doc;
+    doc["status"] = "completed";
+    time_t completionEpoch = getCurrentEpoch();
+    if (completionEpoch > 0) {
+        doc["completedAt"] = completionEpoch;
+    }
+    doc["message"] = "Fermentação concluída automaticamente - mantendo temperatura";
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    // Tenta enviar notificação, mas não é crítico se falhar
+    if (httpClient.isConnected()) {
+        httpClient.updateFermentationState(fermentacaoState.activeId, payload);
+    }
+    
+    // Marca como concluída mantendo temperatura
+    fermentacaoState.concluidaMantendoTemp = true;
+    
+    Serial.println(F("[Fase] 🌡️  Sistema mantém temperatura atual até comando manual"));
+    Serial.printf("[Fase] 🔒 Temperatura mantida: %.1f°C\n", fermentacaoState.tempTarget);
+}
+
+// ✅ FUNÇÃO ORIGINAL: Desativa completamente (modo standby)
 void deactivateCurrentFermentation() {
     Serial.println(F("[MySQL] 🧹 Desativando fermentação"));
 
-    fermentacaoState.clear();
+    // ✅ RESET CRÍTICO: Limpar estado do PID antes de desativar
+    resetPIDState();
+    
+    // Limpa o ID de forma segura para arrays de char
+    fermentacaoState.activeId[0] = '\0';
     lastActiveId[0] = '\0';
 
+    fermentacaoState.active = false;
+    fermentacaoState.concluidaMantendoTemp = false;
+    fermentacaoState.currentStageIndex = 0;
+    fermentacaoState.totalStages = 0;
+    fermentacaoState.stageStartEpoch = 0;
+    fermentacaoState.targetReachedSent = false;
     stageStarted = false;
 
-    updateTargetTemperature(20.0);
+    updateTargetTemperature(DEFAULT_TEMPERATURE);
     clearEEPROM();
+    saveStateToEEPROM();
+    
+    Serial.println(F("[PID] ✅ Estado do PID resetado na desativação"));
 }
 
 void setupActiveListener() {
     Serial.println(F("[MySQL] Sistema inicializado"));
     loadStateFromEEPROM();
+    
+    // ✅ RESET DE SEGURANÇA: Garantir que não há estado residual do PID
+    // ao iniciar o sistema, mesmo se não houver fermentação ativa
+    resetPIDState();
+    Serial.println(F("[PID] ✅ Estado do PID resetado na inicialização do sistema"));
 }
 
 // =====================================================
@@ -258,7 +301,15 @@ void checkPauseOrComplete() {
         deactivateCurrentFermentation();
     } else if (strcmp(status, "completed") == 0) {
         Serial.println(F("[MySQL] ✅ Fermentação CONCLUÍDA pelo site"));
-        deactivateCurrentFermentation();
+        
+        // Se estava mantendo temperatura, agora realmente desativa
+        if (fermentacaoState.concluidaMantendoTemp) {
+            Serial.println(F("[MySQL] 🧹 Finalizando manutenção de temperatura por comando do site"));
+            deactivateCurrentFermentation();
+        } else {
+            // Se não estava mantendo, apenas marca como concluída mantendo
+            concluirFermentacaoMantendoTemperatura();
+        }
     }
 }
 
@@ -348,7 +399,12 @@ void getTargetFermentacao() {
             Serial.printf("     Novo:     '%s'\n", id);
             Serial.println(F("  → INICIANDO NOVA FERMENTAÇÃO"));
 
+            // ✅ RESET CRÍTICO: Limpar PID ANTES de iniciar nova fermentação
+            resetPIDState();
+            Serial.println(F("[PID] ✅ Estado do PID resetado para nova fermentação"));
+            
             fermentacaoState.active = true;
+            fermentacaoState.concluidaMantendoTemp = false;
             safe_strcpy(fermentacaoState.activeId, id, sizeof(fermentacaoState.activeId));
             fermentacaoState.currentStageIndex = currentStageIndex;
             safe_strcpy(lastActiveId, id, sizeof(lastActiveId));
@@ -376,17 +432,36 @@ void getTargetFermentacao() {
                 fermentacaoState.currentStageIndex = currentStageIndex;
                 stageStarted = false;
                 fermentacaoState.stageStartEpoch = 0;
+                
+                // ✅ RESET CRÍTICO: Resetar PID quando a etapa muda externamente
+                resetPIDState();
+                Serial.println(F("[PID] ✅ Estado do PID resetado para mudança de etapa externa"));
+                
                 saveStateToEEPROM();
             }
         }
     } else if (fermentacaoState.active && !active) {
-        Serial.println(F("  → Fermentação estava ativa LOCALMENTE"));
-        Serial.println(F("  → Servidor indica NÃO ATIVA"));
-        Serial.println(F("  → DESATIVANDO"));
-        deactivateCurrentFermentation();
+        // Servidor indica NÃO ATIVA, mas temos local
+        
+        if (fermentacaoState.concluidaMantendoTemp) {
+            // Já está concluída e mantendo temperatura - OK, continua
+            Serial.println(F("  → Concluída localmente, mantendo temperatura (servidor offline)"));
+        } else {
+            // Não deveria estar ativa - desativa
+            Serial.println(F("  → Fermentação estava ativa LOCALMENTE"));
+            Serial.println(F("  → Servidor indica NÃO ATIVA"));
+            Serial.println(F("  → DESATIVANDO"));
+            deactivateCurrentFermentation();
+        }
     } else if (!active && !fermentacaoState.active) {
         Serial.println(F("  → Nenhuma fermentação ativa"));
         Serial.println(F("  → Sistema em STANDBY"));
+        
+        // ✅ GARANTIA: Resetar PID se estiver em standby
+        if (state.targetTemp == DEFAULT_TEMPERATURE) {
+            resetPIDState();
+            Serial.println(F("[PID] ✅ Estado do PID resetado em modo standby"));
+        }
     } else if (!active && fermentacaoState.active) {
         Serial.println(F("  → Servidor offline mas temos estado local"));
         Serial.println(F("  → MANTENDO fermentação local"));
@@ -472,17 +547,24 @@ void loadConfigParameters(const char* configId) {
 }
 
 // =====================================================
-// TROCA DE FASE - COM NTP
+// TROCA DE FASE - COM NTP E RAMPA SUAVE
 // =====================================================
 void verificarTrocaDeFase() {
     if (!fermentacaoState.active) return;
     
+    // ✅ ATUALIZA RAMPA SUAVE (se estiver ativa)
+    // Esta chamada deve vir PRIMEIRO para garantir que a rampa seja atualizada
+    // antes de qualquer outra verificação
+    updateSmoothRamp();
+    
+    // Verificação de segurança: se não há etapas, desativa
     if (fermentacaoState.totalStages == 0) {
         Serial.println(F("[Fase] ⚠️  0 etapas, desativando..."));
         deactivateCurrentFermentation();
         return;
     }
     
+    // Verificação de índice válido
     if (fermentacaoState.currentStageIndex >= fermentacaoState.totalStages) {
         Serial.println(F("[Fase] ⚠️  Índice inválido"));
         
@@ -495,8 +577,10 @@ void verificarTrocaDeFase() {
         return;
     }
 
+    // Referência à etapa atual
     FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
     
+    // Obtém tempo atual (com fallback para EEPROM se NTP não disponível)
     time_t nowEpoch = getCurrentEpoch();
     
     if (nowEpoch == 0) {
@@ -504,19 +588,46 @@ void verificarTrocaDeFase() {
         return;
     }
     
+    // =====================================================
+    // INÍCIO DE NOVA ETAPA
+    // =====================================================
     if (!stageStarted) {
         fermentacaoState.stageStartEpoch = nowEpoch;
         stageStarted = true;
         fermentacaoState.targetReachedSent = false;
         
+        // ✅ RESET CRÍTICO: Zera o termo integral e erro anterior do PID
+        resetPIDState();
+        Serial.println(F("[PID] ✅ Estado do PID resetado para nova etapa"));
+        
+        // Determina temperatura alvo inicial
+        float newTargetTemp;
         if (stage.type == STAGE_RAMP) {
-            updateTargetTemperature(stage.startTemp);
+            newTargetTemp = stage.startTemp;
         } else {
-            updateTargetTemperature(stage.targetTemp);
+            newTargetTemp = stage.targetTemp;
+        }
+        
+        // ✅ VERIFICA SE PRECISA DE RAMPA SUAVE
+        float currentTemp = state.currentTemp;
+        float tempDiff = fabs(newTargetTemp - currentTemp);
+        
+        if (tempDiff > RAMP_THRESHOLD && tempDiff > 0.1f) {
+            // Mudança grande detectada - cria rampa suave
+            Serial.printf("[Fase] 🔄 Mudança grande na INICIALIZAÇÃO: %.1f°C -> %.1f°C (Δ=%.1f°C)\n",
+                         currentTemp, newTargetTemp, tempDiff);
+            
+            // Configura rampa suave usando o sistema modular
+            setupSmoothRamp(currentTemp, newTargetTemp);
+        } else {
+            // Mudança pequena ou igual - aplica direto
+            updateTargetTemperature(newTargetTemp);
+            Serial.printf("[Fase] 🌡️  Temperatura alvo definida: %.1f°C\n", newTargetTemp);
         }
         
         saveStateToEEPROM();
         
+        // Log de início de etapa
         Serial.printf("[Fase] ▶️  Etapa %d/%d iniciada em %s (tipo: ", 
                      fermentacaoState.currentStageIndex + 1,
                      fermentacaoState.totalStages,
@@ -538,9 +649,12 @@ void verificarTrocaDeFase() {
         }
     }
 
+    // =====================================================
+    // CÁLCULO DO TEMPO DECORRIDO
+    // =====================================================
     float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
     
-    // Debug periódico
+    // Debug periódico (a cada 5 minutos)
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > 300000) {
         lastDebug = millis();
@@ -550,6 +664,9 @@ void verificarTrocaDeFase() {
                      (float)stage.holdTimeHours);
     }
 
+    // =====================================================
+    // VERIFICAÇÃO DE TEMPERATURA ALVO ATINGIDA
+    // =====================================================
     bool targetReached = false;
     bool needsTemperature = (stage.type == STAGE_TEMPERATURE || 
                             stage.type == STAGE_GRAVITY || 
@@ -574,15 +691,30 @@ void verificarTrocaDeFase() {
         targetReached = true;
     }
 
-    if (stage.type == STAGE_RAMP) {
+    // =====================================================
+    // CONTROLE DE RAMPA (etapas do tipo RAMP)
+    // =====================================================
+    // ✅ VERIFICA SE NÃO HÁ RAMPA SUAVE ATIVA antes de processar rampa da etapa
+    if (stage.type == STAGE_RAMP && !isSmoothRampActive()) {
         float progress = elapsedH / stage.rampTimeHours;
         if (progress < 0) progress = 0;
         if (progress > 1) progress = 1;
 
         float temp = stage.startTemp + (stage.targetTemp - stage.startTemp) * progress;
         updateTargetTemperature(temp);
+        
+        // Debug opcional da rampa da etapa
+        static unsigned long lastRampDebug = 0;
+        if (millis() - lastRampDebug > 60000) {  // A cada minuto
+            lastRampDebug = millis();
+            Serial.printf("[Rampa Etapa] Progresso: %.1f°C (%.0f%%)\n", 
+                         temp, progress * 100.0f);
+        }
     }
 
+    // =====================================================
+    // VERIFICAÇÃO DE CONCLUSÃO DA ETAPA
+    // =====================================================
     bool stageCompleted = false;
 
     switch (stage.type) {
@@ -615,24 +747,54 @@ void verificarTrocaDeFase() {
             break;
     }
 
+    // =====================================================
+    // TRANSIÇÃO PARA PRÓXIMA ETAPA
+    // =====================================================
     if (stageCompleted) {
         Serial.printf("[Fase] ✅ Etapa %d/%d concluída após %.1fh\n", 
                      fermentacaoState.currentStageIndex + 1,
                      fermentacaoState.totalStages,
                      elapsedH);
         
+        // Salva temperatura atual ANTES de mudar a etapa
+        float currentTemp = state.currentTemp;
+        
+        // Avança para próxima etapa
         fermentacaoState.currentStageIndex++;
         stageStarted = false;
         fermentacaoState.stageStartEpoch = 0;
         fermentacaoState.targetReachedSent = false;
 
+        // ✅ RESET do PID
+        resetPIDState();
+        Serial.println(F("[PID] ✅ Estado do PID resetado para transição de etapa"));
+
+        // Para nova etapa ou finalização
         if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
             FermentationStage& next = fermentacaoState.stages[fermentacaoState.currentStageIndex];
             
+            // Determina temperatura da próxima etapa
+            float nextTargetTemp;
             if (next.type == STAGE_RAMP) {
-                updateTargetTemperature(next.startTemp);
+                nextTargetTemp = next.startTemp;
             } else {
-                updateTargetTemperature(next.targetTemp);
+                nextTargetTemp = next.targetTemp;
+            }
+            
+            // ✅ VERIFICA SE PRECISA DE RAMPA SUAVE NA TRANSIÇÃO
+            float tempDiff = fabs(nextTargetTemp - currentTemp);
+            
+            if (tempDiff > RAMP_THRESHOLD && tempDiff > 0.1f) {
+                // Mudança grande detectada - cria rampa suave
+                Serial.printf("[Fase] 🔄 Mudança grande na TRANSIÇÃO: %.1f°C -> %.1f°C (Δ=%.1f°C)\n",
+                             currentTemp, nextTargetTemp, tempDiff);
+                
+                // Configura rampa suave usando o sistema modular
+                setupSmoothRamp(currentTemp, nextTargetTemp);
+            } else {
+                // Mudança pequena ou igual - aplica direto
+                updateTargetTemperature(nextTargetTemp);
+                Serial.printf("[Fase] 🌡️  Nova temperatura alvo: %.1f°C\n", nextTargetTemp);
             }
             
             saveStateToEEPROM();
@@ -641,21 +803,16 @@ void verificarTrocaDeFase() {
                          fermentacaoState.currentStageIndex + 1,
                          fermentacaoState.totalStages);
         } else {
+            // ✅✅✅ MODIFICAÇÃO CRÍTICA AQUI ✅✅✅
+            // Todas as etapas concluídas - NÃO DESATIVA, MANTÉM TEMPERATURA
             Serial.println(F("[Fase] 🎉 TODAS AS ETAPAS CONCLUÍDAS!"));
+            Serial.println(F("[Fase] 🌡️  Mantendo temperatura atual até comando manual"));
             
-            JsonDocument doc;
-            doc["status"] = "completed";
-            time_t completionEpoch = getCurrentEpoch();
-            if (completionEpoch > 0) {
-                doc["completedAt"] = completionEpoch;  // ✅ Epoch numérico
-            }
-            doc["message"] = "Fermentação concluída automaticamente";
+            // Chama a NOVA função que mantém temperatura
+            concluirFermentacaoMantendoTemperatura();
             
-            String payload;
-            serializeJson(doc, payload);
-            httpClient.updateFermentationState(fermentacaoState.activeId, payload);
-            
-            deactivateCurrentFermentation();
+            // ✅ NÃO chama mais deactivateCurrentFermentation() aqui!
+            // O sistema continuará ativo, mantendo a última temperatura
         }
     }
 }
@@ -679,7 +836,12 @@ void verificarTargetAtingido() {
 // ENVIAR ESTADO COMPLETO AO SERVIDOR
 // =====================================================
 void enviarEstadoCompleto() {
-    if (!fermentacaoState.active || !isValidString(fermentacaoState.activeId)) {
+    // ✅ MODIFICAÇÃO: Também envia estado quando está mantendo temperatura após conclusão
+    if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
+        return;
+    }
+    
+    if (!isValidString(fermentacaoState.activeId)) {
         return;
     }
     
@@ -695,7 +857,14 @@ void enviarEstadoCompleto() {
     JsonDocument doc;
     
     doc["config_id"] = fermentacaoState.activeId;
-    doc["status"] = "running";
+    
+    if (fermentacaoState.concluidaMantendoTemp) {
+        doc["status"] = "completed_holding_temp";
+        doc["message"] = "Fermentação concluída - mantendo temperatura";
+    } else {
+        doc["status"] = "running";
+    }
+    
     doc["config_name"] = fermentacaoState.configName;
     
     doc["currentStageIndex"] = fermentacaoState.currentStageIndex;
@@ -813,8 +982,12 @@ void enviarEstadoCompleto() {
 // ENVIAR LEITURAS DOS SENSORES PARA TABELA 'readings'
 // =====================================================
 void enviarLeiturasSensores() {
-    // Só envia se houver fermentação ativa
-    if (!fermentacaoState.active || !isValidString(fermentacaoState.activeId)) {
+    // ✅ MODIFICAÇÃO: Continua enviando leituras mesmo quando concluída mantendo temperatura
+    if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
+        return;
+    }
+    
+    if (!isValidString(fermentacaoState.activeId)) {
         return;
     }
     

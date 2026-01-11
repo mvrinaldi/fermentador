@@ -16,6 +16,7 @@
 #define EEPROM_SIZE 512                    // Tamanho da EEPROM
 #define MAX_STAGES 10                      // Máximo de etapas por fermentação
 #define TEMPERATURE_TOLERANCE 0.5f         // Tolerância para considerar temperatura atingida (°C)
+#define DEFAULT_TEMPERATURE 5.0f          // Temperatura padrão quando não há fermentação ativa (°C)
 
 // === Intervalos de Tempo (em milissegundos) === //
 #define TEMPERATURE_CONTROL_INTERVAL 5000UL   // Controle de temperatura (5s)
@@ -38,3 +39,14 @@
 #define MIN_COOLER_ON 180000UL             // 3 minutos
 #define MIN_HEATER_ON 120000UL             // 2 minutos
 #define MIN_DELAY_BETWEEN_RELAYS 60000UL   // 1 minuto entre acionamentos
+
+// === Controle de rampas suaves === //
+#define RAMP_THRESHOLD 2.0f      // Acima de 2°C de diferença, usa rampa suave
+#define RAMP_RATE 0.5f           // Taxa de rampa: 0.5°C por minuto (30°C por hora)
+
+// === Constantes de segurança === //
+#define MIN_SAFE_TEMPERATURE 0.0f         // Não deixar congelar
+#define MAX_SAFE_TEMPERATURE 30.0f        // Limite superior de segurança
+
+// === Protótipos de funções globais (se necessário) === //
+// (Geralmente protótipos vão nos .h específicos, não aqui)

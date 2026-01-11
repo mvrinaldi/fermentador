@@ -8,12 +8,7 @@
 #include "globais.h"
 #include "ispindel_struct.h"
 
-// Variáveis globais
-extern FermentacaoState fermentacaoState;
-extern SystemState state;
-extern FermentadorHTTPClient httpClient;
-
-// Variáveis globais
+// Variáveis globais - ✅ Corrigido para usar FermentacaoState
 extern FermentacaoState fermentacaoState;
 extern SystemState state;
 extern FermentadorHTTPClient httpClient;
