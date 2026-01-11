@@ -1,51 +1,59 @@
 <?php
-// api/esp/active.php - Retorna fermentação ativa (otimizado para ESP8266)
-header('Content-Type: application/json');
+// api/esp/active.php - Fermentação ativa (CORRIGIDO)
 header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Content-Type: application/json');
 
-// Configuração do banco
-$host = 'localhost';
-$dbname = 'u865276125_ferment_bd';
-$username = 'u865276125_ferment_user';
-$password = 'SENHA'; // Altere para senha real
+// Responde OPTIONS (preflight)
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+// Conexão banco de dados
+require_once $_SERVER['DOCUMENT_ROOT'] . '/config/database.php';
 
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $username, $password);
+    // Conectar ao banco de dados
+    $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", 
+               DB_USER, DB_PASS);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
-    // Query otimizada: apenas campos necessários + LIMIT 1
+    // Busca fermentação ativa
+
     $stmt = $pdo->prepare("
-        SELECT 
-            af.config_id as id,
-            c.current_stage_index,
-            c.name
-        FROM active_fermentations af
-        JOIN configurations c ON af.config_id = c.id
-        WHERE af.deactivated_at IS NULL
-        AND c.status = 'active'
-        ORDER BY af.activated_at DESC
+        SELECT id, name, status, created_at, updated_at, current_stage_index
+        FROM configurations
+        WHERE status = 'active'
+        ORDER BY started_at DESC
         LIMIT 1
     ");
-    
     $stmt->execute();
-    $active = $stmt->fetch(PDO::FETCH_ASSOC);
+    $config = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if ($active) {
-        // Resposta compacta
+    if ($config) {
         echo json_encode([
             'active' => true,
-            'id' => (string)$active['id'],
-            'currentStageIndex' => (int)$active['current_stage_index'],
-            'name' => $active['name']
+            'id' => (string)$config['id'],
+            'name' => $config['name'],
+            'status' => $config['status'],
+            'currentStageIndex' => (int)($config['current_stage_index'] ?? 0)
         ]);
     } else {
+        // IMPORTANTE: Retorna false quando não há fermentação ativa
         echo json_encode([
             'active' => false,
-            'id' => null
+            'id' => '',
+            'message' => 'No active fermentation'
         ]);
     }
     
 } catch (PDOException $e) {
+    error_log("Active endpoint error: " . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['error' => 'Database error']);
+    echo json_encode([
+        'error' => 'Database error',
+        'message' => $e->getMessage()
+    ]);
 }

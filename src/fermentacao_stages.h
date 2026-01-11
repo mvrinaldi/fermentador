@@ -2,16 +2,12 @@
 #pragma once
 
 #include <Arduino.h>
+#include "definitions.h"  // Importa todas as definições
 
 // Forward declarations
 struct FermentationStage;
 struct FermentacaoState;
 struct SystemState;
-
-// Constantes (apenas se não definidas)
-#ifndef TEMPERATURE_TOLERANCE
-#define TEMPERATURE_TOLERANCE 0.5f
-#endif
 
 // Funções principais de processamento de etapas
 // Cada função retorna true quando a etapa está concluída

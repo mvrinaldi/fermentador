@@ -1,4 +1,4 @@
-// config.js - Sistema de Configuração com MySQL
+// config.js - Sistema de Configuração com MySQL (CORRIGIDO)
 const API_BASE_URL = '/api.php?path=';
 
 // ========== VARIÁVEIS GLOBAIS ==========
@@ -20,6 +20,15 @@ async function apiRequest(endpoint, options = {}) {
         
         if (!response.ok) {
             const error = await response.json();
+            
+            // Se receber erro de autenticação, redireciona para index.html
+            if (response.status === 401 || error.require_login) {
+                console.error('❌ Sessão expirada ou inválida - redirecionando para login');
+                alert('Sua sessão expirou. Você será redirecionado para fazer login novamente.');
+                window.location.href = 'index.html';
+                throw new Error('Sessão expirada');
+            }
+            
             throw new Error(error.error || 'Erro na requisição');
         }
         
@@ -60,7 +69,8 @@ async function logout() {
             window.location.href = 'index.html';
         } catch (error) {
             console.error('Erro ao fazer logout:', error);
-            alert('Erro ao fazer logout: ' + error.message);
+            // Mesmo com erro, redireciona para index
+            window.location.href = 'index.html';
         }
     }
 }
@@ -70,22 +80,22 @@ async function checkAuthStatus() {
         const result = await apiRequest('auth/check');
         
         if (result.authenticated) {
+            console.log('✅ Autenticado - User ID:', result.user_id);
             hideLoginScreen();
             await loadConfigurations();
         } else {
-            showLoginScreen();
+            console.log('❌ Não autenticado - redirecionando para index.html');
+            window.location.href = 'index.html';
         }
     } catch (error) {
         console.error('Erro ao verificar autenticação:', error);
-        showLoginScreen();
+        window.location.href = 'index.html';
     }
 }
 
 function showLoginScreen() {
-    const loginScreen = document.getElementById('login-screen');
-    const container = document.querySelector('.container');
-    if (loginScreen) loginScreen.style.display = 'block';
-    if (container) container.style.display = 'none';
+    // Redireciona para index.html ao invés de mostrar tela de login
+    window.location.href = 'index.html';
 }
 
 function hideLoginScreen() {
@@ -150,7 +160,7 @@ function updateRampVisualization() {
     
     const tempDifference = Math.abs(targetTemp - currentRampData.previousTemp);
     const rampTimeInDays = rampTime / 24;
-    const actualRampRate = tempDifference / rampTimeInDays;
+    const actualRampRate = rampTimeInDays > 0 ? (tempDifference / rampTimeInDays) : 0;
     
     document.getElementById('next-temp-display').textContent = `${targetTemp}°C`;
     document.getElementById('ramp-time-display').textContent = `${rampTime} hora${rampTime !== 1 ? 's' : ''}`;
@@ -181,15 +191,23 @@ function saveRampConfiguration() {
         return;
     }
     
+    // Garantir que rampTime não seja 0
+    const rampTime = currentRampData.rampTime || 24;
+    
+    // Calcular a taxa corretamente
+    const tempDifference = Math.abs(currentRampData.targetTemp - currentRampData.previousTemp);
+    const rampTimeInDays = rampTime / 24;
+    const actualRate = rampTimeInDays > 0 ? (tempDifference / rampTimeInDays) : 0;
+    
     // Criar etapa de rampa
     const rampStage = {
         id: Date.now(),
         type: 'ramp',
         startTemp: currentRampData.previousTemp,
         targetTemp: currentRampData.targetTemp,
-        rampTime: currentRampData.rampTime,
+        rampTime: rampTime,
         maxRampRate: currentRampData.maxRampRate,
-        actualRate: Math.abs(currentRampData.targetTemp - currentRampData.previousTemp) / (currentRampData.rampTime / 24),
+        actualRate: actualRate,
         direction: currentRampData.targetTemp > currentRampData.previousTemp ? 'up' : 'down'
     };
     
@@ -201,7 +219,9 @@ function saveRampConfiguration() {
         type: 'temperature',
         targetTemp: currentRampData.targetTemp,
         duration: 7,
-        rampTime: 0
+        rampTime: 0,
+        targetGravity: 1.015,
+        maxDuration: 14
     };
     
     stages.push(mainStage);
@@ -217,7 +237,7 @@ function addStage() {
         type: 'temperature',
         targetTemp: 18,
         duration: 7,
-        targetGravity: 1.010,
+        targetGravity: 1.015,
         maxDuration: 14,
         rampTime: 0
     };
@@ -235,10 +255,23 @@ function updateStage(id, field, value) {
         if (stage.id === id) {
             const updatedStage = { ...stage, [field]: value };
             
+            // Lógica de valores padrão
+            if (field === 'type') {
+                if (value === 'gravity') {
+                    updatedStage.targetGravity = updatedStage.targetGravity || 1.010;
+                } else if (value === 'gravity_time') {
+                    updatedStage.targetGravity = updatedStage.targetGravity || 1.010;
+                    updatedStage.maxDuration = updatedStage.maxDuration || 14;
+                } else if (value === 'temperature') {
+                    updatedStage.duration = updatedStage.duration || 7;
+                }
+            }
+            
+            // Lógica de rampas
             if (stage.type === 'ramp' && (field === 'startTemp' || field === 'targetTemp' || field === 'rampTime')) {
                 const tempDiff = Math.abs(updatedStage.targetTemp - updatedStage.startTemp);
-                const rampTimeInDays = updatedStage.rampTime / 24;
-                updatedStage.actualRate = tempDiff / rampTimeInDays;
+                const rampTimeInDays = (updatedStage.rampTime || 24) / 24;
+                updatedStage.actualRate = rampTimeInDays > 0 ? (tempDiff / rampTimeInDays) : 0;
                 updatedStage.direction = updatedStage.targetTemp > updatedStage.startTemp ? 'up' : 'down';
             }
             
@@ -315,78 +348,174 @@ function validateConfiguration() {
 async function loadConfigurations() {
     try {
         savedConfigs = await apiRequest('configurations');
+        
+        console.log('📥 Configurações recebidas da API:', savedConfigs);
+        
+        savedConfigs = savedConfigs.map(config => {
+            console.log('Config ID:', config.id, 'Nome:', config.name);
+            const stages = (config.stages || []).map(stage => {
+                console.log('Stage:', stage);
+                return normalizeKeys(stage);
+            });
+            return {
+                ...config,
+                stages: stages
+            };
+        });
+        
         renderSavedConfigs();
     } catch (error) {
         console.error('Erro ao carregar configurações:', error);
-        alert('Erro ao carregar configurações: ' + error.message);
+        if (!error.message.includes('Sessão expirada')) {
+            alert('Erro ao carregar configurações: ' + error.message);
+        }
     }
+}
+
+function normalizeKeys(obj) {
+    if (!obj || typeof obj !== 'object') return obj;
+    
+    const newObj = {};
+    for (const key in obj) {
+        if (obj.hasOwnProperty(key)) {
+            const camelKey = key.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
+            let value = obj[key];
+            
+            // Converter valores numéricos
+            if (value !== null && value !== undefined) {
+                // Para campos que devem ser números
+                const numericFields = ['targetTemp', 'target_temp', 'startTemp', 'start_temp', 
+                                     'rampTime', 'ramp_time', 'actualRate', 'actual_rate',
+                                     'duration', 'maxDuration', 'max_duration', 
+                                     'targetGravity', 'target_gravity'];
+                
+                const isNumericField = numericFields.includes(key) || 
+                                      numericFields.includes(camelKey);
+                
+                if (isNumericField && !isNaN(parseFloat(value))) {
+                    value = parseFloat(value);
+                }
+            }
+            
+            newObj[camelKey] = value;
+        }
+    }
+    return newObj;
 }
 
 async function saveConfiguration() {
     if (!validateConfiguration()) return;
 
-    const fermentationName = document.getElementById('fermentation-name').value;
+    const fermentationName = document.getElementById('fermentation-name').value.trim();
     
     const configData = {
         name: fermentationName,
-        stages: stages.map((stage, index) => ({
-            type: stage.type,
-            targetTemp: stage.targetTemp,
-            duration: stage.duration,
-            targetGravity: stage.targetGravity,
-            maxDuration: stage.maxDuration,
-            startTemp: stage.startTemp,
-            rampTime: stage.rampTime,
-            maxRampRate: stage.maxRampRate,
-            actualRate: stage.actualRate,
-            direction: stage.direction
-        }))
+        stages: stages.map((stage, index) => {
+            const baseStage = {
+                type: stage.type,
+                target_temp: stage.targetTemp || 18
+            };
+            
+            switch(stage.type) {
+                case 'temperature':
+                    return {
+                        ...baseStage,
+                        duration: stage.duration || 7
+                    };
+                    
+                case 'ramp':
+                    // Cálculos devem ser feitos aqui também
+                    const startTemp = stage.startTemp || stage.targetTemp;
+                    const targetTemp = stage.targetTemp;
+                    const rampTime = stage.rampTime || 24;
+                    const tempDiff = Math.abs(targetTemp - startTemp);
+                    const rampTimeInDays = rampTime / 24;
+                    const actualRate = rampTimeInDays > 0 ? (tempDiff / rampTimeInDays) : 0;
+                    const direction = targetTemp > startTemp ? 'up' : 'down';
+                    
+                    return {
+                        ...baseStage,
+                        start_temp: startTemp,
+                        ramp_time: rampTime,
+                        actual_rate: actualRate,
+                        direction: direction
+                    };
+                    
+                case 'gravity':
+                    return {
+                        ...baseStage,
+                        target_gravity: stage.targetGravity || 1.010
+                    };
+                    
+                case 'gravity_time':
+                    return {
+                        ...baseStage,
+                        target_gravity: stage.targetGravity || 1.010,
+                        max_duration: stage.maxDuration || 14
+                    };
+                    
+                default:
+                    return baseStage;
+            }
+        })
     };
 
+    console.log('📤 Enviando configuração:', configData);
+
     try {
-        await apiRequest('configurations', {
+        const result = await apiRequest('configurations', {
             method: 'POST',
             body: JSON.stringify(configData)
         });
         
-        alert('Configuração salva com sucesso!');
+        alert(`✅ Configuração salva com sucesso!`);
         await loadConfigurations();
         document.getElementById('fermentation-name').value = '';
         stages = [];
         renderStages();
     } catch (error) {
-        console.error('Erro ao salvar:', error);
-        alert('Erro ao salvar configuração: ' + error.message);
+        console.error('❌ Erro ao salvar:', error);
+        if (!error.message.includes('Sessão expirada')) {
+            alert('❌ Erro ao salvar: ' + error.message);
+        }
     }
 }
 
 async function startFermentation(configId, isReusing = false) {
-    const activeData = await apiRequest('active');
-    if (activeData.active) {
-        alert('Já existe uma fermentação ativa! Para iniciar uma nova, primeiro pause ou conclua a fermentação atual.');
-        return;
-    }
-    
-    const action = isReusing ? 'Reutilizar' : 'Iniciar';
-    if (!confirm(`${action} esta fermentação?`)) return;
-    
     try {
+        const activeData = await apiRequest('active');
+        if (activeData.active) {
+            alert('Já existe uma fermentação ativa! Para iniciar uma nova, primeiro pause ou conclua a fermentação atual.');
+            return;
+        }
+        
+        const action = isReusing ? 'Reutilizar' : 'Iniciar';
+        if (!confirm(`${action} esta fermentação?`)) return;
+        
+        // CORREÇÃO: Atualiza status para 'active'
         await apiRequest('configurations/status', {
             method: 'PUT',
             body: JSON.stringify({ config_id: configId, status: 'active' })
         });
         
+        // CORREÇÃO: Notifica endpoint de ativação
         await apiRequest('active/activate', {
             method: 'POST',
             body: JSON.stringify({ config_id: configId })
         });
         
-        alert('Fermentação iniciada com sucesso!');
-        await loadConfigurations();
+        alert('✅ Fermentação iniciada com sucesso!');
+        
+        // CORREÇÃO: Aguarda 500ms e recarrega para garantir atualização
+        setTimeout(async () => {
+            await loadConfigurations();
+        }, 500);
         
     } catch (error) {
         console.error('Erro ao iniciar fermentação:', error);
-        alert('Erro ao iniciar fermentação: ' + error.message);
+        if (!error.message.includes('Sessão expirada')) {
+            alert('Erro ao iniciar fermentação: ' + error.message);
+        }
     }
 }
 
@@ -402,23 +531,29 @@ async function pauseFermentation(configId) {
         await apiRequest('active/deactivate', { method: 'POST' });
         
         alert('Fermentação pausada!');
-        await loadConfigurations();
+        
+        // CORREÇÃO: Aguarda 500ms e recarrega
+        setTimeout(async () => {
+            await loadConfigurations();
+        }, 500);
     } catch (error) {
         console.error('Erro ao pausar fermentação:', error);
-        alert('Erro: ' + error.message);
+        if (!error.message.includes('Sessão expirada')) {
+            alert('Erro: ' + error.message);
+        }
     }
 }
 
 async function resumeFermentation(configId) {
-    const activeData = await apiRequest('active');
-    if (activeData.active) {
-        alert('Já existe uma fermentação ativa! Para retomar esta, primeiro pause a fermentação atual.');
-        return;
-    }
-    
-    if (!confirm('Retomar esta fermentação?')) return;
-    
     try {
+        const activeData = await apiRequest('active');
+        if (activeData.active) {
+            alert('Já existe uma fermentação ativa! Para retomar esta, primeiro pause a fermentação atual.');
+            return;
+        }
+        
+        if (!confirm('Retomar esta fermentação?')) return;
+        
         await apiRequest('configurations/status', {
             method: 'PUT',
             body: JSON.stringify({ config_id: configId, status: 'active' })
@@ -430,10 +565,16 @@ async function resumeFermentation(configId) {
         });
         
         alert('Fermentação retomada!');
-        await loadConfigurations();
+        
+        // CORREÇÃO: Aguarda 500ms e recarrega
+        setTimeout(async () => {
+            await loadConfigurations();
+        }, 500);
     } catch (error) {
         console.error('Erro ao retomar fermentação:', error);
-        alert('Erro: ' + error.message);
+        if (!error.message.includes('Sessão expirada')) {
+            alert('Erro: ' + error.message);
+        }
     }
 }
 
@@ -452,10 +593,16 @@ async function completeFermentation(configId) {
         }
         
         alert('Fermentação marcada como concluída!');
-        await loadConfigurations();
+        
+        // CORREÇÃO: Aguarda 500ms e recarrega
+        setTimeout(async () => {
+            await loadConfigurations();
+        }, 500);
     } catch (error) {
         console.error('Erro ao concluir fermentação:', error);
-        alert('Erro: ' + error.message);
+        if (!error.message.includes('Sessão expirada')) {
+            alert('Erro: ' + error.message);
+        }
     }
 }
 
@@ -480,7 +627,9 @@ async function deleteConfig(configId) {
         await loadConfigurations();
     } catch (error) {
         console.error('Erro ao excluir:', error);
-        alert('Erro ao excluir: ' + error.message);
+        if (!error.message.includes('Sessão expirada')) {
+            alert('Erro ao excluir: ' + error.message);
+        }
     }
 }
 
@@ -490,23 +639,88 @@ function refreshData() {
 
 // ========== FUNÇÕES AUXILIARES ==========
 function getStageSummary(stage) {
-    if (!stage) return '';
+    if (!stage || !stage.type) return '';
+    
+    // Normalização robusta com fallbacks
+    const normalize = {
+        targetTemp: () => {
+            const val = stage.targetTemp || stage.target_temp || 18;
+            return typeof val === 'number' ? val : parseFloat(val) || 18;
+        },
+        targetGravity: () => {
+            const val = stage.targetGravity || stage.target_gravity || 1.010;
+            return typeof val === 'number' ? val : parseFloat(val) || 1.010;
+        },
+        maxDuration: () => {
+            const val = stage.maxDuration || stage.max_duration || 14;
+            return typeof val === 'number' ? val : parseInt(val) || 14;
+        },
+        duration: () => {
+            const val = stage.duration || 7;
+            return typeof val === 'number' ? val : parseInt(val) || 7;
+        },
+        startTemp: () => {
+            const val = stage.startTemp || stage.start_temp || (stage.targetTemp || stage.target_temp || 18);
+            return typeof val === 'number' ? val : parseFloat(val) || 18;
+        },
+        rampTime: () => {
+            const val = stage.rampTime || stage.ramp_time || 24;
+            return typeof val === 'number' ? val : parseFloat(val) || 24;
+        },
+        direction: () => stage.direction || 'up',
+        actualRate: () => {
+            const val = stage.actualRate || stage.actual_rate;
+            if (val === null || val === undefined || val === '') return 0;
+            return typeof val === 'number' ? val : parseFloat(val) || 0;
+        }
+    };
+    
+    // Dados normalizados
+    const data = {
+        targetTemp: normalize.targetTemp(),
+        targetGravity: normalize.targetGravity(),
+        maxDuration: normalize.maxDuration(),
+        duration: normalize.duration(),
+        startTemp: normalize.startTemp(),
+        rampTime: normalize.rampTime(),
+        direction: normalize.direction(),
+        actualRate: normalize.actualRate()
+    };
     
     switch(stage.type) {
         case 'temperature':
-            return `Manter ${stage.targetTemp}°C por ${stage.duration || 7} dias`;
+            return `Manter ${data.targetTemp}°C por ${data.duration} dias`;
+            
         case 'gravity':
-            return `Manter ${stage.targetTemp}°C até atingir ${stage.target_gravity} SG`;
+            return `Manter ${data.targetTemp}°C até ${data.targetGravity} SG`;
+            
         case 'gravity_time':
-            return `Manter ${stage.targetTemp}°C até atingir ${stage.target_gravity} SG ou ${stage.max_duration} dias`;
+            return `Manter ${data.targetTemp}°C até ${data.targetGravity} SG (máx. ${data.maxDuration} dias)`;
+            
         case 'ramp':
-            const direction = stage.direction === 'up' ? 'subir' : 'descer';
-            const rampTimeDisplay = stage.ramp_time < 24 
-                ? `${stage.ramp_time} horas` 
-                : `${(stage.ramp_time / 24).toFixed(1)} dias`;
-            return `Rampa: ${direction} de ${stage.startTemp}°C para ${stage.targetTemp}°C em ${rampTimeDisplay}`;
+            // Formata tempo da rampa
+            let timeDisplay;
+            if (data.rampTime < 24) {
+                timeDisplay = `${data.rampTime} horas`;
+            } else if (data.rampTime === 24) {
+                timeDisplay = '1 dia';
+            } else {
+                timeDisplay = `${(data.rampTime / 24).toFixed(1)} dias`;
+            }
+            
+            // Determina direção
+            const isHeating = data.direction === 'up' || data.targetTemp > data.startTemp;
+            const directionText = isHeating ? 'aquecer' : 'resfriar';
+            const arrow = isHeating ? '↑' : '↓';
+            
+            // Usar toFixed apenas se actualRate for um número
+            const rateDisplay = typeof data.actualRate === 'number' ? 
+                data.actualRate.toFixed(1) : '0.0';
+            
+            return `${arrow} Rampa: ${directionText} de ${data.startTemp}°C para ${data.targetTemp}°C em ${timeDisplay} (${rateDisplay}°C/dia)`;
+            
         default:
-            return '';
+            return 'Etapa desconhecida';
     }
 }
 
@@ -738,18 +952,44 @@ async function renderSavedConfigs() {
     const container = document.getElementById('saved-configs');
     if (!container) return;
     
-    const activeData = await apiRequest('active');
-    const hasActive = activeData.active;
-    
-    if (savedConfigs.length === 0) {
-        container.innerHTML = `
-            <div class="text-center py-8 text-gray-500">
-                Nenhuma configuração salva ainda.
-            </div>
-        `;
-    } else {
-        container.innerHTML = savedConfigs.map(config => savedConfigTemplate(config)).join('');
-        updateActiveWarning(hasActive);
+    try {
+        const activeData = await apiRequest('active');
+        const hasActive = activeData.active;
+        
+        if (savedConfigs.length === 0) {
+            container.innerHTML = `
+                <div class="text-center py-8 text-gray-500">
+                    Nenhuma configuração salva ainda.
+                </div>
+            `;
+        } else {
+            // MODIFICAÇÃO AQUI: Ordenar configurações para que as ativas apareçam primeiro, depois pausadas
+            const sortedConfigs = [...savedConfigs].sort((a, b) => {
+                // Define ordem de prioridade: active > paused > others
+                const statusOrder = {
+                    'active': 1,
+                    'paused': 2,
+                    'completed': 3,
+                    'inactive': 4
+                };
+                
+                const orderA = statusOrder[a.status] || 5;
+                const orderB = statusOrder[b.status] || 5;
+                
+                // Primeiro ordena por status
+                if (orderA !== orderB) {
+                    return orderA - orderB;
+                }
+                
+                // Se mesmo status, ordena por data de criação (mais recente primeiro)
+                return new Date(b.created_at) - new Date(a.created_at);
+            });
+            
+            container.innerHTML = sortedConfigs.map(config => savedConfigTemplate(config)).join('');
+            updateActiveWarning(hasActive);
+        }
+    } catch (error) {
+        console.error('Erro ao renderizar configurações:', error);
     }
 }
 
@@ -794,7 +1034,7 @@ window.saveRampConfiguration = saveRampConfiguration;
 
 // ========== INICIALIZAÇÃO ==========
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('Sistema de Configuração carregado');
+    console.log('🚀 Sistema de Configuração carregado');
     
     // Adicionar evento de Enter para login
     const emailInput = document.getElementById('login-email');
@@ -812,5 +1052,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         passwordInput.addEventListener('keypress', handleEnterKey);
     }
     
+    // Verifica autenticação ao carregar a página
     await checkAuthStatus();
 });

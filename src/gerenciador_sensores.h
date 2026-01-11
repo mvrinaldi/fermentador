@@ -25,3 +25,11 @@ std::vector<SensorInfo> listSensors();
 bool saveSensorToEEPROM(const char* sensorKey, const String& sensorAddress);
 bool removeSensorFromEEPROM(const char* sensorKey);
 String getSensorAddress(const char* sensorKey);
+
+// --- Leitura de Temperaturas ---
+bool readConfiguredTemperatures(float& tempFermenter, float& tempFridge);
+bool stringToDeviceAddress(const String& str, DeviceAddress addr);
+
+// --- Limpeza EEPROM ---
+void clearAllSensorsEEPROM();
+bool isValidSensorAddress(const String& address);

@@ -1,19 +1,36 @@
 <?php
-// api.php - API Backend para Sistema de Fermentação
-header('Content-Type: application/json');
+// api.php - API Backend Refatorado (ESP como fonte única de verdade)
 header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE');
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Content-Type: application/json');
 
-// Configuração do banco de dados
-$host = 'localhost';
-$dbname = 'u865276125_ferment_bd';
-$username = 'u865276125_ferment_user';
-$password = '6c3@5mZ8';
+date_default_timezone_set('UTC');
 
-// Conexão com o banco
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+session_start();
+
+$session_timeout = 24 * 60 * 60;
+
+if (isset($_SESSION['last_activity'])) {
+    $elapsed = time() - $_SESSION['last_activity'];
+    if ($elapsed > $session_timeout) {
+        session_destroy();
+        session_start();
+    }
+}
+
+$_SESSION['last_activity'] = time();
+
+require_once $_SERVER['DOCUMENT_ROOT'] . '/config/database.php';
+
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $username, $password);
+    $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", 
+               DB_USER, DB_PASS);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
@@ -22,23 +39,41 @@ try {
     exit;
 }
 
-// Pegar método e endpoint
 $method = $_SERVER['REQUEST_METHOD'];
 $path = isset($_GET['path']) ? $_GET['path'] : '';
 $input = json_decode(file_get_contents('php://input'), true);
 
-// Autenticação simples via sessão
-session_start();
-
-// ==================== FUNÇÕES AUXILIARES ====================
-
 function requireAuth() {
+    global $pdo;
+    
     if (!isset($_SESSION['user_id'])) {
         http_response_code(401);
-        echo json_encode(['error' => 'Não autenticado']);
+        echo json_encode(['error' => 'Não autenticado', 'require_login' => true]);
         exit;
     }
-    return $_SESSION['user_id'];
+    
+    $userId = (int)$_SESSION['user_id'];
+    
+    try {
+        $stmt = $pdo->prepare("SELECT id, is_active FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $user = $stmt->fetch();
+        
+        if (!$user || !$user['is_active']) {
+            session_destroy();
+            http_response_code(401);
+            echo json_encode(['error' => 'Usuário inválido', 'require_login' => true]);
+            exit;
+        }
+        
+        $_SESSION['last_activity'] = time();
+        return $userId;
+        
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Erro ao validar sessão']);
+        exit;
+    }
 }
 
 function sendResponse($data, $code = 200) {
@@ -47,9 +82,8 @@ function sendResponse($data, $code = 200) {
     exit;
 }
 
-// ==================== ROTAS ====================
+// ==================== AUTENTICAÇÃO ====================
 
-// LOGIN
 if ($path === 'auth/login' && $method === 'POST') {
     $email = $input['email'] ?? '';
     $password = $input['password'] ?? '';
@@ -63,28 +97,32 @@ if ($path === 'auth/login' && $method === 'POST') {
     $user = $stmt->fetch();
     
     if ($user && password_verify($password, $user['password_hash'])) {
-        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['user_id'] = (int)$user['id'];
+        $_SESSION['user_email'] = $email;
         
-        // Atualizar último login
         $stmt = $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
         $stmt->execute([$user['id']]);
         
-        sendResponse(['success' => true, 'user_id' => $user['id']]);
+        sendResponse([
+            'success' => true, 
+            'user_id' => (int)$user['id']
+        ]);
     } else {
         sendResponse(['error' => 'Credenciais inválidas'], 401);
     }
 }
 
-// LOGOUT
 if ($path === 'auth/logout' && $method === 'POST') {
     session_destroy();
     sendResponse(['success' => true]);
 }
 
-// CHECK AUTH STATUS
 if ($path === 'auth/check' && $method === 'GET') {
-    if (isset($_SESSION['user_id'])) {
-        sendResponse(['authenticated' => true, 'user_id' => $_SESSION['user_id']]);
+    if (isset($_SESSION['user_id']) && is_numeric($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
+        sendResponse([
+            'authenticated' => true, 
+            'user_id' => (int)$_SESSION['user_id']
+        ]);
     } else {
         sendResponse(['authenticated' => false]);
     }
@@ -92,7 +130,6 @@ if ($path === 'auth/check' && $method === 'GET') {
 
 // ==================== CONFIGURAÇÕES ====================
 
-// LISTAR CONFIGURAÇÕES
 if ($path === 'configurations' && $method === 'GET') {
     $userId = requireAuth();
     
@@ -106,7 +143,6 @@ if ($path === 'configurations' && $method === 'GET') {
     $stmt->execute([$userId]);
     $configs = $stmt->fetchAll();
     
-    // Carregar stages para cada configuração
     foreach ($configs as &$config) {
         $stmt = $pdo->prepare("SELECT * FROM stages WHERE config_id = ? ORDER BY stage_index");
         $stmt->execute([$config['id']]);
@@ -116,7 +152,6 @@ if ($path === 'configurations' && $method === 'GET') {
     sendResponse($configs);
 }
 
-// CRIAR CONFIGURAÇÃO
 if ($path === 'configurations' && $method === 'POST') {
     $userId = requireAuth();
     
@@ -130,7 +165,6 @@ if ($path === 'configurations' && $method === 'POST') {
     $pdo->beginTransaction();
     
     try {
-        // Criar configuração
         $stmt = $pdo->prepare("
             INSERT INTO configurations (user_id, name, status, current_stage_index, times_used)
             VALUES (?, ?, 'pending', 0, 0)
@@ -138,41 +172,38 @@ if ($path === 'configurations' && $method === 'POST') {
         $stmt->execute([$userId, $name]);
         $configId = $pdo->lastInsertId();
         
-        // Criar stages
         foreach ($stages as $index => $stage) {
+            $getValue = function($key, $default = null) use ($stage) {
+                if (isset($stage[$key])) return $stage[$key];
+                $camelKey = lcfirst(str_replace('_', '', ucwords($key, '_')));
+                if (isset($stage[$camelKey])) return $stage[$camelKey];
+                return $default;
+            };
+            
             $stmt = $pdo->prepare("
                 INSERT INTO stages (
                     config_id, stage_index, type, target_temp, duration, 
                     target_gravity, max_duration, start_temp, ramp_time, 
-                    max_ramp_rate, actual_rate, direction, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                    actual_rate, direction, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
             ");
             
             $stmt->execute([
                 $configId,
                 $index,
-                $stage['type'],
-                $stage['targetTemp'] ?? null,
-                $stage['duration'] ?? null,
-                $stage['targetGravity'] ?? null,
-                $stage['maxDuration'] ?? null,
-                $stage['startTemp'] ?? null,
-                $stage['rampTime'] ?? null,
-                $stage['maxRampRate'] ?? null,
-                $stage['actualRate'] ?? null,
-                $stage['direction'] ?? null
+                $getValue('type'),
+                $getValue('target_temp'),
+                $getValue('duration'),
+                $getValue('target_gravity'),
+                $getValue('max_duration'),
+                $getValue('start_temp'),
+                $getValue('ramp_time'),
+                $getValue('actual_rate'),
+                $getValue('direction')
             ]);
         }
         
         $pdo->commit();
-        
-        // Log da ação
-        $stmt = $pdo->prepare("
-            INSERT INTO action_history (user_id, config_id, action_type, action_details)
-            VALUES (?, ?, 'create_configuration', ?)
-        ");
-        $stmt->execute([$userId, $configId, json_encode(['name' => $name])]);
-        
         sendResponse(['success' => true, 'config_id' => $configId], 201);
         
     } catch (Exception $e) {
@@ -181,7 +212,6 @@ if ($path === 'configurations' && $method === 'POST') {
     }
 }
 
-// ATUALIZAR STATUS DA CONFIGURAÇÃO
 if ($path === 'configurations/status' && $method === 'PUT') {
     $userId = requireAuth();
     
@@ -198,9 +228,25 @@ if ($path === 'configurations/status' && $method === 'PUT') {
         $updateData = ['status' => $status];
         
         if ($status === 'active') {
-            $updateData['started_at'] = date('Y-m-d H:i:s');
+            // ===== RESET COMPLETO AO REINICIAR FERMENTAÇÃO =====
             
-            // Atualizar primeira stage para running
+            // 1. Limpa dados de conclusão anterior
+            $updateData['started_at'] = date('Y-m-d H:i:s');
+            $updateData['paused_at'] = null;
+            $updateData['completed_at'] = null;
+            $updateData['current_stage_index'] = 0;
+            
+            // 2. Reseta todas as etapas para status inicial
+            $stmt = $pdo->prepare("
+                UPDATE stages 
+                SET status = 'pending',
+                    start_time = NULL,
+                    end_time = NULL
+                WHERE config_id = ?
+            ");
+            $stmt->execute([$configId]);
+            
+            // 3. Ativa primeira etapa
             $stmt = $pdo->prepare("
                 UPDATE stages 
                 SET status = 'running', start_time = NOW() 
@@ -208,9 +254,25 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             ");
             $stmt->execute([$configId]);
             
-            // Incrementar times_used
+            // 4. Incrementa contador de uso
             $stmt = $pdo->prepare("UPDATE configurations SET times_used = times_used + 1 WHERE id = ?");
             $stmt->execute([$configId]);
+            
+            // 5. OPCIONAL: Limpa leituras antigas (se quiser começar do zero)
+            // Descomente se quiser apagar histórico de fermentações anteriores
+            /*
+            $stmt = $pdo->prepare("DELETE FROM readings WHERE config_id = ?");
+            $stmt->execute([$configId]);
+            
+            $stmt = $pdo->prepare("DELETE FROM ispindel_readings WHERE config_id = ?");
+            $stmt->execute([$configId]);
+            
+            $stmt = $pdo->prepare("DELETE FROM controller_states WHERE config_id = ?");
+            $stmt->execute([$configId]);
+            
+            $stmt = $pdo->prepare("DELETE FROM fermentation_states WHERE config_id = ?");
+            $stmt->execute([$configId]);
+            */
             
         } elseif ($status === 'paused') {
             $updateData['paused_at'] = date('Y-m-d H:i:s');
@@ -218,7 +280,6 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             $updateData['completed_at'] = date('Y-m-d H:i:s');
         }
         
-        // Construir query dinâmica
         $setClauses = [];
         $values = [];
         foreach ($updateData as $key => $value) {
@@ -236,14 +297,6 @@ if ($path === 'configurations/status' && $method === 'PUT') {
         $stmt->execute($values);
         
         $pdo->commit();
-        
-        // Log
-        $stmt = $pdo->prepare("
-            INSERT INTO action_history (user_id, config_id, action_type, action_details)
-            VALUES (?, ?, 'update_status', ?)
-        ");
-        $stmt->execute([$userId, $configId, json_encode(['new_status' => $status])]);
-        
         sendResponse(['success' => true]);
         
     } catch (Exception $e) {
@@ -252,7 +305,6 @@ if ($path === 'configurations/status' && $method === 'PUT') {
     }
 }
 
-// DELETAR CONFIGURAÇÃO
 if ($path === 'configurations/delete' && $method === 'DELETE') {
     $userId = requireAuth();
     $configId = $input['config_id'] ?? null;
@@ -261,7 +313,6 @@ if ($path === 'configurations/delete' && $method === 'DELETE') {
         sendResponse(['error' => 'ID é obrigatório'], 400);
     }
     
-    // Verificar se não está ativa
     $stmt = $pdo->prepare("SELECT status FROM configurations WHERE id = ? AND user_id = ?");
     $stmt->execute([$configId, $userId]);
     $config = $stmt->fetch();
@@ -282,16 +333,14 @@ if ($path === 'configurations/delete' && $method === 'DELETE') {
 
 // ==================== FERMENTAÇÃO ATIVA ====================
 
-// OBTER FERMENTAÇÃO ATIVA
 if ($path === 'active' && $method === 'GET') {
     $userId = requireAuth();
     
     $stmt = $pdo->prepare("
-        SELECT af.*, c.name, c.current_stage_index, c.status
-        FROM active_fermentations af
-        JOIN configurations c ON af.config_id = c.id
-        WHERE c.user_id = ? AND af.deactivated_at IS NULL
-        ORDER BY af.activated_at DESC
+        SELECT c.id, c.name, c.current_stage_index, c.status
+        FROM configurations c
+        WHERE c.user_id = ? AND c.status = 'active'
+        ORDER BY c.started_at DESC
         LIMIT 1
     ");
     $stmt->execute([$userId]);
@@ -300,7 +349,7 @@ if ($path === 'active' && $method === 'GET') {
     if ($active) {
         sendResponse([
             'active' => true,
-            'id' => $active['config_id'],
+            'id' => $active['id'],
             'name' => $active['name'],
             'currentStageIndex' => $active['current_stage_index']
         ]);
@@ -309,53 +358,33 @@ if ($path === 'active' && $method === 'GET') {
     }
 }
 
-// ATIVAR FERMENTAÇÃO
 if ($path === 'active/activate' && $method === 'POST') {
     $userId = requireAuth();
     $configId = $input['config_id'] ?? null;
     
     if (!$configId) {
-        sendResponse(['error' => 'ID é obrigatório'], 400);
+        sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
     
-    $pdo->beginTransaction();
+    // Verifica se a config pertence ao usuário
+    $stmt = $pdo->prepare("SELECT id FROM configurations WHERE id = ? AND user_id = ?");
+    $stmt->execute([$configId, $userId]);
     
-    try {
-        // Desativar qualquer fermentação ativa
-        $stmt = $pdo->prepare("UPDATE active_fermentations SET deactivated_at = NOW() WHERE deactivated_at IS NULL");
-        $stmt->execute();
-        
-        // Ativar nova
-        $stmt = $pdo->prepare("INSERT INTO active_fermentations (config_id) VALUES (?)");
-        $stmt->execute([$configId]);
-        
-        // Atualizar status da configuração para active
-        $stmt = $pdo->prepare("UPDATE configurations SET status = 'active', started_at = NOW() WHERE id = ?");
-        $stmt->execute([$configId]);
-        
-        $pdo->commit();
-        sendResponse(['success' => true]);
-        
-    } catch (Exception $e) {
-        $pdo->rollBack();
-        sendResponse(['error' => 'Erro ao ativar fermentação: ' . $e->getMessage()], 500);
+    if (!$stmt->fetch()) {
+        sendResponse(['error' => 'Configuração não encontrada'], 404);
     }
-}
-
-// DESATIVAR FERMENTAÇÃO
-if ($path === 'active/deactivate' && $method === 'POST') {
-    requireAuth();
-    
-    $stmt = $pdo->prepare("UPDATE active_fermentations SET deactivated_at = NOW() WHERE deactivated_at IS NULL");
-    $stmt->execute();
     
     sendResponse(['success' => true]);
 }
 
-// ==================== LEITURAS ====================
+if ($path === 'active/deactivate' && $method === 'POST') {
+    requireAuth();
+    sendResponse(['success' => true]);
+}
 
-// OBTER LEITURAS
-if ($path === 'readings' && $method === 'GET') {
+// ==================== NOVO: ESTADO COMPLETO (ESP → FRONTEND) ====================
+
+if ($path === 'state/complete' && $method === 'GET') {
     requireAuth();
     $configId = $_GET['config_id'] ?? null;
     
@@ -363,20 +392,102 @@ if ($path === 'readings' && $method === 'GET') {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
     
-    // Limitar últimos 30 dias
+    // Busca configuração
+    $stmt = $pdo->prepare("SELECT * FROM configurations WHERE id = ?");
+    $stmt->execute([$configId]);
+    $config = $stmt->fetch();
+    
+    if (!$config) {
+        sendResponse(['error' => 'Configuração não encontrada'], 404);
+    }
+    
+    // Busca etapas
+    $stmt = $pdo->prepare("SELECT * FROM stages WHERE config_id = ? ORDER BY stage_index");
+    $stmt->execute([$configId]);
+    $stages = $stmt->fetchAll();
+    
+    // Busca estado da fermentação (enviado pelo ESP)
+    $stmt = $pdo->prepare("
+        SELECT * FROM fermentation_states 
+        WHERE config_id = ?
+        ORDER BY state_timestamp DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$configId]);
+    $state = $stmt->fetch();
+    
+    $stateData = [];
+    if ($state && isset($state['state_data'])) {
+        $stateData = json_decode($state['state_data'], true) ?? [];
+    }
+    
+    // Busca leituras recentes (últimas 24h)
     $stmt = $pdo->prepare("
         SELECT * FROM readings 
         WHERE config_id = ? 
-        AND reading_timestamp >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        AND reading_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
         ORDER BY reading_timestamp ASC
     ");
     $stmt->execute([$configId]);
     $readings = $stmt->fetchAll();
     
-    sendResponse($readings);
+    // Busca última leitura do iSpindel
+    $stmt = $pdo->prepare("
+        SELECT * FROM ispindel_readings 
+        WHERE config_id = ?
+        ORDER BY reading_timestamp DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$configId]);
+    $ispindel = $stmt->fetch();
+    
+    // Busca estado do controlador
+    $stmt = $pdo->prepare("
+        SELECT * FROM controller_states 
+        WHERE config_id = ?
+        ORDER BY state_timestamp DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$configId]);
+    $controller = $stmt->fetch();
+    
+    // Busca último heartbeat do ESP
+    $heartbeat = null;
+    $isOnline = false;
+    try {
+        $stmt = $pdo->prepare("
+            SELECT * FROM esp_heartbeat
+            WHERE config_id = ?
+            ORDER BY heartbeat_timestamp DESC
+            LIMIT 1
+        ");
+        $stmt->execute([$configId]);
+        $heartbeat = $stmt->fetch();
+        
+        if ($heartbeat) {
+            $lastSeen = new DateTime($heartbeat['heartbeat_timestamp']);
+            $now = new DateTime();
+            $diff = $now->getTimestamp() - $lastSeen->getTimestamp();
+            $isOnline = $diff < 120; // Online se < 2 minutos
+        }
+    } catch (PDOException $e) {
+        error_log("Error fetching heartbeat: " . $e->getMessage());
+    }
+    
+    sendResponse([
+        'config' => array_merge($config, ['stages' => $stages]),
+        'state' => $stateData,
+        'readings' => $readings,
+        'ispindel' => $ispindel ?: null,
+        'controller' => $controller ?: null,
+        'heartbeat' => $heartbeat ?: null,
+        'is_online' => $isOnline,
+        'timestamp' => date('Y-m-d H:i:s')
+    ]);
 }
 
-// ADICIONAR LEITURA (para ESP32)
+// ==================== LEITURAS (VINCULADAS AO CONFIG_ID) ====================
+
 if ($path === 'readings' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
     $tempFridge = $input['temp_fridge'] ?? null;
@@ -397,24 +508,47 @@ if ($path === 'readings' && $method === 'POST') {
     sendResponse(['success' => true, 'reading_id' => $pdo->lastInsertId()], 201);
 }
 
-// ==================== ESTADO DO CONTROLADOR ====================
+// ==================== ISPINDEL (VINCULADO AO CONFIG_ID) ====================
 
-// OBTER ESTADO DO CONTROLADOR
-if ($path === 'control' && $method === 'GET') {
-    requireAuth();
+if ($path === 'ispindel/data' && $method === 'POST') {
+    $name = $input['name'] ?? 'iSpindel';
+    $temperature = $input['temperature'] ?? null;
+    $gravity = $input['gravity'] ?? null;
+    $battery = $input['battery'] ?? null;
+    $angle = $input['angle'] ?? null;
     
-    $stmt = $pdo->prepare("
-        SELECT * FROM controller_states 
-        ORDER BY state_timestamp DESC 
-        LIMIT 1
-    ");
-    $stmt->execute();
-    $state = $stmt->fetch();
+    if ($temperature === null || $gravity === null) {
+        sendResponse(['error' => 'temperature and gravity are required'], 400);
+    }
     
-    sendResponse($state ?: ['setpoint' => null, 'cooling' => false, 'heating' => false]);
+    try {
+        // Busca fermentação ativa
+        $stmt = $pdo->prepare("
+            SELECT c.id FROM configurations c
+            WHERE c.status = 'active'
+            LIMIT 1
+        ");
+        $stmt->execute();
+        $activeConfig = $stmt->fetch();
+        
+        $configId = $activeConfig ? $activeConfig['id'] : null;
+        
+        // Insere leitura do iSpindel VINCULADA ao config_id
+        $stmt = $pdo->prepare("
+            INSERT INTO ispindel_readings (config_id, name, temperature, gravity, battery, angle)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([$configId, $name, $temperature, $gravity, $battery, $angle]);
+        
+        sendResponse(['success' => true, 'message' => 'iSpindel data saved'], 201);
+        
+    } catch (Exception $e) {
+        sendResponse(['error' => 'Error saving iSpindel data: ' . $e->getMessage()], 500);
+    }
 }
 
-// ATUALIZAR ESTADO DO CONTROLADOR (para ESP32)
+// ==================== CONTROLE ====================
+
 if ($path === 'control' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
     $setpoint = $input['setpoint'] ?? null;
@@ -434,90 +568,23 @@ if ($path === 'control' && $method === 'POST') {
     sendResponse(['success' => true], 201);
 }
 
-// ==================== ESTADO DA FERMENTAÇÃO ====================
+// ==================== ESTADO FERMENTAÇÃO (ESP ENVIA) ====================
 
-// OBTER ESTADO DA FERMENTAÇÃO
-if ($path === 'fermentation-state' && $method === 'GET') {
-    requireAuth();
-    $configId = $_GET['config_id'] ?? null;
-    
-    if (!$configId) {
-        sendResponse(['error' => 'config_id é obrigatório'], 400);
-    }
-    
-    $stmt = $pdo->prepare("
-        SELECT * FROM fermentation_states 
-        WHERE config_id = ?
-        ORDER BY state_timestamp DESC 
-        LIMIT 1
-    ");
-    $stmt->execute([$configId]);
-    $state = $stmt->fetch();
-    
-    if ($state && $state['stage_timers']) {
-        $state['stage_timers'] = json_decode($state['stage_timers'], true);
-    }
-    
-    sendResponse($state ?: []);
-}
-
-// ATUALIZAR ESTADO DA FERMENTAÇÃO (para ESP32)
 if ($path === 'fermentation-state' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
-    $timeRemainingValue = $input['time_remaining_value'] ?? null;
-    $timeRemainingUnit = $input['time_remaining_unit'] ?? null;
-    $currentTargetTemp = $input['current_target_temp'] ?? null;
-    $stageTimers = $input['stage_timers'] ?? [];
     
     if (!$configId) {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
     
     $stmt = $pdo->prepare("
-        INSERT INTO fermentation_states 
-        (config_id, time_remaining_value, time_remaining_unit, current_target_temp, stage_timers)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO fermentation_states (config_id, state_data)
+        VALUES (?, ?)
     ");
-    $stmt->execute([
-        $configId, 
-        $timeRemainingValue, 
-        $timeRemainingUnit, 
-        $currentTargetTemp,
-        json_encode($stageTimers)
-    ]);
+    $stmt->execute([$configId, json_encode($input)]);
     
     sendResponse(['success' => true], 201);
 }
-
-// ==================== LIMPEZA DE DADOS ANTIGOS ====================
-
-if ($path === 'cleanup' && $method === 'POST') {
-    requireAuth();
-    
-    // Deletar leituras com mais de 30 dias
-    $stmt = $pdo->prepare("
-        DELETE FROM readings 
-        WHERE reading_timestamp < DATE_SUB(NOW(), INTERVAL 30 DAY)
-    ");
-    $stmt->execute();
-    $deletedReadings = $stmt->rowCount();
-    
-    // Deletar estados antigos do controlador (manter apenas últimos 7 dias)
-    $stmt = $pdo->prepare("
-        DELETE FROM controller_states 
-        WHERE state_timestamp < DATE_SUB(NOW(), INTERVAL 7 DAY)
-    ");
-    $stmt->execute();
-    $deletedStates = $stmt->rowCount();
-    
-    sendResponse([
-        'success' => true,
-        'deleted_readings' => $deletedReadings,
-        'deleted_controller_states' => $deletedStates
-    ]);
-}
-
-// ==================== ROTA NÃO ENCONTRADA ====================
 
 http_response_code(404);
 echo json_encode(['error' => 'Rota não encontrada']);

@@ -1,21 +1,9 @@
-// fermentacao_mysql.h
+// controle_fermentacao.h
 #pragma once
 
 #include <Arduino.h>
 #include "estruturas.h"
-
-// Constantes (apenas se não definidas em definitions.h)
-#ifndef ACTIVE_CHECK_INTERVAL
-#define ACTIVE_CHECK_INTERVAL 30000UL  // 30 segundos
-#endif
-
-#ifndef TEMPERATURE_TOLERANCE
-#define TEMPERATURE_TOLERANCE 0.5f
-#endif
-
-#ifndef PHASE_CHECK_INTERVAL
-#define PHASE_CHECK_INTERVAL 10000UL   // 10 segundos
-#endif
+#include "definitions.h"  // Importa todas as definições
 
 // Variáveis globais
 extern unsigned long lastActiveCheck;
@@ -23,7 +11,13 @@ extern char lastActiveId[64];
 extern bool isFirstCheck;
 extern unsigned long stageStartTime;
 extern bool stageStarted;
-extern bool targetReachedTime; // Marca quando atingiu temperatura alvo
+
+// FUNÇÕES DE TEMPO
+time_t getCurrentEpoch();
+String formatTime(time_t timestamp);
+
+// FUNÇÃO VALIDAÇÃO
+bool isValidString(const char* str);
 
 // Funções EEPROM
 void saveStateToEEPROM();
@@ -37,7 +31,7 @@ void setupActiveListener();
 
 // HTTP – Fermentação ativa
 void getTargetFermentacao();
-void checkPauseOrComplete(); // Verifica comandos do site
+void checkPauseOrComplete();
 
 // Configuração de etapas
 void loadConfigParameters(const char* configId);
@@ -46,5 +40,7 @@ void loadConfigParameters(const char* configId);
 void verificarTrocaDeFase();
 void verificarTargetAtingido();
 
-// Leituras
-void enviarLeituraAtual();
+// FUNÇÕES DE ENVIO DE DADOS
+void enviarEstadoCompleto();
+void enviarLeiturasSensores();
+bool readConfiguredTemperatures(float &tempFermenter, float &tempFridge); // Declaração da função (já implementada em gerenciador_sensores.cpp)

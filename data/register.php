@@ -1,23 +1,27 @@
 <?php
 // register.php - Processamento do cadastro de usuário
 
-header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST');
-header('Access-Control-Allow-Headers: Content-Type');
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Content-Type: application/json');
 
-// Configurações do banco de dados
-$host = 'localhost';
-$dbname = 'u865276125_ferment_bd';
-$username = 'u865276125_ferment_user';
-$password = '6c3@5mZ8';
+// Responde OPTIONS (preflight)
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+// Conexão banco de dados
+require_once $_SERVER['DOCUMENT_ROOT'] . '/config/database.php';
 
 // Inicializar resposta
 $response = ['success' => false, 'message' => ''];
 
 try {
     // Conectar ao banco de dados
-    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $username, $password);
+    $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", 
+               DB_USER, DB_PASS);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
     // Ler dados do POST

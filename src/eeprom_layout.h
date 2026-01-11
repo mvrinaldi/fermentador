@@ -38,6 +38,9 @@
 // SEÇÃO 4: LIVRE (192-511) - 320 bytes
 // -----------------------------------------------
 
+#define ADDR_LAST_VALID_EPOCH 128
+#define ADDR_LAST_VALID_MILLIS 132
+
 // ===============================================
 // FUNÇÕES AUXILIARES SEGURAS PARA EEPROM
 // ===============================================

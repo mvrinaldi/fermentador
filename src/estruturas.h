@@ -1,7 +1,10 @@
+// estruturas.h
 #pragma once
 #include <Arduino.h>
+#include <time.h>  // Para time_t
 
-#define MAX_STAGES 10
+// Importa apenas para usar MAX_STAGES
+#include "definitions.h"
 
 // === Estrutura de Relé === //
 struct Rele {
@@ -11,7 +14,12 @@ struct Rele {
   char nome[16];
   
   void atualizar() {
-    digitalWrite(pino, invertido ? !estado : estado);
+    int pinValue = invertido ? !estado : estado;
+    digitalWrite(pino, pinValue);
+    
+    // ✅ DEBUG temporário
+    Serial.printf("[RELE] %s: estado=%d, invertido=%d, pino=%d, valor=%d\n",
+                  nome, estado, invertido, pino, pinValue);
   }
 };
 
@@ -32,7 +40,7 @@ struct SystemState {
 struct LocalConfig {
   float targetTemp;
   float hysteresis;
-  bool useHTTP;  // Mudado de useFirebase
+  bool useHTTP;
   
   LocalConfig() : targetTemp(20.0), hysteresis(0.5), useHTTP(true) {}
 };
@@ -50,21 +58,23 @@ struct SensorInfo {
 
 // === Tipos de Etapa === //
 enum StageType {
-    STAGE_TEMPERATURE,    // Por tempo (mantém temperatura por X dias)
-    STAGE_RAMP,          // Rampa gradual de temperatura
-    STAGE_GRAVITY,       // Por gravidade (aguarda iSpindel)
-    STAGE_GRAVITY_TIME   // Por gravidade com timeout
+    STAGE_TEMPERATURE,
+    STAGE_RAMP,
+    STAGE_GRAVITY,
+    STAGE_GRAVITY_TIME
 };
 
 // === Etapa de Fermentação === //
 struct FermentationStage {
   StageType type;
   float targetTemp;
-  float startTemp;         // Temperatura inicial (para rampas)
-  int durationDays;        // Duração em dias (para STAGE_TEMPERATURE)
-  int rampTimeHours;       // Duração da rampa em horas (para STAGE_RAMP)
-  float targetGravity;     // Gravidade alvo (para STAGE_GRAVITY*)
-  int timeoutDays;         // Timeout em dias (para STAGE_GRAVITY_TIME)
+  float startTemp;
+  int durationDays;
+  int rampTimeHours;
+  int holdTimeHours;        // ADICIONADO
+  int maxTimeHours;         // ADICIONADO
+  float targetGravity;
+  int timeoutDays;
   unsigned long startTime;
   bool completed;
   
@@ -74,13 +84,15 @@ struct FermentationStage {
       startTemp(0.0),
       durationDays(0),
       rampTimeHours(0),
+      holdTimeHours(0),      // ADICIONADO
+      maxTimeHours(0),       // ADICIONADO
       targetGravity(0.0),
       timeoutDays(0),
       startTime(0),
       completed(false) {}
 };
 
-// === Estado da Fermentação (ESTRUTURA PRINCIPAL) === //
+// === Estado da Fermentação === //
 struct FermentacaoState {
     bool active;
     char activeId[32];
@@ -91,6 +103,7 @@ struct FermentacaoState {
     int totalStages;
     FermentationStage stages[MAX_STAGES];
     unsigned long lastUpdate;
+    time_t stageStartEpoch;   // ADICIONADO - timestamp de início da etapa
     
     FermentacaoState() : 
         active(false),
@@ -98,7 +111,8 @@ struct FermentacaoState {
         currentStageIndex(0),
         targetReachedSent(false),
         totalStages(0),
-        lastUpdate(0) {
+        lastUpdate(0),
+        stageStartEpoch(0) {    // ADICIONADO
         activeId[0] = '\0';
         configName[0] = '\0';
         for (int i = 0; i < MAX_STAGES; i++) {
@@ -115,8 +129,8 @@ struct FermentacaoState {
         targetReachedSent = false;
         totalStages = 0;
         lastUpdate = millis();
+        stageStartEpoch = 0;  // ADICIONADO
         
-        // Limpa todas as etapas
         for (int i = 0; i < MAX_STAGES; i++) {
             stages[i] = FermentationStage();
         }
@@ -128,7 +142,6 @@ struct FermentacaoState {
         return false;
     }
 
-    // Funções auxiliares para manipulação segura de strings
     void setActiveId(const char* id) {
         if (id) {
             strncpy(activeId, id, sizeof(activeId) - 1);
@@ -148,7 +161,7 @@ struct FermentacaoState {
     }
 };
 
-// Declarações externas (definidas em globais.cpp)
+// Declarações externas
 extern FermentacaoState fermentacaoState;
 extern SystemState state;
 extern Rele cooler;

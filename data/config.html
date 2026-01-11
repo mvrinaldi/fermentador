@@ -255,27 +255,33 @@
         <!-- Card de Configuração -->
         <div class="card mb-6">
             <h1 class="text-3xl mb-6">Configuração de Fermentação</h1>
-
+        
             <div class="input-group">
                 <label for="fermentation-name">Nome da Fermentação</label>
-                <input type="text" id="fermentation-name" placeholder="Ex: IPA Amarela 2024" class="input">
+                <input type="text" id="fermentation-name" placeholder="Ex: IPA 2026" class="input">
             </div>
-
+        
+            <!-- TÍTULO DAS ETAPAS -->
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl">Etapas</h2>
+            </div>
+        
             <div class="mb-6">
-                <div class="flex justify-between items-center mb-4">
-                    <h2 class="text-xl">Etapas</h2>
-                    <button onclick="addStageWithRamp()" class="btn btn-primary">
-                        <i class="fas fa-plus"></i> Adicionar Etapa
-                    </button>
-                </div>
-
+                <!-- CONTAINER DAS ETAPAS -->
                 <div id="stages-container"></div>
-
+        
+                <!-- MENSAGEM QUANDO NÃO HÁ ETAPAS -->
                 <div id="no-stages-message" class="text-center py-12 text-gray-500">
                     Nenhuma etapa adicionada. Clique em "Adicionar Etapa" para começar.
                 </div>
+                <div class="mt-4 pt-4 border-t border-gray-200">
+                    <div style="text-align: right;">
+                        <button onclick="addStageWithRamp()" class="btn btn-primary shadow-lg">
+                            <i class="fas fa-plus"></i> Adicionar Etapa
+                        </button>
+                    </div>
+                </div>
             </div>
-
             <button onclick="saveConfiguration()" class="btn btn-success w-full">
                 <i class="fas fa-save"></i> Salvar Configuração
             </button>
@@ -298,6 +304,9 @@
         <div class="flex justify-between mt-4">
             <button onclick="location.href='index.html'" class="btn btn-primary">
                 <i class="fas fa-chart-line"></i> Voltar para Monitor
+            </button>
+            <button onclick="location.href='sensores.html'" class="btn btn-primary">
+                <i class="fas fa-chart-line"></i> Configurar sensores
             </button>
             <button onclick="window.logout()" class="btn btn-danger" id="logout-btn">
                 <i class="fas fa-sign-out-alt"></i> Sair

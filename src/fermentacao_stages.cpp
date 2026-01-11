@@ -1,11 +1,17 @@
-// fermentacao_stages.cpp - Processamento COMPLETO no ESP8266
-// CONTROLE 100% LOCAL - Site apenas configura e monitora
-#include "fermentacao_stages.h"
+// fermentacao_stages.cpp
+#include <ArduinoJson.h>
+
+#include "definitions.h"           // PRIMEIRO
+#include "fermentacao_stages.h"    // Importa definitions.h (protegido)
 #include "http_client.h"
 #include "estruturas.h"
 #include "globais.h"
 #include "ispindel_struct.h"
-#include <ArduinoJson.h>
+
+// Variáveis globais
+extern FermentacaoState fermentacaoState;
+extern SystemState state;
+extern FermentadorHTTPClient httpClient;
 
 // Variáveis globais
 extern FermentacaoState fermentacaoState;

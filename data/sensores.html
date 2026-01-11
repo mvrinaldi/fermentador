@@ -3,472 +3,571 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerenciador de Sensores DS18B20</title>
-    
+    <title>Configuração de Sensores - Fermentador</title>
     <style>
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: #f4f7f9; 
-            color: #333; 
-            padding: 20px; 
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        .container { 
-            max-width: 800px; 
-            margin: 0 auto; 
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
         }
-        .card { 
-            background: white; 
-            border-radius: 12px; 
-            padding: 20px; 
-            margin-bottom: 20px; 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05); 
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 900px;
+            width: 100%;
+            padding: 40px;
         }
-        h1, h2 { 
-            color: #2c3e50; 
-            margin-top: 0; 
-        }
-        .sensor-item { 
-            border-left: 4px solid #3498db; 
-            background: #fcfcfc; 
-            padding: 15px; 
-            margin: 10px 0; 
-            position: relative;
+        
+        .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            margin-bottom: 10px;
         }
-        .sensor-info {
+        
+        h1 {
+            color: #667eea;
+            font-size: 2em;
+        }
+        
+        .btn-back {
+            padding: 10px 20px;
+            background: #6c757d;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        
+        .btn-back:hover {
+            background: #5a6268;
+            transform: translateY(-2px);
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .section h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+        
+        .sensor-list {
+            margin-bottom: 20px;
+        }
+        
+        .sensor-item {
+            background: white;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        
+        .sensor-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .sensor-address {
+            font-family: 'Courier New', monospace;
+            color: #667eea;
+            font-weight: bold;
+            font-size: 0.95em;
+        }
+        
+        .sensor-temp {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 15px;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            border-radius: 8px;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+        
+        .sensor-temp.cold {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+        
+        .sensor-temp.warm {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        }
+        
+        .sensor-temp .icon {
+            font-size: 1.5em;
+        }
+        
+        .sensor-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
             flex: 1;
+            min-width: 140px;
         }
-        .sensor-address { 
-            font-family: 'Courier New', monospace; 
-            font-size: 0.9em; 
-            color: #e67e22; 
-            margin-top: 5px;
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
         }
-        select, button, input { 
-            width: 100%; 
-            padding: 12px; 
-            margin: 8px 0; 
-            border-radius: 6px; 
-            border: 1px solid #ddd; 
-            font-size: 14px;
-        }
-        .btn-primary { 
-            background: #3498db; 
-            color: white; 
-            border: none; 
-            font-weight: bold; 
-            cursor: pointer; 
-        }
+        
         .btn-primary:hover {
-            background: #2980b9;
+            background: #5568d3;
+            transform: translateY(-2px);
         }
-        .btn-remove { 
-            width: auto; 
-            background: #e74c3c; 
-            color: white; 
-            border: none; 
-            padding: 8px 15px; 
-            cursor: pointer; 
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .current-config {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .current-config h3 {
+            color: #1976d2;
+            margin-bottom: 10px;
+        }
+        
+        .config-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #ddd;
+            align-items: center;
+        }
+        
+        .config-item:last-child {
+            border-bottom: none;
+        }
+        
+        .config-temp {
+            font-size: 0.9em;
+            color: #666;
             margin-left: 10px;
         }
-        .btn-remove:hover {
-            background: #c0392b;
-        }
-        .btn-scan {
-            background: #27ae60;
-            color: white;
-            border: none;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        .btn-scan:hover {
-            background: #229954;
-        }
-        .temp-grid { 
-            display: grid; 
-            grid-template-columns: 1fr 1fr; 
-            gap: 15px; 
-        }
-        .temp-box { 
-            background: #2c3e50; 
-            color: #ecf0f1; 
-            padding: 20px; 
-            border-radius: 8px; 
-            text-align: center; 
-        }
-        .temp-value { 
-            font-size: 2em; 
-            font-weight: bold; 
-            display: block; 
-            color: #2ecc71; 
-            margin: 10px 0;
-        }
+        
         .status {
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-size: 0.85em;
-            display: inline-block;
-            margin-top: 10px;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
         }
-        .status-online {
-            background: #2ecc71;
-            color: white;
+        
+        .status.online {
+            background: #d4edda;
+            color: #155724;
         }
-        .status-offline {
-            background: #e74c3c;
-            color: white;
+        
+        .status.offline {
+            background: #f8d7da;
+            color: #721c24;
         }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .alert.show {
+            display: block;
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .alert.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
         .loading {
             text-align: center;
             padding: 20px;
-            color: #7f8c8d;
+            color: #666;
         }
-        .alert {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            color: #856404;
-            padding: 12px;
-            border-radius: 6px;
-            margin-bottom: 15px;
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .no-sensors {
+            text-align: center;
+            padding: 30px;
+            color: #999;
+        }
+        
+        .no-sensors .icon {
+            font-size: 3em;
+            margin-bottom: 10px;
+        }
+        
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .temp-loading {
+            color: #999;
+            font-size: 0.9em;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="card">
-            <h1>🍺 Gerenciador de Sensores</h1>
-            <p>Configure os sensores DS18B20 para controle da fermentação</p>
-            <div id="connection-status"></div>
-        </div>
-        
-        <div class="card">
-            <h2>🔍 Sensores Detectados pelo ESP8266</h2>
-            <p style="color: #7f8c8d; font-size: 0.9em;">
-                Clique em "Escanear Sensores" para que o ESP8266 busque todos os sensores DS18B20 conectados
-            </p>
-            <button id="scan-btn" class="btn-scan" onclick="requestSensorScan()">
-                🔄 Escanear Sensores no ESP8266
-            </button>
-            <div id="detected-sensors" class="loading">Aguardando scan...</div>
-        </div>
-        
-        <div class="card">
-            <h2>🔗 Atribuir Sensor</h2>
-            <div class="alert">
-                <strong>⚠️ Atenção:</strong> Selecione o endereço físico detectado e a função correspondente
+        <div class="header">
+            <div>
+                <h1>⚙️ Configuração de Sensores</h1>
+                <p class="subtitle">Configure os sensores DS18B20 do seu fermentador</p>
             </div>
-            
-            <label><strong>Endereço Físico (Detectado pelo ESP):</strong></label>
-            <select id="sensor-select">
-                <option value="">Selecione um sensor...</option>
-            </select>
-            
-            <label><strong>Função no Processo:</strong></label>
-            <select id="device-select">
-                <option value="">Escolha a função...</option>
-                <option value="sensor_fermentador">🍺 Sensor do Fermentador</option>
-                <option value="sensor_geladeira">❄️ Sensor da Geladeira</option>
-            </select>
-            
-            <button id="assign-btn" class="btn-primary" onclick="assignSensor()">
-                💾 Salvar Configuração
-            </button>
+            <a href="config.html" class="btn-back">← Voltar</a>
         </div>
         
-        <div class="card">
-            <h2>📋 Sensores Configurados</h2>
-            <div id="assigned-sensors" class="loading">Carregando...</div>
-        </div>
-
-        <div class="card">
-            <h2>🌡️ Temperaturas em Tempo Real</h2>
-            <div class="temp-grid">
-                <div class="temp-box">
-                    <div>🍺 Fermentador</div>
-                    <span id="temp-fermenter" class="temp-value">--.-</span>
-                    <div>°C</div>
-                </div>
-                <div class="temp-box">
-                    <div>❄️ Geladeira</div>
-                    <span id="temp-fridge" class="temp-value">--.-</span>
-                    <div>°C</div>
+        <div id="alert" class="alert"></div>
+        
+        <!-- Configuração Atual -->
+        <div class="section">
+            <h2>📋 Configuração Atual</h2>
+            <div class="current-config" id="currentConfig">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    Carregando configuração...
                 </div>
             </div>
-            <div style="text-align: center; margin-top: 15px; color: #95a5a6; font-size: 0.9em;">
-                Última atualização: <span id="last-update">--:--</span>
+        </div>
+        
+        <!-- Sensores Detectados -->
+        <div class="section">
+            <h2>🔍 Sensores Detectados</h2>
+            <div id="detectedSensors">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    Buscando sensores...
+                </div>
             </div>
         </div>
-
-        <div class="card">
-            <button onclick="location.href='index.html'" class="btn-primary">
-                ⬅️ Voltar para Monitor
-            </button>
+        
+        <div class="actions">
+            <button class="btn-primary" onclick="refreshSensors()">🔄 Atualizar</button>
         </div>
     </div>
 
     <script>
-        const API_BASE = '/api.php?path=';
+        const API_BASE = 'api/esp/sensors.php';
         
-        let detectedSensors = [];
-        let assignedSensors = {};
+        let sensorTemperatures = {};
+        let currentConfig = {};
         
-        // ==================== INICIALIZAÇÃO ====================
-        async function init() {
-            await checkConnection();
-            await loadAssignedSensors();
-            await loadDetectedSensors();
-            startTemperatureMonitoring();
+        // Carregar ao abrir página
+        window.onload = () => {
+            loadCurrentConfig();
+            loadDetectedSensors();
+            startTemperaturePolling();
+        };
+        
+        // Polling de temperaturas a cada 3 segundos
+        function startTemperaturePolling() {
+            setInterval(() => {
+                loadTemperatures();
+            }, 3000);
         }
-
-        // ==================== VERIFICAR CONEXÃO ====================
-        async function checkConnection() {
+        
+        // Mostrar alerta
+        function showAlert(message, type = 'info') {
+            const alert = document.getElementById('alert');
+            alert.textContent = message;
+            alert.className = `alert ${type} show`;
+            setTimeout(() => alert.classList.remove('show'), 5000);
+        }
+        
+        // Carregar temperaturas atuais
+        async function loadTemperatures() {
             try {
-                const response = await fetch(API_BASE + 'sensors&action=ping');
-                const data = await response.json();
-                
-                const statusDiv = document.getElementById('connection-status');
-                if (data.success) {
-                    statusDiv.innerHTML = '<span class="status status-online">✓ Conectado ao servidor</span>';
-                } else {
-                    statusDiv.innerHTML = '<span class="status status-offline">✗ Erro de conexão</span>';
-                }
-            } catch (error) {
-                document.getElementById('connection-status').innerHTML = 
-                    '<span class="status status-offline">✗ Servidor offline</span>';
-            }
-        }
-
-        // ==================== SCAN DE SENSORES ====================
-        async function requestSensorScan() {
-            const btn = document.getElementById('scan-btn');
-            btn.disabled = true;
-            btn.textContent = '⏳ Escaneando...';
-            
-            document.getElementById('detected-sensors').innerHTML = 
-                '<div class="loading">Aguardando resposta do ESP8266...</div>';
-            
-            try {
-                // Envia comando para ESP8266 escanear
-                const response = await fetch(API_BASE + 'sensors&action=request_scan', {
-                    method: 'POST'
-                });
-                
-                if (response.ok) {
-                    alert('✅ Comando de scan enviado ao ESP8266! Aguarde alguns segundos e os sensores aparecerão automaticamente.');
-                    
-                    // Aguarda 3 segundos e recarrega
-                    setTimeout(() => {
-                        loadDetectedSensors();
-                    }, 3000);
-                } else {
-                    alert('❌ Erro ao enviar comando de scan');
-                }
-            } catch (error) {
-                console.error('Erro:', error);
-                alert('❌ Erro de comunicação com o servidor');
-            } finally {
-                btn.disabled = false;
-                btn.textContent = '🔄 Escanear Sensores no ESP8266';
-            }
-        }
-
-        // ==================== CARREGAR SENSORES DETECTADOS ====================
-        async function loadDetectedSensors() {
-            try {
-                const response = await fetch(API_BASE + 'sensors&action=get_detected');
-                const data = await response.json();
-                
-                if (data.success && data.sensors) {
-                    detectedSensors = data.sensors;
-                    updateDetectedList();
-                    updateSensorSelect();
-                } else {
-                    document.getElementById('detected-sensors').innerHTML = 
-                        '<p style="color: #95a5a6;">Nenhum sensor detectado ainda. Clique em "Escanear Sensores".</p>';
-                }
-            } catch (error) {
-                console.error('Erro ao carregar sensores:', error);
-            }
-        }
-
-        // ==================== ATUALIZAR LISTA DE DETECTADOS ====================
-        function updateDetectedList() {
-            const container = document.getElementById('detected-sensors');
-            
-            if (detectedSensors.length === 0) {
-                container.innerHTML = '<p style="color: #95a5a6;">Nenhum sensor detectado</p>';
-                return;
-            }
-            
-            let html = `<p style="color: #27ae60; font-weight: bold;">✓ ${detectedSensors.length} sensor(es) encontrado(s)</p>`;
-            
-            detectedSensors.forEach((addr, index) => {
-                const isAssigned = Object.values(assignedSensors).includes(addr);
-                const badge = isAssigned ? '<span style="color: #2ecc71;">✓ Configurado</span>' : '';
-                
-                html += `
-                    <div class="sensor-item">
-                        <div class="sensor-info">
-                            <strong>Sensor ${index + 1}</strong> ${badge}
-                            <div class="sensor-address">${addr}</div>
-                        </div>
-                    </div>
-                `;
-            });
-            
-            container.innerHTML = html;
-        }
-
-        // ==================== ATUALIZAR SELECT ====================
-        function updateSensorSelect() {
-            const select = document.getElementById('sensor-select');
-            let html = '<option value="">Selecione um sensor...</option>';
-            
-            detectedSensors.forEach((addr, index) => {
-                const isAssigned = Object.values(assignedSensors).includes(addr);
-                const label = isAssigned ? `Sensor ${index + 1} (já configurado)` : `Sensor ${index + 1}`;
-                html += `<option value="${addr}" ${isAssigned ? 'style="color: #95a5a6;"' : ''}>${label}: ${addr}</option>`;
-            });
-            
-            select.innerHTML = html;
-        }
-
-        // ==================== CARREGAR SENSORES CONFIGURADOS ====================
-        async function loadAssignedSensors() {
-            try {
-                const response = await fetch(API_BASE + 'sensors&action=get_assigned');
-                const data = await response.json();
-                
-                if (data.success && data.sensors) {
-                    assignedSensors = data.sensors;
-                    updateAssignedList();
-                }
-            } catch (error) {
-                console.error('Erro ao carregar sensores configurados:', error);
-            }
-        }
-
-        // ==================== ATUALIZAR LISTA DE CONFIGURADOS ====================
-        function updateAssignedList() {
-            const container = document.getElementById('assigned-sensors');
-            
-            if (Object.keys(assignedSensors).length === 0) {
-                container.innerHTML = '<p style="color: #95a5a6;">Nenhum sensor configurado ainda</p>';
-                return;
-            }
-            
-            let html = '';
-            Object.entries(assignedSensors).forEach(([key, address]) => {
-                const icon = key === 'sensor_fermentador' ? '🍺' : '❄️';
-                const name = key === 'sensor_fermentador' ? 'Fermentador' : 'Geladeira';
-                
-                html += `
-                    <div class="sensor-item">
-                        <div class="sensor-info">
-                            <strong>${icon} ${name}</strong>
-                            <div class="sensor-address">${address}</div>
-                        </div>
-                        <button class="btn-remove" onclick="removeSensor('${key}')">
-                            🗑️ Remover
-                        </button>
-                    </div>
-                `;
-            });
-            
-            container.innerHTML = html;
-        }
-
-        // ==================== ATRIBUIR SENSOR ====================
-        async function assignSensor() {
-            const address = document.getElementById('sensor-select').value;
-            const role = document.getElementById('device-select').value;
-            
-            if (!address || !role) {
-                alert('⚠️ Selecione o endereço e a função do sensor!');
-                return;
-            }
-            
-            try {
-                const response = await fetch(API_BASE + 'sensors&action=assign', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ address, role })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    alert('✅ Sensor configurado com sucesso! O ESP8266 foi notificado.');
-                    await loadAssignedSensors();
-                    updateSensorSelect();
-                } else {
-                    alert('❌ Erro ao configurar sensor: ' + (data.error || 'Erro desconhecido'));
-                }
-            } catch (error) {
-                console.error('Erro:', error);
-                alert('❌ Erro de comunicação com o servidor');
-            }
-        }
-
-        // ==================== REMOVER SENSOR ====================
-        async function removeSensor(role) {
-            if (!confirm(`Deseja remover a configuração do sensor ${role === 'sensor_fermentador' ? 'Fermentador' : 'Geladeira'}?`)) {
-                return;
-            }
-            
-            try {
-                const response = await fetch(API_BASE + 'sensors&action=remove', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ role })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    alert('✅ Sensor removido com sucesso!');
-                    await loadAssignedSensors();
-                    updateSensorSelect();
-                } else {
-                    alert('❌ Erro ao remover sensor');
-                }
-            } catch (error) {
-                console.error('Erro:', error);
-                alert('❌ Erro de comunicação');
-            }
-        }
-
-        // ==================== MONITORAR TEMPERATURAS ====================
-        function startTemperatureMonitoring() {
-            updateTemperatures();
-            setInterval(updateTemperatures, 5000); // Atualiza a cada 5 segundos
-        }
-
-        async function updateTemperatures() {
-            try {
-                const response = await fetch(API_BASE + 'sensors&action=get_temperatures');
+                const response = await fetch(`${API_BASE}?action=get_temperatures`);
                 const data = await response.json();
                 
                 if (data.success && data.temperatures) {
-                    document.getElementById('temp-fermenter').textContent = 
-                        data.temperatures.fermenter ? data.temperatures.fermenter.toFixed(1) : '--.-';
-                    
-                    document.getElementById('temp-fridge').textContent = 
-                        data.temperatures.fridge ? data.temperatures.fridge.toFixed(1) : '--.-';
-                    
-                    const now = new Date();
-                    document.getElementById('last-update').textContent = 
-                        now.toLocaleTimeString('pt-BR');
+                    // Atualiza temperaturas na configuração atual
+                    updateConfigTemperatures(data.temperatures);
                 }
             } catch (error) {
-                // Silenciosamente falha (não incomoda o usuário)
+                console.error('Erro ao carregar temperaturas:', error);
             }
         }
-
-        // ==================== INICIAR AO CARREGAR ====================
-        document.addEventListener('DOMContentLoaded', init);
+        
+        // Atualiza temperaturas na seção de configuração
+        function updateConfigTemperatures(temps) {
+            const fermenterTemp = document.getElementById('fermenter-temp');
+            const fridgeTemp = document.getElementById('fridge-temp');
+            
+            if (fermenterTemp && temps.fermenter !== null) {
+                fermenterTemp.textContent = `(${temps.fermenter.toFixed(1)}°C)`;
+            }
+            
+            if (fridgeTemp && temps.fridge !== null) {
+                fridgeTemp.textContent = `(${temps.fridge.toFixed(1)}°C)`;
+            }
+        }
+        
+        // Carregar configuração atual
+        async function loadCurrentConfig() {
+            try {
+                const response = await fetch(`${API_BASE}?action=get_assigned`);
+                const data = await response.json();
+                
+                const configDiv = document.getElementById('currentConfig');
+                
+                if (data.success) {
+                    currentConfig = data.sensors;
+                    const fermenter = data.sensors.sensor_fermentador || 'Não configurado';
+                    const fridge = data.sensors.sensor_geladeira || 'Não configurado';
+                    
+                    configDiv.innerHTML = `
+                        <div class="config-item">
+                            <strong>🌡️ Sensor Fermentador:</strong>
+                            <div>
+                                <span class="sensor-address">${fermenter}</span>
+                                <span class="config-temp temp-loading" id="fermenter-temp">carregando...</span>
+                            </div>
+                        </div>
+                        <div class="config-item">
+                            <strong>❄️ Sensor Geladeira:</strong>
+                            <div>
+                                <span class="sensor-address">${fridge}</span>
+                                <span class="config-temp temp-loading" id="fridge-temp">carregando...</span>
+                            </div>
+                        </div>
+                    `;
+                    
+                    // Carrega temperaturas imediatamente
+                    loadTemperatures();
+                } else {
+                    configDiv.innerHTML = '<p style="color: #999;">Nenhum sensor configurado</p>';
+                }
+            } catch (error) {
+                console.error('Erro ao carregar config:', error);
+                showAlert('Erro ao carregar configuração atual', 'error');
+            }
+        }
+        
+        // Função para determinar classe de temperatura
+        function getTempClass(temp) {
+            if (temp === null) return '';
+            if (temp < 15) return 'cold';
+            if (temp > 25) return 'warm';
+            return '';
+        }
+        
+        // Carregar sensores detectados
+        async function loadDetectedSensors() {
+            try {
+                const response = await fetch(`${API_BASE}?action=get_detected`);
+                const data = await response.json();
+                
+                const sensorsDiv = document.getElementById('detectedSensors');
+                
+                if (data.success && data.sensors && data.sensors.length > 0) {
+                    // Busca temperaturas para identificação
+                    const tempResponse = await fetch(`${API_BASE}?action=get_temperatures`);
+                    const tempData = await tempResponse.json();
+                    
+                    let temps = {};
+                    if (tempData.success && tempData.temperatures) {
+                        // Mapeia temperaturas aos endereços configurados
+                        if (currentConfig.sensor_fermentador) {
+                            temps[currentConfig.sensor_fermentador] = tempData.temperatures.fermenter;
+                        }
+                        if (currentConfig.sensor_geladeira) {
+                            temps[currentConfig.sensor_geladeira] = tempData.temperatures.fridge;
+                        }
+                    }
+                    
+                    sensorsDiv.innerHTML = data.sensors.map(addr => {
+                        const temp = temps[addr];
+                        const tempClass = getTempClass(temp);
+                        const tempDisplay = temp !== null && temp !== undefined 
+                            ? `<div class="sensor-temp ${tempClass}">
+                                 <span class="icon">🌡️</span>
+                                 <span>${temp.toFixed(1)}°C</span>
+                               </div>`
+                            : '';
+                        
+                        const isFermenter = currentConfig.sensor_fermentador === addr;
+                        const isFridge = currentConfig.sensor_geladeira === addr;
+                        
+                        return `
+                            <div class="sensor-item">
+                                <div class="sensor-header">
+                                    <span class="sensor-address">${addr}</span>
+                                    ${isFermenter ? '<span class="status online">🌡️ Fermentador</span>' : ''}
+                                    ${isFridge ? '<span class="status online">❄️ Geladeira</span>' : ''}
+                                </div>
+                                ${tempDisplay}
+                                <div class="sensor-buttons">
+                                    <button class="btn-success" onclick="assignSensor('${addr}', 'sensor_fermentador')"
+                                            ${isFermenter ? 'disabled style="opacity: 0.5"' : ''}>
+                                        🌡️ Usar como Fermentador
+                                    </button>
+                                    <button class="btn-primary" onclick="assignSensor('${addr}', 'sensor_geladeira')"
+                                            ${isFridge ? 'disabled style="opacity: 0.5"' : ''}>
+                                        ❄️ Usar como Geladeira
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    sensorsDiv.innerHTML = `
+                        <div class="no-sensors">
+                            <div class="icon">🔍</div>
+                            <p>Nenhum sensor detectado.</p>
+                            <p style="font-size: 0.9em; margin-top: 10px;">
+                                Aguarde o ESP enviar os dados ou clique em Atualizar.
+                            </p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Erro ao carregar sensores:', error);
+                document.getElementById('detectedSensors').innerHTML = `
+                    <div class="no-sensors">
+                        <div class="icon">⚠️</div>
+                        <p style="color: #dc3545;">Erro ao buscar sensores detectados</p>
+                    </div>
+                `;
+            }
+        }
+        
+        // Atribuir sensor
+        async function assignSensor(address, role) {
+            const payload = {
+                address: address,
+                role: role
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE}?action=assign`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const sensorName = role === 'sensor_fermentador' ? 'Fermentador' : 'Geladeira';
+                    showAlert(`✅ Sensor ${sensorName} configurado!`, 'success');
+                    
+                    // Recarrega ambas as seções
+                    await loadCurrentConfig();
+                    await loadDetectedSensors();
+                } else {
+                    showAlert(`❌ Erro: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('Erro ao atribuir sensor:', error);
+                showAlert('❌ Erro ao salvar configuração', 'error');
+            }
+        }
+        
+        // Atualizar página
+        async function refreshSensors() {
+            showAlert('🔄 Atualizando...', 'info');
+            await loadCurrentConfig();
+            await loadDetectedSensors();
+            await loadTemperatures();
+        }
     </script>
 </body>
 </html>

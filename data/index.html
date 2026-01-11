@@ -8,7 +8,6 @@
     <!-- Tailwind -->
     <script src="https://cdn.tailwindcss.com"></script>
 
-
     <!-- Ícones -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
@@ -77,6 +76,35 @@
         .btn-brewfather.inactive {
             background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
         }
+        
+        /* Alerta ESP Offline */
+        #esp-status-alert {
+            animation: slideDown 0.3s ease-out;
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .pulse-dot {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
     </style>
 </head>
 
@@ -92,13 +120,11 @@
                 <p class="text-gray-600 mt-2">Controle total da sua fermentação</p>
             </div>
 
-            <!-- ADICIONADO: Div de erro que o app.js procura -->
             <div id="login-error" class="hidden bg-red-50 text-red-700 p-3 rounded-lg mb-4 items-center gap-2">
                 <i class="fas fa-exclamation-circle"></i>
                 <span id="error-message"></span>
             </div>
 
-            <!-- FORM removido (não é mais necessário com eventos keypress) -->
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
                 <input type="email" id="login-email" class="input" placeholder="seu@email.com">
@@ -121,17 +147,60 @@
 <!-- ===== APP ===== -->
 <div class="container max-w-6xl mx-auto p-4">
 
+    <!-- NOVO: Alerta de ESP Offline -->
+    <div id="esp-status-alert" class="hidden mb-4">
+        <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg shadow-sm">
+            <div class="flex items-start">
+                <div class="flex-shrink-0">
+                    <i class="fas fa-exclamation-triangle text-yellow-400 text-xl"></i>
+                </div>
+                <div class="ml-3 flex-1">
+                    <h3 class="text-sm font-medium text-yellow-800">
+                        ESP8266 Desconectado
+                    </h3>
+                    <div class="mt-2 text-sm text-yellow-700">
+                        <p>
+                            O controlador não envia dados há <strong id="esp-offline-time">--</strong>.
+                            Os dados exibidos podem estar desatualizados.
+                        </p>
+                        <p class="mt-1 text-xs">
+                            <i class="fas fa-info-circle"></i> 
+                            Última atualização: <span id="esp-last-update">--</span>
+                        </p>
+                    </div>
+                </div>
+                <div class="ml-4">
+                    <span class="inline-flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-medium rounded-full">
+                        <span class="pulse-dot inline-block w-2 h-2 bg-yellow-600 rounded-full"></span>
+                        Offline
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Cabeçalho -->
     <div class="card mb-4">
-        <h1 class="text-3xl font-bold" id="fermentation-name">Carregando...</h1>
-        <div class="flex items-center gap-4 text-sm text-gray-600 mt-2">
-            <span id="stage-info">Etapa 0 de 0</span>
-            <span class="flex items-center gap-1" id="time-remaining"></span>
+        <div class="flex items-center justify-between">
+            <div class="flex-1">
+                <h1 class="text-3xl font-bold" id="fermentation-name">Carregando...</h1>
+                <div class="flex items-center gap-4 text-sm text-gray-600 mt-2">
+                    <span id="stage-info">Etapa 0 de 0</span>
+                    <span class="flex items-center gap-1" id="time-remaining"></span>
+                </div>
+            </div>
+            <!-- Badge de status do ESP -->
+            <div id="esp-status-badge" class="hidden">
+                <span class="inline-flex items-center gap-2 px-3 py-1 bg-green-100 text-green-800 text-xs font-medium rounded-full">
+                    <span class="inline-block w-2 h-2 bg-green-600 rounded-full"></span>
+                    ESP Online
+                </span>
+            </div>
         </div>
     </div>
 
     <!-- Cards -->
-    <div id="info-cards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6"></div>
+    <div id="info-cards" class="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4 mb-6"></div>
 
     <!-- Gráfico -->
     <div class="card mb-6">
@@ -167,27 +236,6 @@
 
 <!-- App -->
 <script type="module" src="app.js"></script>
-
-<!-- Script para atualizar botão Brewfather -->
-<script>
-    // Esta função será chamada pelo app.js quando o estado mudar
-    window.updateBrewfatherButton = function(isActive) {
-        const btn = document.getElementById('brewfather-btn');
-        const status = document.getElementById('brewfather-status');
-        
-        if (btn && status) {
-            if (isActive) {
-                btn.classList.remove('inactive');
-                btn.classList.add('btn-brewfather');
-                status.textContent = 'Brewfather (Ativo)';
-            } else {
-                btn.classList.add('inactive');
-                btn.classList.remove('btn-brewfather');
-                status.textContent = 'Brewfather (Inativo)';
-            }
-        }
-    };
-</script>
 
 </body>
 </html>

@@ -8,7 +8,7 @@
 #include "ESP8266WiFi.h"
 
 // ========== CONFIGURAÇÕES ==========
-#define API_BASE_URL "http://fermentador.mvrinaldi.com.br/api/esp/"
+#define SERVER_URL "http://fermentador.mvrinaldi.com.br/"
 #define HTTP_TIMEOUT 5000 // 5 segundos
 #define MAX_RETRIES 3
 
@@ -25,21 +25,32 @@ public:
     FermentadorHTTPClient();
     ~FermentadorHTTPClient();
     
-    // Métodos principais
+    // ==================== FERMENTAÇÃO ====================
     bool getActiveFermentation(JsonDocument& doc);
     bool getConfiguration(const char* configId, JsonDocument& doc);
-    bool sendReading(const char* configId, float tempFridge, float tempFermenter, 
-                    float tempTarget, float gravity);
-    bool updateControlState(const char* configId, float setpoint, bool cooling, bool heating);
-    bool sendSensors(const String& sensorsJson);
-    bool notifyTargetReached(const char* configId);
     bool updateFermentationState(const char* configId, const String& stateJson);
+    bool notifyTargetReached(const char* configId);
+    
+    // ==================== LEITURAS ====================
+    bool sendReading(const char* configId, float tempFridge, 
+                    float tempFermenter, float tempTarget, float gravity);
+    
+    // ==================== CONTROLE ====================
+    bool updateControlState(const char* configId, float setpoint, 
+                          bool cooling, bool heating);
+    
+    // ==================== SENSORES ====================
+    bool sendSensors(const String& sensorsJson);
+    bool getAssignedSensors(String& fermenterAddr, String& fridgeAddr);
+    bool updateCurrentTemperatures(float tempFermenter, float tempFridge);
+    
+    // ==================== ISPINDEL ====================
     bool sendSpindelData(const String& spindelJson);
     
-    // Helpers
+    // ==================== UTILIDADES ====================
     bool isConnected();
     void printError(const char* context);
 };
 
-// DECLARAÇÃO EXTERNA (não definição)
+// Instância global (declarada em http_client.cpp)
 extern FermentadorHTTPClient httpClient;

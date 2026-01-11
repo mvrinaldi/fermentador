@@ -1,12 +1,18 @@
 <?php
 // api/esp/config.php - Retorna configuração otimizada para ESP8266
-header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Content-Type: application/json');
 
-$host = 'localhost';
-$dbname = 'u865276125_ferment_bd';
-$username = 'u865276125_ferment_user';
-$password = 'SENHA';
+// Responde OPTIONS (preflight)
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+// Conexão banco de dados
+require_once $_SERVER['DOCUMENT_ROOT'] . '/config/database.php';
 
 $configId = $_GET['id'] ?? null;
 
@@ -16,8 +22,13 @@ if (!$configId) {
     exit;
 }
 
+// Inicializar resposta
+$response = ['success' => false, 'message' => ''];
+
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $username, $password);
+    // Conectar ao banco de dados
+    $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", 
+               DB_USER, DB_PASS);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
     // Busca configuração (inclui status para verificar pause/complete)

@@ -9,6 +9,9 @@
 #include "ispindel_envio.h"
 #include "http_client.h"
 #include "network_manager.h"
+#include "network_manager.h"
+#include "globais.h"
+#include "controle_fermentacao.h"
 
 // Cliente HTTP
 extern FermentadorHTTPClient httpClient;
@@ -33,7 +36,7 @@ void processCloudUpdatesiSpindel() {
     bool sucesso = false;
 
     // ==================================================
-    // ENVIO 1: BREWFATHER (mantido - serviço externo)
+    // ENVIO 1: BREWFATHER (serviço externo)
     // ==================================================
     WiFiClientSecure client;
     client.setInsecure(); 
@@ -78,64 +81,72 @@ void processCloudUpdatesiSpindel() {
         http.end();
     }
 
-    // ==================================================
-    // ENVIO 2: MYSQL (nosso banco de dados)
-    // ==================================================
-    bool mysqlOk = false;
+// ==================================================
+// ENVIO 2: MYSQL (banco de dados)
+// ==================================================
+bool mysqlOk = false;
+
+bool shouldSendToMySQL = isHTTPOnline() && 
+                        fermentacaoState.active && 
+                        isValidString(fermentacaoState.activeId);
+
+if (shouldSendToMySQL) {
+    JsonDocument mysqlDoc;
+    mysqlDoc["name"] = mySpindel.name;
+    mysqlDoc["temperature"] = mySpindel.temperature;
+    mysqlDoc["gravity"] = mySpindel.gravity;
+    mysqlDoc["battery"] = mySpindel.battery;
+    mysqlDoc["angle"] = mySpindel.angle;
+    mysqlDoc["config_id"] = fermentacaoState.activeId;
     
-    if (isHTTPOnline()) {
-        JsonDocument mysqlDoc;
-        mysqlDoc["name"] = mySpindel.name;
-        mysqlDoc["temperature"] = mySpindel.temperature;
-        mysqlDoc["gravity"] = mySpindel.gravity;
-        mysqlDoc["battery"] = mySpindel.battery;
-        mysqlDoc["angle"] = mySpindel.angle;
+    String mysqlPayload;
+    serializeJson(mysqlDoc, mysqlPayload);
+    
+    HTTPClient httpMySQL;
+    WiFiClient wifiClient;
+    
+    String mysqlUrl = String(SERVER_URL) + "ispindel/data";
+    
+    if (httpMySQL.begin(wifiClient, mysqlUrl)) {
+        httpMySQL.setTimeout(HTTP_TIMEOUT);
+        httpMySQL.addHeader("Content-Type", "application/json");
         
-        String mysqlPayload;
-        serializeJson(mysqlDoc, mysqlPayload);
+        int code = httpMySQL.POST(mysqlPayload);
         
-        // Envia para endpoint MySQL
-        String response;
-        HTTPClient httpMySQL;
-        WiFiClient wifiClient;
-        
-        String mysqlUrl = String(API_BASE_URL) + "ispindel.php";
-        
-        if (httpMySQL.begin(wifiClient, mysqlUrl)) {
-            httpMySQL.setTimeout(HTTP_TIMEOUT);
-            httpMySQL.addHeader("Content-Type", "application/json");
-            
-            int code = httpMySQL.POST(mysqlPayload);
-            
-            if (code == HTTP_CODE_OK || code == HTTP_CODE_CREATED) {
-                mysqlOk = true;
-                Serial.println(F("[MySQL] ✅ Dados iSpindel enviados"));
-            } else {
-                Serial.printf("[MySQL] ❌ Erro %d\n", code);
-            }
-            
-            httpMySQL.end();
+        if (code == HTTP_CODE_OK || code == HTTP_CODE_CREATED) {
+            mysqlOk = true;
+            Serial.println(F("[MySQL] ✅ Dados iSpindel enviados (vinculados ao config_id)"));
+        } else {
+            Serial.printf("[MySQL] ❌ Erro %d\n", code);
         }
-    } else {
-        Serial.println(F("[MySQL] ⚠️  Offline - dados não enviados"));
+        
+        httpMySQL.end();
     }
+} else if (!fermentacaoState.active && isHTTPOnline()) {
+    // Opcional: log para indicar por que não está enviando
+    static unsigned long lastLog = 0;
+    if (millis() - lastLog > 600000) { // A cada 10 minutos
+        Serial.println(F("[MySQL] ⏸️  Sem fermentação ativa - dados não enviados"));
+        lastLog = millis();
+    }
+} else if (!isHTTPOnline()) {
+    // Já tratado no Brewfather/outros logs
+}
 
-    // Considera sucesso se PELO MENOS UM dos envios funcionou
-    sucesso = brewfatherOk || mysqlOk;
+sucesso = brewfatherOk || mysqlOk;
 
-    // Lógica de controle de tentativas
-    if (sucesso) {
-        mySpindel.newDataAvailable = false;
+if (sucesso) {
+    mySpindel.newDataAvailable = false;
+    tentativasAtuais = 0;
+    Serial.println(F("[iSpindel] ✅ Envio concluído"));
+} else {
+    tentativasAtuais++;
+    últimaTentativaMillis = millis();
+
+    if (tentativasAtuais >= MAX_TENTATIVAS) {
+        Serial.println(F("[iSpindel] ❌ Máximo de tentativas atingido"));
+        mySpindel.newDataAvailable = false; 
         tentativasAtuais = 0;
-        Serial.println(F("[iSpindel] ✅ Envio concluído"));
-    } else {
-        tentativasAtuais++;
-        últimaTentativaMillis = millis();
-
-        if (tentativasAtuais >= MAX_TENTATIVAS) {
-            Serial.println(F("[iSpindel] ❌ Máximo de tentativas atingido"));
-            mySpindel.newDataAvailable = false; 
-            tentativasAtuais = 0;
-        }
     }
+}
 }

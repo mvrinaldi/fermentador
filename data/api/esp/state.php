@@ -1,5 +1,5 @@
 <?php
-// api/esp/sensors.php - Recebe lista de sensores detectados
+// api/esp/state.php - Atualiza estado da fermentação
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
@@ -14,11 +14,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 // Conexão banco de dados
 require_once $_SERVER['DOCUMENT_ROOT'] . '/config/database.php';
 
+$config_id = $_GET['config_id'] ?? null;
 $input = json_decode(file_get_contents('php://input'), true);
 
-if (!isset($input['sensors']) || !is_array($input['sensors'])) {
+if (!$config_id) {
     http_response_code(400);
-    echo json_encode(['error' => 'Invalid sensors data']);
+    echo json_encode(['error' => 'config_id is required']);
     exit;
 }
 
@@ -31,22 +32,21 @@ try {
                DB_USER, DB_PASS);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
-    // Salva ou atualiza dispositivo
+    // Salva estado
     $stmt = $pdo->prepare("
-        INSERT INTO devices (device_id, device_type, last_seen, is_online)
-        VALUES ('esp8266_main', 'controller', NOW(), TRUE)
-        ON DUPLICATE KEY UPDATE 
-            last_seen = NOW(),
-            is_online = TRUE
+        INSERT INTO fermentation_states (config_id, state_data)
+        VALUES (?, ?)
     ");
-    $stmt->execute();
     
-    echo json_encode([
-        'success' => true,
-        'sensors_received' => count($input['sensors'])
+    $stmt->execute([
+        $config_id,
+        json_encode($input)
     ]);
     
+    echo json_encode(['success' => true]);
+    
 } catch (PDOException $e) {
+    error_log("State error: " . $e->getMessage());
     http_response_code(500);
     echo json_encode(['error' => 'Database error']);
 }
