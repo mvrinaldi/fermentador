@@ -25,12 +25,11 @@ static unsigned long lastPIDTime = 0;
 // ========================================
 // TEMPOS DE CICLO DOS RELÉS
 // ========================================
-// ✅ CORREÇÃO: Inicializar com valores que permitam primeira execução
 static unsigned long lastCoolerOff = 0;
 static unsigned long lastHeaterOff = 0;
 static unsigned long lastCoolerOn = 0;
 static unsigned long lastHeaterOn = 0;
-static bool firstRun = true;  // ← Flag para primeira execução
+static bool firstRun = true;
 
 // ========================================
 // FUNÇÃO PRINCIPAL DE CONTROLE
@@ -51,27 +50,17 @@ void controle_temperatura() {
         return;
     }
 
-    // ✅ CORREÇÃO: Na primeira execução com fermentação ativa,
-    // inicializa os tempos para permitir acionamento imediato se necessário
+    // ✅ Inicialização para primeira execução
     if (firstRun) {
         firstRun = false;
         
-        // Inicializa com um valor que garante que a subtração (now - last) 
-        // resulte em algo maior que os delays.
-        lastCoolerOff = now - MIN_COOLER_CYCLE - 1000; 
-        lastHeaterOff = now - MIN_DELAY_BETWEEN_RELAYS - 1000;
-
-        // Calcula o maior dos tempos para garantir que TODAS as condições passem
-        unsigned long maxDelay = max(MIN_COOLER_CYCLE, MIN_DELAY_BETWEEN_RELAYS);
-        maxDelay = max(maxDelay, MIN_HEATER_CYCLE);
-        
-        lastCoolerOff = now - maxDelay - 1000;  // Permite ligar imediatamente
-        lastHeaterOff = now - maxDelay - 1000;  // Permite ligar imediatamente
-        lastCoolerOn = now - MIN_COOLER_ON - 1000;
-        lastHeaterOn = now - MIN_HEATER_ON - 1000;
+        // Inicializa com 0 para permitir acionamento imediato na primeira execução
+        lastCoolerOff = 0;
+        lastHeaterOff = 0;
+        lastCoolerOn = 0;
+        lastHeaterOn = 0;
         
         Serial.println(F("[PID] ✅ Sistema de controle inicializado"));
-        Serial.printf("[PID] ℹ️  Todos os delays zerados (max: %lu ms)\n", maxDelay);
     }
 
     // ========================================
@@ -115,54 +104,53 @@ void controle_temperatura() {
     pidOutput = constrain((KP * error) + (KI * integral) + (KD * dTerm), -100, 100);
 
 // ========================================
-// LÓGICA DE ACIONAMENTO DOS RELÉS
+// LÓGICA DE ACIONAMENTO DOS RELÉS - MÉTODO DA SUBTRAÇÃO
 // ========================================
 
 // RESFRIAMENTO: PID negativo significa temp acima do setpoint
 if (pidOutput < -2.0) {
-    // Se o heater estava ligado, agora ele desliga e registramos o tempo
-    if (heater.estado == true) {
+    // Desliga heater se estiver ligado
+    if (heater.estado) {
         heater.estado = false;
-        lastHeaterOff = now; // Agora o delay de 60s começará a contar
+        heater.atualizar();
+        lastHeaterOff = now;
         Serial.println(F("[PID] 🔥 Heater desligado para iniciar resfriamento"));
     }
     
-// Verificações de segurança usando a técnica de subtração (protege contra overflow/underflow)
-bool coolerCycleOk = (now - lastCoolerOff >= MIN_COOLER_CYCLE);
-bool heaterDelayOk = (now - lastHeaterOff >= MIN_DELAY_BETWEEN_RELAYS);
+    // Verificações usando subtração (protege contra overflow)
+    // Se lastCoolerOff == 0, significa primeira execução, permite ligar
+    bool coolerCycleOk = (lastCoolerOff == 0) || (now - lastCoolerOff >= MIN_COOLER_CYCLE);
+    bool heaterDelayOk = (lastHeaterOff == 0) || (now - lastHeaterOff >= MIN_DELAY_BETWEEN_RELAYS);
     
-    Serial.println(F("\n[PID DEBUG] ==================================="));
+    // DEBUG
+    Serial.println(F("\n[PID DEBUG - RESFRIAMENTO] ======================"));
     Serial.printf("now = %lu\n", now);
-    Serial.printf("lastCoolerOff = %lu\n", lastCoolerOff);
-    Serial.printf("lastHeaterOff = %lu\n", lastHeaterOff);
-    Serial.printf("MIN_COOLER_CYCLE = %lu\n", MIN_COOLER_CYCLE);
-    Serial.printf("MIN_DELAY_BETWEEN_RELAYS = %lu\n", MIN_DELAY_BETWEEN_RELAYS);
-    Serial.printf("lastCoolerOff + MIN_COOLER_CYCLE = %lu\n", lastCoolerOff + MIN_COOLER_CYCLE);
-    Serial.printf("lastHeaterOff + MIN_DELAY_BETWEEN_RELAYS = %lu\n", lastHeaterOff + MIN_DELAY_BETWEEN_RELAYS);
-    Serial.printf("coolerCycleOk = %s (now >= %lu)\n", coolerCycleOk ? "TRUE" : "FALSE", lastCoolerOff + MIN_COOLER_CYCLE);
-    Serial.printf("heaterDelayOk = %s (now >= %lu)\n", heaterDelayOk ? "TRUE" : "FALSE", lastHeaterOff + MIN_DELAY_BETWEEN_RELAYS);
+    Serial.printf("lastCoolerOff = %lu (diff=%lu, MIN_COOLER_CYCLE=%lu)\n", 
+                  lastCoolerOff, now - lastCoolerOff, MIN_COOLER_CYCLE);
+    Serial.printf("lastHeaterOff = %lu (diff=%lu, MIN_DELAY_BETWEEN_RELAYS=%lu)\n", 
+                  lastHeaterOff, now - lastHeaterOff, MIN_DELAY_BETWEEN_RELAYS);
+    Serial.printf("coolerCycleOk = %s\n", coolerCycleOk ? "TRUE" : "FALSE");
+    Serial.printf("heaterDelayOk = %s\n", heaterDelayOk ? "TRUE" : "FALSE");
     Serial.printf("cooler.estado = %d\n", cooler.estado);
-    Serial.printf("Condição final: !cooler.estado=%d && coolerCycleOk=%d && heaterDelayOk=%d\n", 
-                  !cooler.estado, coolerCycleOk, heaterDelayOk);
-    Serial.println(F("=======================================\n"));
+    Serial.println(F("=================================================\n"));
     
     if (!cooler.estado && coolerCycleOk && heaterDelayOk) {
         cooler.estado = true;
         lastCoolerOn = now;
         cooler.atualizar();
         Serial.printf("[PID] ❄️  Cooler LIGADO (erro: %.2f°C, PID: %.2f)\n", error, pidOutput);
-    } else {
+    } else if (!cooler.estado) {
         Serial.println(F("[PID] ⚠️  Cooler NÃO ligou. Razões:"));
         if (cooler.estado) {
             Serial.println(F("  - Cooler já está ligado"));
         }
         if (!coolerCycleOk) {
-            Serial.printf("  - Cooler cycle: aguardando %lu ms\n", 
-                         (lastCoolerOff + MIN_COOLER_CYCLE) - now);
+            Serial.printf("  - Cooler cycle: precisa esperar %lu ms mais\n", 
+                         MIN_COOLER_CYCLE - (now - lastCoolerOff));
         }
         if (!heaterDelayOk) {
-            Serial.printf("  - Heater delay: aguardando %lu ms\n", 
-                         (lastHeaterOff + MIN_DELAY_BETWEEN_RELAYS) - now);
+            Serial.printf("  - Heater delay: precisa esperar %lu ms mais\n", 
+                         MIN_DELAY_BETWEEN_RELAYS - (now - lastHeaterOff));
         }
     }
 } 
@@ -171,54 +159,69 @@ else if (pidOutput > 2.0) {
     // Desliga cooler se estiver ligado
     if (cooler.estado) {
         cooler.estado = false;
-        lastCoolerOff = now; // SÓ atualiza quando realmente desliga
+        cooler.atualizar();
+        lastCoolerOff = now;
+        Serial.println(F("[PID] ❄️  Cooler desligado para iniciar aquecimento"));
     }
     
-    // Comparação segura
-    bool heaterCycleOk = (firstRun || (now >= lastHeaterOff + MIN_HEATER_CYCLE));
-    bool coolerDelayOk = (firstRun || (now >= lastCoolerOff + MIN_DELAY_BETWEEN_RELAYS));
+    // Verificações usando subtração (protege contra overflow)
+    // Se lastHeaterOff == 0, significa primeira execução, permite ligar
+    bool heaterCycleOk = (lastHeaterOff == 0) || (now - lastHeaterOff >= MIN_HEATER_CYCLE);
+    bool coolerDelayOk = (lastCoolerOff == 0) || (now - lastCoolerOff >= MIN_DELAY_BETWEEN_RELAYS);
+    
+    // DEBUG
+    Serial.println(F("\n[PID DEBUG - AQUECIMENTO] ======================="));
+    Serial.printf("now = %lu\n", now);
+    Serial.printf("lastHeaterOff = %lu (diff=%lu, MIN_HEATER_CYCLE=%lu)\n", 
+                  lastHeaterOff, now - lastHeaterOff, MIN_HEATER_CYCLE);
+    Serial.printf("lastCoolerOff = %lu (diff=%lu, MIN_DELAY_BETWEEN_RELAYS=%lu)\n", 
+                  lastCoolerOff, now - lastCoolerOff, MIN_DELAY_BETWEEN_RELAYS);
+    Serial.printf("heaterCycleOk = %s\n", heaterCycleOk ? "TRUE" : "FALSE");
+    Serial.printf("coolerDelayOk = %s\n", coolerDelayOk ? "TRUE" : "FALSE");
+    Serial.printf("heater.estado = %d\n", heater.estado);
+    Serial.println(F("=================================================\n"));
     
     if (!heater.estado && heaterCycleOk && coolerDelayOk) {
         heater.estado = true;
         lastHeaterOn = now;
+        heater.atualizar();
         Serial.printf("[PID] 🔥 Heater LIGADO (erro: %.2f°C, PID: %.2f)\n", error, pidOutput);
     } else if (!heater.estado) {
+        Serial.println(F("[PID] ⚠️  Heater NÃO ligou. Razões:"));
         if (!heaterCycleOk) {
-            Serial.printf("[PID] ⏳ Heater: aguardando %lu ms\n", 
-                         (lastHeaterOff + MIN_HEATER_CYCLE) - now);
+            Serial.printf("  - Heater cycle: precisa esperar %lu ms mais\n", 
+                         MIN_HEATER_CYCLE - (now - lastHeaterOff));
         }
         if (!coolerDelayOk) {
-            Serial.printf("[PID] ⏳ Cooler delay: aguardando %lu ms\n", 
-                         (lastCoolerOff + MIN_DELAY_BETWEEN_RELAYS) - now);
+            Serial.printf("  - Cooler delay: precisa esperar %lu ms mais\n", 
+                         MIN_DELAY_BETWEEN_RELAYS - (now - lastCoolerOff));
         }
     }
 }
 // ZONA NEUTRA
 else {
-    if (cooler.estado && (now >= lastCoolerOn + MIN_COOLER_ON)) {
+    // Desliga cooler após tempo mínimo ligado
+    if (cooler.estado && (now - lastCoolerOn >= MIN_COOLER_ON)) {
         cooler.estado = false;
+        cooler.atualizar();
         lastCoolerOff = now;
         Serial.println(F("[PID] ❄️  Cooler DESLIGADO (temperatura OK)"));
     }
     
-    if (heater.estado && (now >= lastHeaterOn + MIN_HEATER_ON)) {
+    // Desliga heater após tempo mínimo ligado
+    if (heater.estado && (now - lastHeaterOn >= MIN_HEATER_ON)) {
         heater.estado = false;
+        heater.atualizar();
         lastHeaterOff = now;
         Serial.println(F("[PID] 🔥 Heater DESLIGADO (temperatura OK)"));
     }
 }
 
     // ========================================
-    // ATUALIZA HARDWARE DOS RELÉS
-    // ========================================
-    cooler.atualizar();
-    heater.atualizar();
-
-    // ========================================
-    // LOG SERIAL (debug)
+    // LOG SERIAL (debug resumido)
     // ========================================
     static unsigned long lastLog = 0;
-    if (now - lastLog >= 30000) { // Log a cada 30 segundos
+    if (now - lastLog >= 30000) {
         lastLog = now;
         
         Serial.println(F("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
@@ -242,7 +245,7 @@ else {
 }
 
 // ========================================
-// FUNÇÃO PARA RESETAR ESTADO (chamar quando desativar fermentação)
+// FUNÇÃO PARA RESETAR ESTADO
 // ========================================
 void resetPIDState() {
     integral = 0;
@@ -255,6 +258,12 @@ void resetPIDState() {
     heater.estado = false;
     cooler.atualizar();
     heater.atualizar();
+    
+    // Reset dos tempos
+    lastCoolerOff = 0;
+    lastHeaterOff = 0;
+    lastCoolerOn = 0;
+    lastHeaterOn = 0;
     
     Serial.println(F("[PID] 🔄 Estado do PID resetado"));
 }

@@ -76,35 +76,6 @@
         .btn-brewfather.inactive {
             background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
         }
-        
-        /* Alerta ESP Offline */
-        #esp-status-alert {
-            animation: slideDown 0.3s ease-out;
-        }
-        
-        @keyframes slideDown {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .pulse-dot {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-        
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 1;
-            }
-            50% {
-                opacity: 0.5;
-            }
-        }
     </style>
 </head>
 
@@ -147,54 +118,52 @@
 <!-- ===== APP ===== -->
 <div class="container max-w-6xl mx-auto p-4">
 
-    <!-- NOVO: Alerta de ESP Offline -->
-    <div id="esp-status-alert" class="hidden mb-4">
-        <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg shadow-sm">
-            <div class="flex items-start">
-                <div class="flex-shrink-0">
-                    <i class="fas fa-exclamation-triangle text-yellow-400 text-xl"></i>
-                </div>
-                <div class="ml-3 flex-1">
-                    <h3 class="text-sm font-medium text-yellow-800">
-                        ESP8266 Desconectado
-                    </h3>
-                    <div class="mt-2 text-sm text-yellow-700">
-                        <p>
-                            O controlador não envia dados há <strong id="esp-offline-time">--</strong>.
-                            Os dados exibidos podem estar desatualizados.
-                        </p>
-                        <p class="mt-1 text-xs">
-                            <i class="fas fa-info-circle"></i> 
-                            Última atualização: <span id="esp-last-update">--</span>
-                        </p>
-                    </div>
-                </div>
-                <div class="ml-4">
-                    <span class="inline-flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-medium rounded-full">
-                        <span class="pulse-dot inline-block w-2 h-2 bg-yellow-600 rounded-full"></span>
-                        Offline
-                    </span>
-                </div>
-            </div>
+    <!-- Cabeçalho -->
+    <div class="card mb-4">
+        <h1 class="text-3xl font-bold" id="fermentation-name">Carregando...</h1>
+        <div class="flex items-center gap-4 text-sm text-gray-600 mt-2">
+            <span id="stage-info">Etapa 0 de 0</span>
+            <span class="flex items-center gap-1" id="time-remaining"></span>
         </div>
     </div>
 
-    <!-- Cabeçalho -->
-    <div class="card mb-4">
-        <div class="flex items-center justify-between">
-            <div class="flex-1">
-                <h1 class="text-3xl font-bold" id="fermentation-name">Carregando...</h1>
-                <div class="flex items-center gap-4 text-sm text-gray-600 mt-2">
-                    <span id="stage-info">Etapa 0 de 0</span>
-                    <span class="flex items-center gap-1" id="time-remaining"></span>
+    <!-- ===== STATUS DO ESP ===== -->
+    <div class="mb-4">
+        <!-- Badge Online -->
+        <div id="esp-status-badge" class="hidden">
+            <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded-lg">
+                <div class="flex items-center justify-between flex-wrap gap-3">
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-wifi"></i>
+                        <span>ESP Online</span>
+                        <span class="text-sm text-green-600">
+                            Última atualização: <span class="esp-last-update-text">--:--</span>
+                        </span>
+                    </div>
+                    <!-- Status dos Relés -->
+                    <div id="relay-status" class="flex items-center gap-3">
+                        <div id="cooler-status" class="flex items-center gap-1 text-sm hidden">
+                            <i class="fas fa-snowflake text-blue-500"></i>
+                            <span class="font-semibold text-blue-700">Cooler ON</span>
+                        </div>
+                        <div id="heater-status" class="flex items-center gap-1 text-sm hidden">
+                            <i class="fas fa-fire text-orange-500"></i>
+                            <span class="font-semibold text-orange-700">Heater ON</span>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <!-- Badge de status do ESP -->
-            <div id="esp-status-badge" class="hidden">
-                <span class="inline-flex items-center gap-2 px-3 py-1 bg-green-100 text-green-800 text-xs font-medium rounded-full">
-                    <span class="inline-block w-2 h-2 bg-green-600 rounded-full"></span>
-                    ESP Online
-                </span>
+        </div>
+    
+        <!-- Alerta Offline -->
+        <div id="esp-status-alert" class="hidden">
+            <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
+                <i class="fas fa-wifi-slash"></i>
+                <div>
+                    <strong>ESP Offline</strong>
+                    <p class="text-sm">Sem comunicação há <span id="esp-offline-time">--</span></p>
+                    <p class="text-xs mt-1">Última comunicação: <span class="esp-last-update-text">--:--</span></p>
+                </div>
             </div>
         </div>
     </div>

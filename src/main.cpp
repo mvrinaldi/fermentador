@@ -118,7 +118,7 @@ void sendHeartbeat() {
         http.addHeader("Content-Type", "application/json");
         
         // Prepara dados do heartbeat
-        StaticJsonDocument<512> doc;
+        JsonDocument doc;
         doc["config_id"] = fermentacaoState.activeId;
         doc["status"] = "online";
         doc["uptime_seconds"] = millis() / 1000;
@@ -268,7 +268,7 @@ void setup() {
 }
 
 void loop() {
-    unsigned long now = millis();  // ← DECLARAÇÃO ÚNICA
+    unsigned long now = millis();
     
     // ⚠️ PRIMEIRO: Verifica comandos seriais
     checkSerialCommands();

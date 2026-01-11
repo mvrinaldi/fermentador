@@ -258,21 +258,43 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             $stmt = $pdo->prepare("UPDATE configurations SET times_used = times_used + 1 WHERE id = ?");
             $stmt->execute([$configId]);
             
-            // 5. OPCIONAL: Limpa leituras antigas (se quiser começar do zero)
-            // Descomente se quiser apagar histórico de fermentações anteriores
-            /*
-            $stmt = $pdo->prepare("DELETE FROM readings WHERE config_id = ?");
-            $stmt->execute([$configId]);
+            // 5. Limpa leituras antigas
             
-            $stmt = $pdo->prepare("DELETE FROM ispindel_readings WHERE config_id = ?");
-            $stmt->execute([$configId]);
+            $daysToKeep10 = 10;
+            $daysToKeep30 = 30;
             
-            $stmt = $pdo->prepare("DELETE FROM controller_states WHERE config_id = ?");
-            $stmt->execute([$configId]);
+            // readings
+            $stmt = $pdo->prepare("
+                DELETE FROM readings 
+                WHERE config_id = ? 
+                  AND reading_timestamp < NOW() - INTERVAL ? DAY
+            ");
+            $stmt->execute([$configId, $daysToKeep10]);
             
-            $stmt = $pdo->prepare("DELETE FROM fermentation_states WHERE config_id = ?");
-            $stmt->execute([$configId]);
-            */
+            // ispindel_readings
+            $stmt = $pdo->prepare("
+                DELETE FROM ispindel_readings 
+                WHERE config_id = ? 
+                  AND reading_timestamp < NOW() - INTERVAL ? DAY
+            ");
+            $stmt->execute([$configId, $daysToKeep10]);
+            
+            // controller_states
+            $stmt = $pdo->prepare("
+                DELETE FROM controller_states 
+                WHERE config_id = ? 
+                  AND state_timestamp < NOW() - INTERVAL ? DAY
+            ");
+            $stmt->execute([$configId, $daysToKeep10]);
+            
+            // fermentation_states
+            $stmt = $pdo->prepare("
+                DELETE FROM fermentation_states 
+                WHERE config_id = ? 
+                  AND state_timestamp < NOW() - INTERVAL ? DAY
+            ");
+            $stmt->execute([$configId, $daysToKeep30]);
+
             
         } elseif ($status === 'paused') {
             $updateData['paused_at'] = date('Y-m-d H:i:s');

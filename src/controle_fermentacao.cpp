@@ -822,7 +822,7 @@ void enviarLeiturasSensores() {
     static unsigned long lastSensorReading = 0;
     unsigned long now = millis();
     
-    if (now - lastSensorReading < 30000) {
+    if (now - lastSensorReading < READINGS_UPDATE_INTERVAL) {
         return;
     }
     

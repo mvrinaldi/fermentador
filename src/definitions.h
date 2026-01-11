@@ -23,6 +23,9 @@
 #define ACTIVE_CHECK_INTERVAL 30000UL         // Verificação HTTP (30s)
 #define WIFI_CHECK_INTERVAL 60000UL           // Verificação WiFi (60s)
 
+// Intervalo de envio para o banco de dados (5 minutos)
+#define READINGS_UPDATE_INTERVAL 300000UL
+
 // === Parâmetros PID === //
 #define PID_KP 20.0f                       // Ganho proporcional
 #define PID_KI 0.5f                        // Ganho integral
