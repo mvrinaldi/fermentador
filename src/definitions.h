@@ -4,8 +4,8 @@
 #include <Arduino.h>
 
 // === Definições de Pinos === //
-#define PINO_COOLER D7    // GPIO13 - Relé do Cooler/Geladeira
-#define PINO_HEATER D5    // GPIO14 - Relé do Aquecedor
+#define PINO_COOLER D5    // GPIO14 - Relé do Aquecedor
+#define PINO_HEATER D7    // GPIO13 - Relé do Cooler/Geladeira
 #define ONE_WIRE_BUS D6   // GPIO12 - Barramento dos sensores DS18B20
 
 // === Nomes dos Sensores === //
