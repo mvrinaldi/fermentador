@@ -14,7 +14,6 @@
 #include "fermentacao_stages.h"
 #include "gerenciador_sensores.h"
 #include "controle_temperatura.h"
-#include "rampa_suave.h"
 
 extern FermentadorHTTPClient httpClient;
 
@@ -406,13 +405,7 @@ void getTargetFermentacao() {
         stageStarted = false;
         fermentacaoState.stageStartEpoch = 0;
         fermentacaoState.targetReachedSent = false;
-        
-        // ✅ IMPORTANTE: Cancela rampa ativa
-        if (isSmoothRampActive()) {
-            cancelSmoothRamp();
-            Serial.println(F("[Rampa] Cancelada por mudança externa de etapa"));
-        }
-        
+                
         resetPIDState();
         saveStateToEEPROM();
     }
@@ -533,16 +526,12 @@ void verificarTrocaDeFase() {
         Serial.println(F("╠════════════════════════════════════╣"));
         Serial.printf("║ stageStarted:     %s               ║\n", 
                      stageStarted ? "TRUE " : "FALSE");
-        Serial.printf("║ Rampa ativa:      %s               ║\n", 
-                     isSmoothRampActive() ? "TRUE " : "FALSE");
         Serial.printf("║ PID atual:        %6.1f°C          ║\n", 
                      fermentacaoState.tempTarget);
         Serial.printf("║ Alvo etapa:       %6.1f°C          ║\n", 
                      fermentacaoState.stages[fermentacaoState.currentStageIndex].targetTemp);
         Serial.println(F("╚════════════════════════════════════╝\n"));
     }
-
-    updateSmoothRamp();
     
     if (fermentacaoState.totalStages == 0) {
         Serial.println(F("[Fase] ⚠️  0 etapas, desativando..."));
@@ -575,72 +564,47 @@ void verificarTrocaDeFase() {
     // ✅ INÍCIO DE NOVA ETAPA
     // =====================================================
     if (!stageStarted) {
-        // Marca como iniciada MAS não define stageStartEpoch ainda
+        // ✅ 1. Marca como iniciada
         stageStarted = true;
         fermentacaoState.targetReachedSent = false;
-        fermentacaoState.stageStartEpoch = 0;
+        fermentacaoState.stageStartEpoch = 0;  // Aguardando temperatura alvo
         
+        // ✅ 2. Reset do PID (IMPORTANTE!)
         resetPIDState();
         Serial.println(F("[PID] ✅ Estado do PID resetado para nova etapa"));
         
+        // ✅ 3. Determina temperatura alvo (IMPORTANTE para STAGE_RAMP!)
         float newTargetTemp;
         if (stage.type == STAGE_RAMP) {
-            newTargetTemp = stage.startTemp;
+            newTargetTemp = stage.startTemp;  // ← Rampa começa da startTemp!
         } else {
             newTargetTemp = stage.targetTemp;
         }
         
-        float currentTemp = state.currentTemp;
-        float tempDiff = fabs(newTargetTemp - currentTemp);
+        // ✅ 4. Define temperatura (SEM criar rampa_suave)
+        updateTargetTemperature(newTargetTemp);
         
-        // ✅ LOG DE DEBUG:
-        Serial.println(F("\n╔════════════════════════════════════════╗"));
-        Serial.println(F("║   DECISÃO: CRIAR RAMPA SUAVE?         ║"));
-        Serial.println(F("╠════════════════════════════════════════╣"));
-        Serial.printf("║ Temp Atual:      %6.2f°C              ║\n", currentTemp);
-        Serial.printf("║ Temp Alvo:       %6.2f°C              ║\n", newTargetTemp);
-        Serial.printf("║ Diferença:       %6.2f°C              ║\n", tempDiff);
-        Serial.printf("║ RAMP_THRESHOLD:  %6.2f°C              ║\n", RAMP_THRESHOLD);
-        Serial.printf("║ Condição 1:      %s (diff > RAMP_THRESHOLD) ║\n", 
-                    (tempDiff > RAMP_THRESHOLD) ? "TRUE " : "FALSE");
-        Serial.printf("║ Condição 2:      %s (diff > 0.1)            ║\n", 
-                    (tempDiff > 0.1f) ? "TRUE " : "FALSE");
-                    
-        if (tempDiff > RAMP_THRESHOLD && tempDiff > 0.1f) {
-            Serial.println(F("║ DECISÃO:         ✅ CRIAR RAMPA SUAVE    ║"));
-            Serial.println(F("╚════════════════════════════════════════╝\n"));
-            
-            Serial.printf("[Fase] 🔄 Mudança grande na INICIALIZAÇÃO: %.1f°C -> %.1f°C (Δ=%.1f°C)\n",
-                         currentTemp, newTargetTemp, tempDiff);
-            setupSmoothRamp(currentTemp, newTargetTemp);
-        } else {
-            Serial.println(F("║ DECISÃO:         ❌ SEM RAMPA            ║"));
-            Serial.println(F("╚════════════════════════════════════════╝\n"));
-            
-            updateTargetTemperature(newTargetTemp);
-            Serial.printf("[Fase] 🌡️  Temperatura alvo definida: %.1f°C\n", newTargetTemp);
-        }
-        
-        fermentacaoState.stageStartEpoch = 0; // Zero indica "aguardando temperatura alvo"
-        
+        // ✅ 5. Salva no EEPROM
         saveStateToEEPROM();
         
-        Serial.printf("[Fase] ▶️  Etapa %d/%d iniciada (tipo: ", 
-                     fermentacaoState.currentStageIndex + 1,
-                     fermentacaoState.totalStages);
-                     
+        // ✅ 6. Log informativo
+        Serial.printf("[Fase] ▶️  Etapa %d/%d iniciada - Alvo: %.1f°C (tipo: ", 
+                    fermentacaoState.currentStageIndex + 1,
+                    fermentacaoState.totalStages,
+                    newTargetTemp);
+                    
         switch (stage.type) {
             case STAGE_TEMPERATURE:
-                Serial.println("TEMPERATURE - aguardando temperatura alvo)");
+                Serial.println("TEMPERATURE)");
                 break;
             case STAGE_RAMP:
-                Serial.println("RAMP - contagem inicia imediatamente)");
+                Serial.println("RAMP)");
                 break;
             case STAGE_GRAVITY:
-                Serial.println("GRAVITY - aguardando temperatura alvo)");
+                Serial.println("GRAVITY)");
                 break;
             case STAGE_GRAVITY_TIME:
-                Serial.println("GRAVITY_TIME - aguardando temperatura alvo)");
+                Serial.println("GRAVITY_TIME)");
                 break;
         }
     }
@@ -654,7 +618,6 @@ void verificarTrocaDeFase() {
                             stage.type == STAGE_GRAVITY_TIME);
 
     if (needsTemperature) {
-        // ✅ CORREÇÃO 1: Comparar com temperatura FINAL da etapa
         float stageTargetTemp = stage.targetTemp;
         float diff = abs(state.currentTemp - stageTargetTemp);
         targetReached = (diff <= TEMPERATURE_TOLERANCE);
@@ -745,7 +708,7 @@ void verificarTrocaDeFase() {
     // =====================================================
     // CONTROLE DE RAMPA
     // =====================================================
-    if (stage.type == STAGE_RAMP && !isSmoothRampActive()) {
+    if (stage.type == STAGE_RAMP) {
         // Para rampas, progresso é baseado no tempo desde stageStartEpoch
         float progress = elapsedH / stage.rampTimeHours;
         if (progress < 0) progress = 0;
@@ -812,18 +775,10 @@ void verificarTrocaDeFase() {
     // =====================================================
     if (stageCompleted) {
         Serial.printf("[Fase] ✅ Etapa %d/%d concluída após %.1fh\n", 
-                     fermentacaoState.currentStageIndex + 1,
-                     fermentacaoState.totalStages,
-                     elapsedH);
-        
-        float currentTemp = state.currentTemp;
-        
-    // Cancela rampa antes de transição
-    if (isSmoothRampActive()) {
-        cancelSmoothRamp();
-        Serial.println(F("[Rampa] Cancelada por conclusão de etapa"));
-    }
-
+                    fermentacaoState.currentStageIndex + 1,
+                    fermentacaoState.totalStages,
+                    elapsedH);
+      
         fermentacaoState.currentStageIndex++;
         stageStarted = false;
         fermentacaoState.stageStartEpoch = 0;
@@ -831,25 +786,7 @@ void verificarTrocaDeFase() {
 
         if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
             FermentationStage& next = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-            
-            float nextTargetTemp;
-            if (next.type == STAGE_RAMP) {
-                nextTargetTemp = next.startTemp;
-            } else {
-                nextTargetTemp = next.targetTemp;
-            }
-            
-            float tempDiff = fabs(nextTargetTemp - currentTemp);
-            
-            if (tempDiff > RAMP_THRESHOLD && tempDiff > 0.1f) {
-                Serial.printf("[Fase] 🔄 Mudança grande na TRANSIÇÃO: %.1f°C -> %.1f°C (Δ=%.1f°C)\n",
-                             currentTemp, nextTargetTemp, tempDiff);
-                setupSmoothRamp(currentTemp, nextTargetTemp);
-            } else {
-                updateTargetTemperature(nextTargetTemp);
-                Serial.printf("[Fase] 🌡️  Nova temperatura alvo: %.1f°C\n", nextTargetTemp);
-            }
-            
+                                                
             saveStateToEEPROM();
             
             Serial.printf("[Fase] ↪️  Indo para etapa %d/%d\n", 

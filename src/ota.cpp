@@ -1,4 +1,4 @@
-// ota.cpp - Sistema OTA Corrigido para ESP8266
+// ota.cpp - Sistema OTA para ESP8266
 
 #include "ota.h"
 #include "ElegantOTA.h"
@@ -6,67 +6,43 @@
 static bool otaInitialized = false;
 static unsigned long ota_progress_millis = 0;
 
+bool otaInProgress = false;
+
 void setupOTA(ESP8266WebServer &server) {
     if (otaInitialized) {
-        Serial.println("⚠️ OTA já inicializado");
         return;
     }
 
-    // ✅ ElegantOTA deve ser inicializado SEMPRE
-    // Não depende de fermentação ativa ou qualquer outra condição
+    // ✅ Inicializa ElegantOTA
     ElegantOTA.begin(&server);
     
     // Callback: Início do upload
     ElegantOTA.onStart([]() {
-        Serial.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        Serial.println("🟡 OTA INICIADO");
-        Serial.println("⚠️  ATENÇÃO: NÃO DESLIGUE O DISPOSITIVO!");
-        Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        otaInProgress = true;
     });
 
-    // Callback: Progresso do upload
+    // Callback: Progresso do upload (opcional - apenas para monitoramento)
     ElegantOTA.onProgress([](size_t current, size_t final) {
         // Atualiza a cada 1 segundo
         if (millis() - ota_progress_millis > 1000) {
             ota_progress_millis = millis();
-            unsigned int progress = (current * 100) / final;
-            
-            Serial.printf("📊 OTA Progress: %u%% (%u/%u bytes)\r", 
-                         progress, current, final);
+            // Feedback opcional no Serial (descomente se quiser ver progresso)
+            // Serial.printf("[OTA] Progresso: %u%%\r", (unsigned int)((current * 100) / final));
         }
     });
 
     // Callback: Finalização
     ElegantOTA.onEnd([](bool success) {
-        Serial.println();  // Nova linha após o progresso
-        Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        otaInProgress = false;
         
         if (success) {
-            Serial.println("🟢 OTA FINALIZADO COM SUCESSO!");
-            Serial.println("✅ Firmware atualizado");
-            Serial.println("🔄 Reiniciando em 3 segundos...");
-            Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            
-            delay(3000);
+            // Delay para garantir resposta HTTP
+            delay(1000);
             ESP.restart();
-        } else {
-            Serial.println("🔴 OTA FALHOU!");
-            Serial.println("❌ Verifique:");
-            Serial.println("   • Arquivo .bin está correto?");
-            Serial.println("   • Conexão WiFi estável?");
-            Serial.println("   • Firmware compatível com ESP8266?");
-            Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         }
     });
 
     otaInitialized = true;
-    
-    Serial.println("✅ OTA inicializado e pronto");
-    Serial.println("📡 Para atualizar firmware:");
-    Serial.println("   1. Acesse: http://<IP_DO_ESP>/update");
-    Serial.println("   2. Selecione o arquivo .bin");
-    Serial.println("   3. Clique em 'Update'");
-    Serial.println("   4. Aguarde 100% e reinício automático");
 }
 
 void handleOTA() {
@@ -77,4 +53,8 @@ void handleOTA() {
 
 bool isOTAInitialized() {
     return otaInitialized;
+}
+
+bool isOTAInProgress() {
+    return otaInProgress;
 }

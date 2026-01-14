@@ -420,7 +420,7 @@ if ($path === 'active/deactivate' && $method === 'POST') {
     sendResponse(['success' => true]);
 }
 
-// ==================== NOVO: ESTADO COMPLETO (ESP → FRONTEND) ====================
+// ==================== ESTADO COMPLETO (ESP → FRONTEND) - ATUALIZADO ====================
 
 if ($path === 'state/complete' && $method === 'GET') {
     requireAuth();
@@ -479,7 +479,17 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $ispindel = $stmt->fetch();
     
-    // Busca estado do controlador
+    // ✅ NOVO: Busca HISTÓRICO de estados do controlador (últimas 24h)
+    $stmt = $pdo->prepare("
+        SELECT * FROM controller_states 
+        WHERE config_id = ?
+        AND state_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+        ORDER BY state_timestamp ASC
+    ");
+    $stmt->execute([$configId]);
+    $controllerHistory = $stmt->fetchAll();
+    
+    // Busca estado ATUAL do controlador (para compatibilidade)
     $stmt = $pdo->prepare("
         SELECT * FROM controller_states 
         WHERE config_id = ?
@@ -507,10 +517,11 @@ if ($path === 'state/complete' && $method === 'GET') {
             $now = new DateTime();
             $diff = $now->getTimestamp() - $lastSeen->getTimestamp();
             $isOnline = $diff < 120; // Online se < 2 minutos
-        if (isset($heartbeat['control_status']) && is_string($heartbeat['control_status'])) {
-            $heartbeat['control_status'] = json_decode($heartbeat['control_status'], true);
+            
+            if (isset($heartbeat['control_status']) && is_string($heartbeat['control_status'])) {
+                $heartbeat['control_status'] = json_decode($heartbeat['control_status'], true);
+            }
         }
-    }
     } catch (PDOException $e) {
         error_log("Error fetching heartbeat: " . $e->getMessage());
     }
@@ -521,6 +532,7 @@ if ($path === 'state/complete' && $method === 'GET') {
         'readings' => $readings,
         'ispindel' => $ispindel ?: null,
         'controller' => $controller ?: null,
+        'controller_history' => $controllerHistory ?: [],  // ✅ NOVO!
         'heartbeat' => $heartbeat ?: null,
         'is_online' => $isOnline,
         'timestamp' => date('Y-m-d H:i:s')

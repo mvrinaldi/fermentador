@@ -1,4 +1,4 @@
-// app.js - Monitor Passivo
+// app.js - Monitor Passivo (COM visualização de Cooler/Heater)
 const API_BASE_URL = '/api.php?path=';
 
 // ========== VARIÁVEIS GLOBAIS ==========
@@ -17,6 +17,7 @@ let appState = {
     readings: [],
     ispindel: null,
     controller: null,
+    controllerHistory: [],  // ✅ NOVO: Histórico de estados
     heartbeat: null,
     lastUpdate: null
 };
@@ -80,6 +81,7 @@ async function logout() {
             readings: [],
             ispindel: null,
             controller: null,
+            controllerHistory: [],
             heartbeat: null,
             lastUpdate: null
         };
@@ -403,10 +405,12 @@ async function loadCompleteState() {
         appState.readings = completeState.readings || [];
         appState.ispindel = completeState.ispindel;
         appState.controller = completeState.controller;
+        appState.controllerHistory = completeState.controller_history || [];  // ✅ NOVO!
         appState.lastUpdate = completeState.timestamp;
         appState.heartbeat = completeState.heartbeat;
         
         console.log('✅ Estado completo carregado:', completeState);
+        console.log('📊 Histórico controlador:', appState.controllerHistory.length, 'registros');
         
         checkESPStatus();
         renderUI();
@@ -491,25 +495,18 @@ function renderInfoCards() {
     const currentTemp = parseFloat(lastReading.temp_fermenter) || 0;
     const fridgeTemp = parseFloat(lastReading.temp_fridge) || 0;
     
-    const stageTargetTemp = parseFloat(appState.espState.stageTargetTemp) || 
-                            parseFloat(currentStage.target_temp) || 0;
-    
-    const pidTarget = parseFloat(lastReading.temp_target) ||
-                  parseFloat(appState.espState.pidTargetTemp) || 
-                  parseFloat(appState.espState.currentTargetTemp) || 
-                  stageTargetTemp;
-    
-    const isRamping = Math.abs(pidTarget - stageTargetTemp) > 0.1;
+    const targetTemp = parseFloat(lastReading.temp_target) ||
+                       parseFloat(currentStage.target_temp) || 0;
     
     let tempStatus = '';
     let tempColor = '#9ca3af';
     
-    if (!isNaN(currentTemp) && !isNaN(stageTargetTemp) && currentTemp !== null && stageTargetTemp !== null) {
-        const diff = Math.abs(currentTemp - stageTargetTemp);
+    if (!isNaN(currentTemp) && !isNaN(targetTemp) && currentTemp !== null && targetTemp !== null) {
+        const diff = Math.abs(currentTemp - targetTemp);
         if (diff <= 0.5) {
             tempStatus = '✅ No alvo';
             tempColor = '#10b981';
-        } else if (currentTemp < stageTargetTemp) {
+        } else if (currentTemp < targetTemp) {
             tempStatus = '⬇️ Abaixo do alvo';
             tempColor = '#3b82f6';
         } else {
@@ -567,19 +564,12 @@ function renderInfoCards() {
             color: '#3b82f6'
         })}
         ${cardTemplate({
-            title: 'Temp. Alvo da Etapa',
+            title: 'Temperatura Alvo',
             icon: 'fas fa-crosshairs',
-            value: !isNaN(stageTargetTemp) && stageTargetTemp !== null ? `${stageTargetTemp.toFixed(1)}°C` : '--',
+            value: !isNaN(targetTemp) && targetTemp !== null ? `${targetTemp.toFixed(1)}°C` : '--',
             subtitle: countingStatus,
             color: countingColor
         })}
-        ${isRamping ? cardTemplate({
-            title: '🔄 Alvo do PID (Rampa Ativa)',
-            icon: 'fas fa-chart-line',
-            value: `${pidTarget.toFixed(1)}°C`,
-            subtitle: `Indo para ${stageTargetTemp.toFixed(1)}°C`,
-            color: '#f59e0b'
-        }) : ''}
         ${cardTemplate({
             title: 'Gravidade Atual',
             icon: 'fas fa-tint',
@@ -650,6 +640,7 @@ function renderStagesList() {
         .join('');
 }
 
+// ========== GRÁFICO COM VISUALIZAÇÃO DE COOLER/HEATER ==========
 function renderChart() {
     const canvas = document.getElementById('fermentation-chart');
     const ctx = canvas ? canvas.getContext('2d') : null;
@@ -677,66 +668,154 @@ function renderChart() {
         return `${hour}:${minute} ${day}/${month}`;
     });
 
-    const currentStageIndex = appState.config.current_stage_index || 0;
-    const currentStage = appState.config.stages[currentStageIndex] || {};
-    const stageTargetTemp = parseFloat(currentStage.target_temp) || 0;
+    // ✅ Processa histórico de controller_states
+    const coolerData = [];
+    const heaterData = [];
+    
+    if (appState.controllerHistory && appState.controllerHistory.length > 0) {
+        appState.readings.forEach((reading) => {
+            const readingTime = new Date(reading.reading_timestamp).getTime();
+            
+            // Busca estado do controlador mais próximo (dentro de 5 minutos)
+            const controllerState = appState.controllerHistory.find(cs => {
+                const stateTime = new Date(cs.state_timestamp).getTime();
+                return Math.abs(stateTime - readingTime) < 300000;
+            });
+            
+            if (controllerState) {
+                const coolerActive = controllerState.cooling === 1 || controllerState.cooling === true;
+                const heaterActive = controllerState.heating === 1 || controllerState.heating === true;
+                
+                // Mostra temperatura da geladeira quando relé ativo
+                coolerData.push(coolerActive ? parseFloat(reading.temp_fridge) : null);
+                heaterData.push(heaterActive ? parseFloat(reading.temp_fridge) : null);
+            } else {
+                coolerData.push(null);
+                heaterData.push(null);
+            }
+        });
+    }
+
+    const datasets = [
+        {
+            label: 'Temp. Geladeira',
+            data: appState.readings.map(r => parseFloat(r.temp_fridge)),
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4,
+            fill: false,
+            order: 2
+        },
+        {
+            label: 'Temp. Fermentador',
+            data: appState.readings.map(r => parseFloat(r.temp_fermenter)),
+            borderColor: '#1e40af',
+            backgroundColor: 'rgba(30, 64, 175, 0.1)',
+            tension: 0.4,
+            fill: false,
+            order: 2
+        },
+        {
+            label: 'Temperatura Alvo',
+            data: appState.readings.map(r => parseFloat(r.temp_target)),
+            borderColor: '#ef4444',
+            borderDash: [5, 5],
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            tension: 0.4,
+            fill: false,
+            pointRadius: 0,
+            order: 2
+        },
+        {
+            label: 'Gravidade (x1000)',
+            data: appState.readings.map(r => r.gravity ? parseFloat(r.gravity) * 1000 : null),
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            tension: 0.4,
+            fill: false,
+            yAxisID: 'y1',
+            order: 2
+        }
+    ];
+
+    // ✅ Adiciona datasets de cooler/heater (aparecem como áreas preenchidas)
+    if (coolerData.some(v => v !== null)) {
+        datasets.push({
+            label: '❄️ Cooler Ativo',
+            data: coolerData,
+            backgroundColor: 'rgba(59, 130, 246, 0.25)',
+            borderColor: 'rgba(59, 130, 246, 0.5)',
+            borderWidth: 1,
+            fill: true,
+            pointRadius: 0,
+            tension: 0,
+            order: 1
+        });
+    }
+
+    if (heaterData.some(v => v !== null)) {
+        datasets.push({
+            label: '🔥 Heater Ativo',
+            data: heaterData,
+            backgroundColor: 'rgba(239, 68, 68, 0.25)',
+            borderColor: 'rgba(239, 68, 68, 0.5)',
+            borderWidth: 1,
+            fill: true,
+            pointRadius: 0,
+            tension: 0,
+            order: 1
+        });
+    }
 
     chart = new Chart(ctx, {
         type: 'line',
         data: {
             labels: labels,
-            datasets: [
-                {
-                    label: 'Temp. Geladeira',
-                    data: appState.readings.map(r => parseFloat(r.temp_fridge)),
-                    borderColor: '#3b82f6',
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                    tension: 0.4,
-                    fill: false
-                },
-                {
-                    label: 'Temp. Fermentador',
-                    data: appState.readings.map(r => parseFloat(r.temp_fermenter)),
-                    borderColor: '#1e40af',
-                    backgroundColor: 'rgba(30, 64, 175, 0.1)',
-                    tension: 0.4,
-                    fill: false
-                },
-                {
-                    label: 'Alvo da Etapa',
-                    data: appState.readings.map(() => stageTargetTemp),
-                    borderColor: '#ef4444',
-                    borderDash: [5, 5],
-                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                    tension: 0,
-                    fill: false,
-                    pointRadius: 0
-                },
-                {
-                    label: 'Alvo do PID',
-                    data: appState.readings.map(r => parseFloat(r.temp_target)),
-                    borderColor: '#f59e0b',
-                    borderDash: [2, 2],
-                    borderWidth: 2,
-                    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                    tension: 0.4,
-                    fill: false,
-                    pointRadius: 0
-                },
-                {
-                    label: 'Gravidade (x1000)',
-                    data: appState.readings.map(r => r.gravity ? parseFloat(r.gravity) * 1000 : null),
-                    borderColor: '#10b981',
-                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                    tension: 0.4,
-                    fill: false,
-                    yAxisID: 'y1'
-                }
-            ]
+            datasets: datasets
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 15,
+                        font: {
+                            size: 11
+                        }
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            
+                            if (label.includes('Cooler Ativo') || label.includes('Heater Ativo')) {
+                                return context.parsed.y !== null ? label : null;
+                            }
+                            
+                            if (label) {
+                                label += ': ';
+                            }
+                            if (context.parsed.y !== null) {
+                                if (context.dataset.yAxisID === 'y1') {
+                                    label += (context.parsed.y / 1000).toFixed(3);
+                                } else {
+                                    label += context.parsed.y.toFixed(1) + '°C';
+                                }
+                            }
+                            return label;
+                        }
+                    }
+                }
+            },
             scales: {
                 y: {
                     type: 'linear',

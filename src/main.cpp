@@ -1,5 +1,9 @@
 // main.cpp - Fermentador com MySQL
 
+#define FIRMWARE_VERSION "1.0.2"
+#define BUILD_DATE __DATE__
+#define BUILD_TIME __TIME__
+
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
@@ -168,7 +172,56 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
     
-    Serial.println("\n🚀 Iniciando Fermentador Inteligente - MySQL");
+    // ✅ MOSTRAR INFORMAÇÕES DO FIRMWARE
+    Serial.println("\n\n");
+    Serial.println("╔════════════════════════════════════════════════╗");
+    Serial.println("║                                                ║");
+    Serial.println("║     🚀 FERMENTADOR INTELIGENTE - ESP8266     ║");
+    Serial.println("║                                                ║");
+    Serial.println("╚════════════════════════════════════════════════╝");
+    Serial.println("");
+    Serial.printf("📦 Firmware: v%s\n", FIRMWARE_VERSION);
+    Serial.printf("📅 Compilado: %s às %s\n", BUILD_DATE, BUILD_TIME);
+    Serial.printf("🔐 MD5: %s\n", ESP.getSketchMD5().c_str());
+    Serial.printf("💾 Tamanho: %u bytes\n", ESP.getSketchSize());
+    Serial.printf("🆓 Espaço OTA: %u bytes\n", ESP.getFreeSketchSpace());
+    Serial.println("");
+    
+    // VERIFICAR MOTIVO DO ÚLTIMO RESET
+    rst_info *resetInfo = ESP.getResetInfoPtr();
+    
+    Serial.print("🔄 Último reset: ");
+    switch (resetInfo->reason) {
+        case REASON_DEFAULT_RST:
+            Serial.println("Power-on");
+            break;
+        case REASON_WDT_RST:
+            Serial.println("Watchdog Timer");
+            break;
+        case REASON_EXCEPTION_RST:
+            Serial.println("Exception");
+            break;
+        case REASON_SOFT_WDT_RST:
+            Serial.println("Software Watchdog");
+            break;
+        case REASON_SOFT_RESTART:
+            Serial.println("Software Restart");
+            break;
+        case REASON_DEEP_SLEEP_AWAKE:
+            Serial.println("Deep Sleep Wake");
+            break;
+        case REASON_EXT_SYS_RST:
+            Serial.println("Reinício via Software (ESP.restart())");
+            Serial.println("💡 POSSÍVEL OTA RECÉM-CONCLUÍDO!");
+            break;
+        default:
+            Serial.printf("Desconhecido (%d)\n", resetInfo->reason);
+    }
+    
+    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("");
+
+    // ==================== INICIALIZAÇÃO DO SISTEMA ====================
     
     // EEPROM
     EEPROM.begin(512);
@@ -259,9 +312,147 @@ void setup() {
         }
     }
 
-    // ✅ 7. WEBSERVER / ISPINDEL
+    // ✅ 7. WEBSERVER / ISPINDEL / OTA
     setupSpindelRoutes(server);
+    
+    // ✅ ENDPOINTS WEB (ANTES de setupOTA)
+    
+    // Endpoint: /version - informações do firmware
+    server.on("/version", HTTP_GET, []() {
+        String json = "{";
+        json += "\"version\":\"" + String(FIRMWARE_VERSION) + "\",";
+        json += "\"compiled\":\"" + String(BUILD_DATE) + " " + String(BUILD_TIME) + "\",";
+        json += "\"md5\":\"" + ESP.getSketchMD5() + "\",";
+        json += "\"size\":" + String(ESP.getSketchSize()) + ",";
+        json += "\"free_ota_space\":" + String(ESP.getFreeSketchSpace());
+        json += "}";
+        
+        server.send(200, "application/json", json);
+    });
+    
+    // Endpoint: / - página inicial do ESP
+    server.on("/", HTTP_GET, []() {
+        String html = R"(
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fermentador ESP8266</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .info-box {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .info-label {
+            color: #666;
+        }
+        .info-value {
+            color: #333;
+            font-weight: bold;
+        }
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            background: #667eea;
+            color: white;
+            text-align: center;
+            text-decoration: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        .btn:hover {
+            background: #5568d3;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 10px;
+            background: #10b981;
+            color: white;
+            border-radius: 5px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🍺 Fermentador ESP8266</h1>
+        <p class="subtitle">Sistema de Controle Inteligente</p>
+        
+        <div class="info-box">
+            <div class="info-row">
+                <span class="info-label">Status:</span>
+                <span class="status">✓ ONLINE</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Versão:</span>
+                <span class="info-value">)" + String(FIRMWARE_VERSION) + R"(</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Compilado:</span>
+                <span class="info-value">)" + String(BUILD_DATE) + R"(</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Endereço IP:</span>
+                <span class="info-value">)" + WiFi.localIP().toString() + R"(</span>
+            </div>
+        </div>
+        
+        <a href="/update" class="btn">
+            🔄 Atualizar Firmware (OTA)
+        </a>
+    </div>
+</body>
+</html>
+        )";
+        
+        server.send(200, "text/html", html);
+    });
+    
+    // ✅ AGORA inicializa OTA (já com timeout configurado internamente)
     setupOTA(server);
+    
     server.begin();
     Serial.println("🌐 Servidor Web ativo");
     
@@ -319,6 +510,23 @@ void setup() {
 
 void loop() {
     unsigned long now = millis();
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ✅ PRIORIDADE MÁXIMA: OTA EM PROGRESSO
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Se OTA está ativo, IGNORA TUDO e processa SOMENTE servidor web + OTA
+    // Isso garante que o upload HTTP não sofra timeout e chegue a 100%
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (isOTAInProgress()) {
+        server.handleClient();  // Processa SOMENTE requisições HTTP do OTA
+        handleOTA();            // Processa SOMENTE a lógica do ElegantOTA
+        yield();                // Permite WiFi processar pacotes
+        return;                 // ← RETORNA IMEDIATAMENTE, não executa resto do loop!
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Loop normal (quando OTA NÃO está ativo)
+    // ═══════════════════════════════════════════════════════════════════════════
     
     // ⚠️ PRIMEIRO: Verifica comandos seriais
     checkSerialCommands();
@@ -384,12 +592,12 @@ void loop() {
                 heater.estado
             );
 
-            // NOVO: ENVIA ESTADO COMPLETO A CADA 30s
+            // ENVIA ESTADO COMPLETO A CADA 30s
             enviarEstadoCompleto();
         }
     }
     
-    // ==================== ATUALIZAÇÃO DE TEMPERATURAS RÁPIDA ====================
+    // ==================== ATUALIZAÇÃO DE TEMPERATURAS PARA PÁGINA SENSORES ====================
     if (now - lastTempUpdate >= TEMP_UPDATE_INTERVAL) {
         float tempFermenter, tempFridge;
         
@@ -397,7 +605,7 @@ void loop() {
             if (isHTTPOnline()) {
                 if (!httpClient.updateCurrentTemperatures(tempFermenter, tempFridge)) {
                     static unsigned long lastWarning = 0;
-                    if (now - lastWarning >= 60000) {
+                    if (now - lastWarning >= 300000) {
                         Serial.println(F("⚠️ Erro ao atualizar temperaturas"));
                         lastWarning = now;
                     }
