@@ -396,18 +396,26 @@ void getTargetFermentacao() {
             Serial.println(F("  → MESMO ID do último conhecido"));
             Serial.println(F("  → Fermentação já configurada"));
             
-            if (currentStageIndex != fermentacaoState.currentStageIndex) {
-                Serial.printf("  → Etapa mudou: %d -> %d\n", 
-                            fermentacaoState.currentStageIndex, currentStageIndex);
-                fermentacaoState.currentStageIndex = currentStageIndex;
-                stageStarted = false;
-                fermentacaoState.stageStartEpoch = 0;
-                
-                resetPIDState();
-                Serial.println(F("[PID] ✅ Estado do PID resetado para mudança de etapa externa"));
-                
-                saveStateToEEPROM();
-            }
+    if (currentStageIndex != fermentacaoState.currentStageIndex) {
+        Serial.printf("  → Etapa mudou EXTERNAMENTE: %d -> %d\n", 
+                    fermentacaoState.currentStageIndex, currentStageIndex);
+        
+        // ✅ CORREÇÃO: Só reseta se mudança veio do SERVIDOR
+        // (mudanças internas são processadas em verificarTrocaDeFase)
+        fermentacaoState.currentStageIndex = currentStageIndex;
+        stageStarted = false;
+        fermentacaoState.stageStartEpoch = 0;
+        fermentacaoState.targetReachedSent = false;
+        
+        // ✅ IMPORTANTE: Cancela rampa ativa
+        if (isSmoothRampActive()) {
+            cancelSmoothRamp();
+            Serial.println(F("[Rampa] Cancelada por mudança externa de etapa"));
+        }
+        
+        resetPIDState();
+        saveStateToEEPROM();
+    }
         }
     } else if (fermentacaoState.active && !active) {
         if (fermentacaoState.concluidaMantendoTemp) {
@@ -516,6 +524,24 @@ void loadConfigParameters(const char* configId) {
 void verificarTrocaDeFase() {
     if (!fermentacaoState.active) return;
     
+    // ✅ DEBUG TEMPORÁRIO (remover depois)
+    static unsigned long lastDebug = 0;
+    if (millis() - lastDebug > 30000) {
+        lastDebug = millis();
+        Serial.println(F("\n╔════════════════════════════════════╗"));
+        Serial.println(F("║   DEBUG verificarTrocaDeFase()     ║"));
+        Serial.println(F("╠════════════════════════════════════╣"));
+        Serial.printf("║ stageStarted:     %s               ║\n", 
+                     stageStarted ? "TRUE " : "FALSE");
+        Serial.printf("║ Rampa ativa:      %s               ║\n", 
+                     isSmoothRampActive() ? "TRUE " : "FALSE");
+        Serial.printf("║ PID atual:        %6.1f°C          ║\n", 
+                     fermentacaoState.tempTarget);
+        Serial.printf("║ Alvo etapa:       %6.1f°C          ║\n", 
+                     fermentacaoState.stages[fermentacaoState.currentStageIndex].targetTemp);
+        Serial.println(F("╚════════════════════════════════════╝\n"));
+    }
+
     updateSmoothRamp();
     
     if (fermentacaoState.totalStages == 0) {
@@ -581,16 +607,16 @@ void verificarTrocaDeFase() {
                     (tempDiff > 0.1f) ? "TRUE " : "FALSE");
                     
         if (tempDiff > RAMP_THRESHOLD && tempDiff > 0.1f) {
-            Serial.printf("[Fase] 🔄 Mudança grande na INICIALIZAÇÃO: %.1f°C -> %.1f°C (Δ=%.1f°C)\n",
-                         currentTemp, newTargetTemp, tempDiff);
             Serial.println(F("║ DECISÃO:         ✅ CRIAR RAMPA SUAVE    ║"));
             Serial.println(F("╚════════════════════════════════════════╝\n"));
-        
+            
+            Serial.printf("[Fase] 🔄 Mudança grande na INICIALIZAÇÃO: %.1f°C -> %.1f°C (Δ=%.1f°C)\n",
+                         currentTemp, newTargetTemp, tempDiff);
             setupSmoothRamp(currentTemp, newTargetTemp);
         } else {
             Serial.println(F("║ DECISÃO:         ❌ SEM RAMPA            ║"));
             Serial.println(F("╚════════════════════════════════════════╝\n"));
-        
+            
             updateTargetTemperature(newTargetTemp);
             Serial.printf("[Fase] 🌡️  Temperatura alvo definida: %.1f°C\n", newTargetTemp);
         }
@@ -640,7 +666,7 @@ void verificarTrocaDeFase() {
         // Se não atualizou há mais de 30s, sensor pode estar travado
         if (timeSinceUpdate > 30000) {
             Serial.printf("[Fase] ⚠️  Temperatura não atualizada há %lus, aguardando sensor...\n", 
-                        timeSinceUpdate / 1000);
+                         timeSinceUpdate / 1000);
             targetReached = false;  // Força aguardar leitura válida
         }
         
@@ -649,9 +675,9 @@ void verificarTrocaDeFase() {
         if (now - lastDebug > 60000 && !fermentacaoState.targetReachedSent) {
             lastDebug = now;
             Serial.printf("[Fase] Aguardando alvo: Temp=%.1f°C, Alvo=%.1f°C, Diff=%.1f°C, ",
-                        state.currentTemp, stageTargetTemp, diff);
+                         state.currentTemp, stageTargetTemp, diff);
             Serial.printf("Atingiu=%s, UltimaAtualização=%lus atrás\n",
-                        targetReached ? "SIM" : "NÃO", timeSinceUpdate / 1000);
+                         targetReached ? "SIM" : "NÃO", timeSinceUpdate / 1000);
         }
         
         if (targetReached && !fermentacaoState.targetReachedSent) {
@@ -663,6 +689,16 @@ void verificarTrocaDeFase() {
                 Serial.printf("[Fase] 🎯 Temperatura FINAL da etapa atingida: %.1f°C!\n", stageTargetTemp);
                 Serial.printf("[Fase] ⏱️  Contagem iniciada em: %s\n", formatTime(nowEpoch).c_str());
             }
+        }
+    } 
+    else if (stage.type == STAGE_RAMP) {
+        // Para rampas, targetReached é sempre true
+        targetReached = true;
+        
+        if (fermentacaoState.stageStartEpoch == 0) {
+            fermentacaoState.stageStartEpoch = nowEpoch;
+            saveStateToEEPROM();
+            Serial.println(F("[Fase] ⏱️  Contagem de rampa iniciada"));
         }
     }
 
@@ -678,9 +714,9 @@ void verificarTrocaDeFase() {
     }
     
     // Debug periódico
-    static unsigned long lastDebug = 0;
-    if (millis() - lastDebug > 300000) {
-        lastDebug = millis();
+    static unsigned long lastDebug2 = 0;
+    if (millis() - lastDebug2 > 300000) {
+        lastDebug2 = millis();
         
         Serial.printf("[Fase] Etapa %d/%d: ", 
                      fermentacaoState.currentStageIndex + 1,
@@ -782,6 +818,12 @@ void verificarTrocaDeFase() {
         
         float currentTemp = state.currentTemp;
         
+    // Cancela rampa antes de transição
+    if (isSmoothRampActive()) {
+        cancelSmoothRamp();
+        Serial.println(F("[Rampa] Cancelada por conclusão de etapa"));
+    }
+
         fermentacaoState.currentStageIndex++;
         stageStarted = false;
         fermentacaoState.stageStartEpoch = 0;
