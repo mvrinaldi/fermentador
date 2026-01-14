@@ -36,17 +36,14 @@
 // === Tempos Mínimos de Ciclo (em milissegundos) === //
 #define MIN_COOLER_CYCLE 900000UL          // 15 minutos
 #define MIN_HEATER_CYCLE 300000UL          // 5 minutos
-#define MIN_COOLER_ON 180000UL             // 3 minutos
+#define MIN_COOLER_ON 600000UL    // 10 minutos ← GELADEIRA PRECISA TEMPO!
 #define MIN_HEATER_ON 120000UL             // 2 minutos
-#define MIN_DELAY_BETWEEN_RELAYS 60000UL   // 1 minuto entre acionamentos
+#define MIN_DELAY_BETWEEN_RELAYS 900000UL  // 15 minutos ← EVITAR CICLOS CURTOS!
 
 // === Controle de rampas suaves === //
-#define RAMP_THRESHOLD 2.0f      // Acima de 2°C de diferença, usa rampa suave
-#define RAMP_RATE 0.5f           // Taxa de rampa: 0.5°C por minuto (30°C por hora)
+#define RAMP_THRESHOLD 3.0f      // Acima de 2°C de diferença, usa rampa suave
+#define RAMP_RATE 0.5f           // Taxa de rampa: 0.5°C por hora
 
 // === Constantes de segurança === //
 #define MIN_SAFE_TEMPERATURE 0.0f         // Não deixar congelar
 #define MAX_SAFE_TEMPERATURE 30.0f        // Limite superior de segurança
-
-// === Protótipos de funções globais (se necessário) === //
-// (Geralmente protótipos vão nos .h específicos, não aqui)

@@ -1,4 +1,4 @@
-// controle_fermentacao.cpp - VERSÃO CORRIGIDA
+// controle_fermentacao.cpp
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
@@ -511,7 +511,7 @@ void loadConfigParameters(const char* configId) {
 }
 
 // =====================================================
-// ✅ CORREÇÃO PRINCIPAL: TROCA DE FASE
+// ✅ TROCA DE FASE
 // =====================================================
 void verificarTrocaDeFase() {
     if (!fermentacaoState.active) return;
@@ -550,9 +550,9 @@ void verificarTrocaDeFase() {
     // =====================================================
     if (!stageStarted) {
         // Marca como iniciada MAS não define stageStartEpoch ainda
-        // (será definido quando temperatura for atingida para etapas TEMPERATURE)
         stageStarted = true;
         fermentacaoState.targetReachedSent = false;
+        fermentacaoState.stageStartEpoch = 0;
         
         resetPIDState();
         Serial.println(F("[PID] ✅ Estado do PID resetado para nova etapa"));
@@ -567,42 +567,54 @@ void verificarTrocaDeFase() {
         float currentTemp = state.currentTemp;
         float tempDiff = fabs(newTargetTemp - currentTemp);
         
+        // ✅ LOG DE DEBUG:
+        Serial.println(F("\n╔════════════════════════════════════════╗"));
+        Serial.println(F("║   DECISÃO: CRIAR RAMPA SUAVE?         ║"));
+        Serial.println(F("╠════════════════════════════════════════╣"));
+        Serial.printf("║ Temp Atual:      %6.2f°C              ║\n", currentTemp);
+        Serial.printf("║ Temp Alvo:       %6.2f°C              ║\n", newTargetTemp);
+        Serial.printf("║ Diferença:       %6.2f°C              ║\n", tempDiff);
+        Serial.printf("║ RAMP_THRESHOLD:  %6.2f°C              ║\n", RAMP_THRESHOLD);
+        Serial.printf("║ Condição 1:      %s (diff > RAMP_THRESHOLD) ║\n", 
+                    (tempDiff > RAMP_THRESHOLD) ? "TRUE " : "FALSE");
+        Serial.printf("║ Condição 2:      %s (diff > 0.1)            ║\n", 
+                    (tempDiff > 0.1f) ? "TRUE " : "FALSE");
+                    
         if (tempDiff > RAMP_THRESHOLD && tempDiff > 0.1f) {
             Serial.printf("[Fase] 🔄 Mudança grande na INICIALIZAÇÃO: %.1f°C -> %.1f°C (Δ=%.1f°C)\n",
                          currentTemp, newTargetTemp, tempDiff);
+            Serial.println(F("║ DECISÃO:         ✅ CRIAR RAMPA SUAVE    ║"));
+            Serial.println(F("╚════════════════════════════════════════╝\n"));
+        
             setupSmoothRamp(currentTemp, newTargetTemp);
         } else {
+            Serial.println(F("║ DECISÃO:         ❌ SEM RAMPA            ║"));
+            Serial.println(F("╚════════════════════════════════════════╝\n"));
+        
             updateTargetTemperature(newTargetTemp);
             Serial.printf("[Fase] 🌡️  Temperatura alvo definida: %.1f°C\n", newTargetTemp);
         }
         
-        // ✅ IMPORTANTE: Para etapas TEMPERATURE, NÃO define stageStartEpoch ainda
-        // Será definido quando temperatura for atingida
-        if (stage.type != STAGE_TEMPERATURE) {
-            fermentacaoState.stageStartEpoch = nowEpoch;
-        } else {
-            fermentacaoState.stageStartEpoch = 0; // Zero indica "aguardando temperatura"
-        }
+        fermentacaoState.stageStartEpoch = 0; // Zero indica "aguardando temperatura alvo"
         
         saveStateToEEPROM();
         
-        Serial.printf("[Fase] ▶️  Etapa %d/%d iniciada em %s (tipo: ", 
+        Serial.printf("[Fase] ▶️  Etapa %d/%d iniciada (tipo: ", 
                      fermentacaoState.currentStageIndex + 1,
-                     fermentacaoState.totalStages,
-                     formatTime(nowEpoch).c_str());
+                     fermentacaoState.totalStages);
                      
         switch (stage.type) {
             case STAGE_TEMPERATURE:
                 Serial.println("TEMPERATURE - aguardando temperatura alvo)");
                 break;
             case STAGE_RAMP:
-                Serial.println("RAMP)");
+                Serial.println("RAMP - contagem inicia imediatamente)");
                 break;
             case STAGE_GRAVITY:
-                Serial.println("GRAVITY)");
+                Serial.println("GRAVITY - aguardando temperatura alvo)");
                 break;
             case STAGE_GRAVITY_TIME:
-                Serial.println("GRAVITY_TIME)");
+                Serial.println("GRAVITY_TIME - aguardando temperatura alvo)");
                 break;
         }
     }
@@ -614,65 +626,91 @@ void verificarTrocaDeFase() {
     bool needsTemperature = (stage.type == STAGE_TEMPERATURE || 
                             stage.type == STAGE_GRAVITY || 
                             stage.type == STAGE_GRAVITY_TIME);
-    
+
     if (needsTemperature) {
-        float diff = abs(state.currentTemp - fermentacaoState.tempTarget);
+        // ✅ CORREÇÃO 1: Comparar com temperatura FINAL da etapa
+        float stageTargetTemp = stage.targetTemp;
+        float diff = abs(state.currentTemp - stageTargetTemp);
         targetReached = (diff <= TEMPERATURE_TOLERANCE);
+        
+        // ✅ CORREÇÃO 2: Verificar se temperatura está atualizada
+        unsigned long now = millis();
+        unsigned long timeSinceUpdate = now - state.lastTempUpdate;
+        
+        // Se não atualizou há mais de 30s, sensor pode estar travado
+        if (timeSinceUpdate > 30000) {
+            Serial.printf("[Fase] ⚠️  Temperatura não atualizada há %lus, aguardando sensor...\n", 
+                        timeSinceUpdate / 1000);
+            targetReached = false;  // Força aguardar leitura válida
+        }
+        
+        // Debug periódico (apenas quando aguardando alvo)
+        static unsigned long lastDebug = 0;
+        if (now - lastDebug > 60000 && !fermentacaoState.targetReachedSent) {
+            lastDebug = now;
+            Serial.printf("[Fase] Aguardando alvo: Temp=%.1f°C, Alvo=%.1f°C, Diff=%.1f°C, ",
+                        state.currentTemp, stageTargetTemp, diff);
+            Serial.printf("Atingiu=%s, UltimaAtualização=%lus atrás\n",
+                        targetReached ? "SIM" : "NÃO", timeSinceUpdate / 1000);
+        }
         
         if (targetReached && !fermentacaoState.targetReachedSent) {
             fermentacaoState.targetReachedSent = true;
             
-            // ✅ CORREÇÃO CRÍTICA: Para etapas TEMPERATURE, agora SIM inicia a contagem
-            if (stage.type == STAGE_TEMPERATURE) {
+            if (fermentacaoState.stageStartEpoch == 0) {
                 fermentacaoState.stageStartEpoch = nowEpoch;
-                Serial.println(F("[Fase] 🎯 Temperatura alvo atingida! INICIANDO CONTAGEM DE TEMPO"));
+                saveStateToEEPROM();
+                Serial.printf("[Fase] 🎯 Temperatura FINAL da etapa atingida: %.1f°C!\n", stageTargetTemp);
                 Serial.printf("[Fase] ⏱️  Contagem iniciada em: %s\n", formatTime(nowEpoch).c_str());
-            } else {
-                // Para GRAVITY e GRAVITY_TIME, também reinicia contagem
-                fermentacaoState.stageStartEpoch = nowEpoch;
-                Serial.println(F("[Fase] 🎯 Temperatura alvo atingida, iniciando contagem"));
             }
-            
-            saveStateToEEPROM();
         }
-    } else {
-        targetReached = true;
     }
 
     // =====================================================
-    // ✅ CÁLCULO DO TEMPO DECORRIDO (CORRIGIDO)
+    // ✅ CÁLCULO DO TEMPO DECORRIDO
     // =====================================================
     float elapsedH = 0;
     
-    if (stage.type == STAGE_TEMPERATURE) {
-        // Para etapas TEMPERATURE, só calcula tempo SE já atingiu temperatura
-        if (fermentacaoState.stageStartEpoch > 0) {
-            elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
-        } else {
-            elapsedH = 0; // Ainda não iniciou contagem
-        }
-    } else {
-        // Para outras etapas, usa stageStartEpoch normalmente
-        if (fermentacaoState.stageStartEpoch > 0) {
-            elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
-        }
+    // Só calcula tempo decorrido se a contagem foi iniciada
+    if (fermentacaoState.stageStartEpoch > 0) {
+        elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
+        if (elapsedH < 0) elapsedH = 0; // Proteção contra tempo negativo
     }
     
     // Debug periódico
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > 300000) {
         lastDebug = millis();
-        Serial.printf("[Fase] Etapa %d: %.1fh/%.1fh decorridas (targetReached: %s)\n", 
+        
+        Serial.printf("[Fase] Etapa %d/%d: ", 
                      fermentacaoState.currentStageIndex + 1,
-                     elapsedH,
-                     (float)stage.holdTimeHours,
-                     targetReached ? "SIM" : "NÃO");
+                     fermentacaoState.totalStages);
+        
+        if (fermentacaoState.stageStartEpoch > 0) {
+            Serial.printf("%.1fh/", elapsedH);
+            
+            switch (stage.type) {
+                case STAGE_TEMPERATURE:
+                case STAGE_GRAVITY:
+                case STAGE_GRAVITY_TIME:
+                    Serial.printf("%.1fh decorridas", (float)stage.holdTimeHours);
+                    break;
+                case STAGE_RAMP:
+                    Serial.printf("%.1fh decorridas", (float)stage.rampTimeHours);
+                    break;
+            }
+        } else {
+            Serial.print("Aguardando temperatura alvo");
+        }
+        
+        Serial.printf(" (targetReached: %s)\n", targetReached ? "SIM" : "NÃO");
     }
 
     // =====================================================
     // CONTROLE DE RAMPA
     // =====================================================
     if (stage.type == STAGE_RAMP && !isSmoothRampActive()) {
+        // Para rampas, progresso é baseado no tempo desde stageStartEpoch
         float progress = elapsedH / stage.rampTimeHours;
         if (progress < 0) progress = 0;
         if (progress > 1) progress = 1;
@@ -697,15 +735,20 @@ void verificarTrocaDeFase() {
         case STAGE_TEMPERATURE:
             // ✅ CORREÇÃO: Só considera concluída se:
             // 1. Temperatura foi atingida (targetReached)
-            // 2. Tempo de hold passou (elapsedH >= holdTimeHours)
-            if (targetReached && fermentacaoState.stageStartEpoch > 0 && 
-                elapsedH >= stage.holdTimeHours) {
-                stageCompleted = true;
+            // 2. Contagem foi iniciada (stageStartEpoch > 0)
+            // 3. Tempo de hold passou
+            if (targetReached && fermentacaoState.stageStartEpoch > 0) {
+                // Verifica se já passou o tempo necessário
+                if (elapsedH >= stage.holdTimeHours) {
+                    stageCompleted = true;
+                }
             }
             break;
 
         case STAGE_RAMP:
-            if (elapsedH >= stage.rampTimeHours) {
+            // Para rampas, verifica se passou o tempo da rampa
+            if (fermentacaoState.stageStartEpoch > 0 && 
+                elapsedH >= stage.rampTimeHours) {
                 stageCompleted = true;
             }
             break;
@@ -718,9 +761,10 @@ void verificarTrocaDeFase() {
 
         case STAGE_GRAVITY_TIME:
             if (targetReached) {
-                if (mySpindel.gravity <= stage.targetGravity) {
-                    stageCompleted = true;
-                } else if (elapsedH >= stage.maxTimeHours) {
+                // Só verifica tempo se a contagem foi iniciada
+                bool timeoutReached = (fermentacaoState.stageStartEpoch > 0 && 
+                                      elapsedH >= stage.maxTimeHours);
+                if (mySpindel.gravity <= stage.targetGravity || timeoutReached) {
                     stageCompleted = true;
                 }
             }
@@ -742,9 +786,6 @@ void verificarTrocaDeFase() {
         stageStarted = false;
         fermentacaoState.stageStartEpoch = 0;
         fermentacaoState.targetReachedSent = false;
-
-        resetPIDState();
-        Serial.println(F("[PID] ✅ Estado do PID resetado para transição de etapa"));
 
         if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
             FermentationStage& next = fermentacaoState.stages[fermentacaoState.currentStageIndex];
@@ -819,23 +860,35 @@ void enviarEstadoCompleto() {
     JsonDocument doc;
     
     doc["config_id"] = fermentacaoState.activeId;
-    
+
     if (fermentacaoState.concluidaMantendoTemp) {
         doc["status"] = "completed_holding_temp";
         doc["message"] = "Fermentação concluída - mantendo temperatura";
     } else {
         doc["status"] = "running";
     }
-    
+
     doc["config_name"] = fermentacaoState.configName;
-    
+
     doc["currentStageIndex"] = fermentacaoState.currentStageIndex;
     doc["totalStages"] = fermentacaoState.totalStages;
+
+    // ✅ CORREÇÃO: Enviar AMBAS as temperaturas
+    // Temperatura alvo da ETAPA (configurada pelo usuário)
+    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
+        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
+        doc["stageTargetTemp"] = stage.targetTemp;  // ← NOVO: Temperatura da etapa (destino)
+    }
+
+    // Temperatura alvo do PID (pode variar durante rampa)
+    doc["pidTargetTemp"] = fermentacaoState.tempTarget;  // ← NOVO: Temperatura PID (atual)
+
+    // ⚠️ MANTÉM POR COMPATIBILIDADE (mas agora é a do PID, não da etapa)
     doc["currentTargetTemp"] = fermentacaoState.tempTarget;
-    
+
     doc["targetReached"] = fermentacaoState.targetReachedSent;
     
-    // ✅ CORREÇÃO CRÍTICA: Cálculo do tempo restante
+    // Cálculo do tempo restante
     if (fermentacaoState.stageStartEpoch > 0 && 
         fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
         
@@ -926,8 +979,51 @@ void enviarEstadoCompleto() {
         }
     }
     
-    doc["cooling"] = cooler.estado;
-    doc["heating"] = heater.estado;
+    // Obter status detalhado do controle
+    DetailedControlStatus detailedStatus = getDetailedStatus();
+    
+    // Mantém compatibilidade com código antigo
+    doc["cooling"] = detailedStatus.coolerActive;
+    doc["heating"] = detailedStatus.heaterActive;
+    
+    // Adiciona objeto com status detalhado
+    JsonObject controlStatus = doc["control_status"].to<JsonObject>();
+    controlStatus["state"] = detailedStatus.stateName;
+    controlStatus["is_waiting"] = detailedStatus.isWaiting;
+    
+    if (detailedStatus.isWaiting) {
+        if (detailedStatus.waitTimeRemaining > 0) {
+            controlStatus["wait_seconds"] = detailedStatus.waitTimeRemaining;
+            controlStatus["wait_reason"] = detailedStatus.waitReason;
+            
+            // Formato amigável para exibição
+            String waitDisplay;
+            if (detailedStatus.waitTimeRemaining < 60) {
+                waitDisplay = String(detailedStatus.waitTimeRemaining) + "s";
+            } else if (detailedStatus.waitTimeRemaining < 3600) {
+                uint16_t min = detailedStatus.waitTimeRemaining / 60;
+                uint16_t sec = detailedStatus.waitTimeRemaining % 60;
+                waitDisplay = String(min) + "m";
+                if (sec > 0) waitDisplay += String(sec) + "s";
+            } else {
+                uint16_t hours = detailedStatus.waitTimeRemaining / 3600;
+                uint16_t min = (detailedStatus.waitTimeRemaining % 3600) / 60;
+                waitDisplay = String(hours) + "h";
+                if (min > 0) waitDisplay += String(min) + "m";
+            }
+            controlStatus["wait_display"] = waitDisplay;
+        } else {
+            // Espera sem tempo definido (ex: peak detection)
+            controlStatus["wait_reason"] = detailedStatus.waitReason;
+            controlStatus["wait_display"] = "aguardando";
+        }
+    }
+    
+    // Informação adicional para debug
+    if (detailedStatus.peakDetection) {
+        controlStatus["peak_detection"] = true;
+        controlStatus["estimated_peak"] = detailedStatus.estimatedPeak;
+    }
     
     doc["timestamp"] = millis();
     

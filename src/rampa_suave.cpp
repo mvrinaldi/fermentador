@@ -13,7 +13,7 @@ void setupSmoothRamp(float startTemp, float endTemp) {
     rampState.startTime = millis();
     
     float diff = endTemp - startTemp;
-    float rampTimeHours = fabs(diff) / (RAMP_RATE * 60.0f);
+    float rampTimeHours = fabs(diff) / RAMP_RATE;
     
     Serial.printf("[Rampa] 🔄 Configurada: %.1f°C → %.1f°C em %.1f horas (%.1f°C/min)\n",
                  startTemp, endTemp, rampTimeHours, RAMP_RATE);
@@ -30,7 +30,7 @@ void updateSmoothRamp() {
     float elapsedHours = elapsedMillis / 3600000.0f;
     
     // Tempo total estimado para rampa
-    float totalRampHours = fabs(rampState.endTemp - rampState.startTemp) / (RAMP_RATE * 60.0f);
+    float totalRampHours = fabs(rampState.endTemp - rampState.startTemp) / RAMP_RATE;
     
     if (elapsedHours >= totalRampHours) {
         // Rampa concluída
@@ -68,7 +68,7 @@ float getCurrentRampTarget() {
     unsigned long elapsedMillis = now - rampState.startTime;
     float elapsedHours = elapsedMillis / 3600000.0f;
     
-    float totalRampHours = fabs(rampState.endTemp - rampState.startTemp) / (RAMP_RATE * 60.0f);
+    float totalRampHours = fabs(rampState.endTemp - rampState.startTemp) / RAMP_RATE;
     
     if (elapsedHours >= totalRampHours) {
         return rampState.endTemp;

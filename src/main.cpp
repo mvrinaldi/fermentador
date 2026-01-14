@@ -134,6 +134,17 @@ void sendHeartbeat() {
         doc["cooler_active"] = cooler.estado;
         doc["heater_active"] = heater.estado;
         
+        // Adiciona status detalhado do controle
+        DetailedControlStatus detailedStatus = getDetailedStatus();
+        
+        JsonObject controlStatus = doc["control_status"].to<JsonObject>();
+        controlStatus["state"] = detailedStatus.stateName;
+        controlStatus["is_waiting"] = detailedStatus.isWaiting;
+        
+        if (detailedStatus.isWaiting && detailedStatus.waitTimeRemaining > 0) {
+            controlStatus["wait_seconds"] = detailedStatus.waitTimeRemaining;
+            controlStatus["wait_reason"] = detailedStatus.waitReason;
+        }
         String json;
         serializeJson(doc, json);
         
@@ -250,6 +261,7 @@ void setup() {
 
     // ✅ 7. WEBSERVER / ISPINDEL
     setupSpindelRoutes(server);
+    setupOTA(server);
     server.begin();
     Serial.println("🌐 Servidor Web ativo");
     
@@ -326,6 +338,7 @@ void loop() {
 
     // WebServer (OTA + iSpindel)
     server.handleClient();
+    handleOTA();
     
     // ⏰ Verifica NTP periodicamente (tenta reconectar se perdeu sync)
     checkNTPSync();

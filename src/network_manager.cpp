@@ -178,26 +178,4 @@ void networkLoop() {
         scanAndSendSensors();
         sensorsScanned = true;
     }
-
-    // =============================================
-    // 4. CONTROLE INTELIGENTE DE OTA
-    // =============================================
-    // Assumindo que fermentacaoState é acessível
-    extern struct FermentacaoState fermentacaoState;
-    bool fermentacaoAtiva = fermentacaoState.active;
-
-    if (wifiOnline && !fermentacaoAtiva) {
-        if (!isOTAEnabled()) {
-            setOTAEnabled(true);
-            setupOTA(*webServer);
-            otaOnline = true;
-            Serial.println(F("🟢 OTA habilitado"));
-        }
-    } else {
-        if (isOTAEnabled()) {
-            setOTAEnabled(false);
-            otaOnline = false;
-            Serial.println(F("⛔ OTA pausado (fermentação ativa ou WiFi offline)"));
-        }
-    }
 }

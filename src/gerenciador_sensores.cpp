@@ -1,3 +1,4 @@
+//gerenciador_sensores.cpp
 #include "gerenciador_sensores.h"
 #include "eeprom_layout.h"
 #include <ArduinoJson.h>

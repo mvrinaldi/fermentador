@@ -30,8 +30,9 @@ struct SystemState {
   unsigned long lastUpdate;
   char configName[20];
   bool active;
+  unsigned long lastTempUpdate;  // ✅ NOVO: Timestamp da última atualização de temperatura
   
-  SystemState() : currentTemp(0.0), targetTemp(20.0), lastUpdate(0), active(false) {
+  SystemState() : currentTemp(0.0), targetTemp(20.0), lastUpdate(0), active(false), lastTempUpdate(0) {
     configName[0] = '\0';
   }
 };
@@ -71,8 +72,8 @@ struct FermentationStage {
   float startTemp;
   int durationDays;
   int rampTimeHours;
-  int holdTimeHours;        // ADICIONADO
-  int maxTimeHours;         // ADICIONADO
+  int holdTimeHours;
+  int maxTimeHours;
   float targetGravity;
   int timeoutDays;
   unsigned long startTime;
@@ -84,8 +85,8 @@ struct FermentationStage {
       startTemp(0.0),
       durationDays(0),
       rampTimeHours(0),
-      holdTimeHours(0),      // ADICIONADO
-      maxTimeHours(0),       // ADICIONADO
+      holdTimeHours(0),
+      maxTimeHours(0),
       targetGravity(0.0),
       timeoutDays(0),
       startTime(0),
@@ -95,7 +96,7 @@ struct FermentationStage {
 // === Estado da Fermentação === //
 struct FermentacaoState {
     bool active;
-    bool concluidaMantendoTemp;  // ✅ ADICIONADO: Concluída mas mantendo temperatura
+    bool concluidaMantendoTemp;
     char activeId[32];
     char configName[64];
     float tempTarget;
@@ -104,17 +105,17 @@ struct FermentacaoState {
     int totalStages;
     FermentationStage stages[MAX_STAGES];
     unsigned long lastUpdate;
-    time_t stageStartEpoch;   // ADICIONADO - timestamp de início da etapa
+    time_t stageStartEpoch;
     
     FermentacaoState() : 
         active(false),
-        concluidaMantendoTemp(false),  // ✅ ADICIONADO
-        tempTarget(DEFAULT_TEMPERATURE),  // ✅ USANDO DEFAULT_TEMPERATURE
+        concluidaMantendoTemp(false),
+        tempTarget(DEFAULT_TEMPERATURE),
         currentStageIndex(0),
         targetReachedSent(false),
         totalStages(0),
         lastUpdate(0),
-        stageStartEpoch(0) {    // ADICIONADO
+        stageStartEpoch(0) {
         activeId[0] = '\0';
         configName[0] = '\0';
         for (int i = 0; i < MAX_STAGES; i++) {
@@ -124,15 +125,15 @@ struct FermentacaoState {
     
     void clear() {
         active = false;
-        concluidaMantendoTemp = false;  // ✅ ADICIONADO
+        concluidaMantendoTemp = false;
         memset(activeId, 0, sizeof(activeId));
         memset(configName, 0, sizeof(configName));
-        tempTarget = DEFAULT_TEMPERATURE;  // ✅ USANDO DEFAULT_TEMPERATURE
+        tempTarget = DEFAULT_TEMPERATURE;
         currentStageIndex = 0;
         targetReachedSent = false;
         totalStages = 0;
         lastUpdate = millis();
-        stageStartEpoch = 0;  // ADICIONADO
+        stageStartEpoch = 0;
         
         for (int i = 0; i < MAX_STAGES; i++) {
             stages[i] = FermentationStage();
