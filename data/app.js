@@ -1,4 +1,4 @@
-// app.js - Monitor Passivo (ESP como fonte de verdade) + Detecção de Offline
+// app.js - Monitor Passivo
 const API_BASE_URL = '/api.php?path=';
 
 // ========== VARIÁVEIS GLOBAIS ==========
@@ -6,11 +6,11 @@ let chart = null;
 let refreshInterval = null;
 let isAppInitialized = false;
 
-const REFRESH_INTERVAL = 30000; // 30 segundos
-const ESP_OFFLINE_THRESHOLD = 120000; // 2 minutos sem dados = offline
-const SAO_PAULO_UTC_OFFSET = -3 * 60 * 60 * 1000; // -3 horas em milissegundos
+const REFRESH_INTERVAL = 30000;
+const ESP_OFFLINE_THRESHOLD = 120000;
+const SAO_PAULO_UTC_OFFSET = -3 * 60 * 60 * 1000;
 
-// ========== ESTADO DA APLICAÇÃO (recebido do servidor) ==========
+// ========== ESTADO DA APLICAÇÃO ==========
 let appState = {
     config: null,
     espState: null,
@@ -45,7 +45,7 @@ async function apiRequest(endpoint, options = {}) {
     }
 }
 
-// ========== FUNÇÕES DE AUTENTICAÇÃO ==========
+// ========== AUTENTICAÇÃO ==========
 async function login() {
     const email = document.getElementById('login-email').value;
     const password = document.getElementById('login-password').value;
@@ -158,8 +158,7 @@ function hideLoginScreen() {
     if (container) container.style.display = 'block';
 }
 
-// ========== FUNÇÕES DE DATA/HORA (SÃO PAULO UTC-3) ==========
-
+// ========== DATA/HORA ==========
 function utcToSaoPaulo(dateString) {
     if (!dateString) {
         const now = new Date();
@@ -222,7 +221,42 @@ function formatTimestamp(date) {
     return `${day}/${month}/${year} ${hour}:${minute}`;
 }
 
-// ========== DETECÇÃO DE ESP OFFLINE ==========
+function formatTimeRemaining(tr) {
+    if (!tr || !tr.value || !tr.unit) {
+        return '--';
+    }
+    
+    if (tr.unit === 'hours') {
+        const totalHours = parseFloat(tr.value);
+        const hours = Math.floor(totalHours);
+        const minutes = Math.round((totalHours - hours) * 60);
+        
+        if (totalHours < 1) {
+            return `${Math.round(totalHours * 60)}min`;
+        } else if (minutes > 0) {
+            return `${hours}h ${minutes}min`;
+        } else {
+            return `${hours}h`;
+        }
+    } 
+    else if (tr.unit === 'days') {
+        const totalDays = parseFloat(tr.value);
+        
+        if (totalDays >= 1) {
+            return `${totalDays.toFixed(1)} dias`;
+        } else {
+            const hours = Math.round(totalDays * 24);
+            return `${hours}h`;
+        }
+    }
+    else if (tr.unit === 'indefinite') {
+        return 'Aguardando gravidade';
+    }
+    
+    return `${tr.value} ${tr.unit}`;
+}
+
+// ========== STATUS ESP ==========
 function checkESPStatus() {
     const alertDiv = document.getElementById('esp-status-alert');
     const badgeDiv = document.getElementById('esp-status-badge');
@@ -237,10 +271,8 @@ function checkESPStatus() {
         });
     };
     
-    // Atualiza status dos relés
     updateRelayStatus();
     
-    // PRIORIDADE 1: Usa heartbeat se disponível
     if (appState.heartbeat && appState.heartbeat.heartbeat_timestamp) {
         const lastTimestamp = appState.heartbeat.heartbeat_timestamp;
         const diffMs = calculateTimeDifference(lastTimestamp);
@@ -258,7 +290,6 @@ function checkESPStatus() {
         return;
     }
     
-    // FALLBACK: Verifica última leitura ou última atualização do controlador
     let lastTimestamp = null;
     
     if (appState.readings && appState.readings.length > 0) {
@@ -290,19 +321,29 @@ function checkESPStatus() {
     }
 }
 
-// ========== ATUALIZA STATUS DOS RELÉS ==========
 function updateRelayStatus() {
     const coolerStatusDiv = document.getElementById('cooler-status');
     const heaterStatusDiv = document.getElementById('heater-status');
+    const relayContainer = document.getElementById('relay-status');
     
-    if (!coolerStatusDiv || !heaterStatusDiv) return;
+    if (!coolerStatusDiv || !heaterStatusDiv || !relayContainer) return;
     
     let coolerActive = false;
     let heaterActive = false;
+    let waitingStatus = null;
     
-    if (appState.heartbeat) {
+    if (appState.heartbeat && appState.heartbeat.control_status) {
+        const cs = appState.heartbeat.control_status;
+        
         coolerActive = appState.heartbeat.cooler_active === 1 || appState.heartbeat.cooler_active === true;
         heaterActive = appState.heartbeat.heater_active === 1 || appState.heartbeat.heater_active === true;
+        
+        if (cs.is_waiting && cs.wait_reason) {
+            waitingStatus = {
+                reason: cs.wait_reason,
+                display: cs.wait_display || 'aguardando'
+            };
+        }
     } else if (appState.controller) {
         coolerActive = appState.controller.cooling === 1 || appState.controller.cooling === true;
         heaterActive = appState.controller.heating === 1 || appState.controller.heating === true;
@@ -319,9 +360,32 @@ function updateRelayStatus() {
     } else {
         heaterStatusDiv.classList.add('hidden');
     }
+    
+    let existingWaitDiv = document.getElementById('waiting-status');
+    
+    if (waitingStatus) {
+        if (!existingWaitDiv) {
+            existingWaitDiv = document.createElement('div');
+            existingWaitDiv.id = 'waiting-status';
+            existingWaitDiv.className = 'flex items-center gap-1 text-sm';
+            relayContainer.appendChild(existingWaitDiv);
+        }
+        
+        existingWaitDiv.innerHTML = `
+            <i class="fas fa-hourglass-half text-yellow-600"></i>
+            <span class="font-semibold text-yellow-700">
+                ${waitingStatus.reason} (${waitingStatus.display})
+            </span>
+        `;
+        existingWaitDiv.classList.remove('hidden');
+    } else {
+        if (existingWaitDiv) {
+            existingWaitDiv.classList.add('hidden');
+        }
+    }
 }
 
-// ========== CARREGAMENTO DE DADOS (ENDPOINT UNIFICADO) ==========
+// ========== CARREGAMENTO ==========
 async function loadCompleteState() {
     try {
         const activeData = await apiRequest('active');
@@ -353,7 +417,6 @@ async function loadCompleteState() {
     }
 }
 
-// ========== ATUALIZAÇÃO AUTOMÁTICA ==========
 async function autoRefreshData() {
     console.log('🔄 Auto-refresh:', new Date().toLocaleTimeString());
     
@@ -365,9 +428,9 @@ async function autoRefreshData() {
     }
 }
 
-// ========== FUNÇÕES DE RENDERIZAÇÃO ==========
+// ========== RENDERIZAÇÃO ==========
 function renderUI() {
-    if (!appState.config) {
+    if (!appState.config || !appState.config.stages || appState.config.stages.length === 0) {
         renderNoActiveFermentation();
         return;
     }
@@ -375,16 +438,16 @@ function renderUI() {
     const nameElement = document.getElementById('fermentation-name');
     const stageElement = document.getElementById('stage-info');
     
-    if (nameElement) nameElement.textContent = appState.config.name;
+    if (nameElement) nameElement.textContent = appState.config.name || 'Sem nome';
     
     if (stageElement) {
-        const currentStage = appState.config.current_stage_index + 1;
+        const currentStage = (appState.config.current_stage_index || 0) + 1;
         const totalStages = appState.config.stages.length;
         stageElement.textContent = `Etapa ${currentStage} de ${totalStages}`;
     }
     
     const timeElement = document.getElementById('time-remaining');
-    if (timeElement && appState.espState.timeRemaining) {
+    if (timeElement && appState.espState && appState.espState.timeRemaining) {
         const tr = appState.espState.timeRemaining;
         
         let icon = 'fas fa-clock';
@@ -399,11 +462,12 @@ function renderUI() {
         }
         
         const label = tr.status === 'waiting' ? '(aguardando alvo)' : 'restantes';
+        const timeDisplay = formatTimeRemaining(tr);
         
         timeElement.innerHTML = `
             <i class="${icon} ${statusClass}"></i> 
             <span class="${statusClass}">
-                ${tr.value} ${tr.unit} ${label}
+                ${timeDisplay} ${label}
             </span>
         `;
         timeElement.style.display = 'flex';
@@ -426,17 +490,26 @@ function renderInfoCards() {
     
     const currentTemp = parseFloat(lastReading.temp_fermenter) || 0;
     const fridgeTemp = parseFloat(lastReading.temp_fridge) || 0;
-    const targetTemp = parseFloat(lastReading.temp_target) || parseFloat(currentStage.target_temp) || 0;
+    
+    const stageTargetTemp = parseFloat(appState.espState.stageTargetTemp) || 
+                            parseFloat(currentStage.target_temp) || 0;
+    
+    const pidTarget = parseFloat(lastReading.temp_target) ||
+                  parseFloat(appState.espState.pidTargetTemp) || 
+                  parseFloat(appState.espState.currentTargetTemp) || 
+                  stageTargetTemp;
+    
+    const isRamping = Math.abs(pidTarget - stageTargetTemp) > 0.1;
     
     let tempStatus = '';
     let tempColor = '#9ca3af';
     
-    if (currentTemp > 0 && targetTemp > 0) {
-        const diff = Math.abs(currentTemp - targetTemp);
+    if (!isNaN(currentTemp) && !isNaN(stageTargetTemp) && currentTemp !== null && stageTargetTemp !== null) {
+        const diff = Math.abs(currentTemp - stageTargetTemp);
         if (diff <= 0.5) {
             tempStatus = '✅ No alvo';
             tempColor = '#10b981';
-        } else if (currentTemp < targetTemp) {
+        } else if (currentTemp < stageTargetTemp) {
             tempStatus = '⬇️ Abaixo do alvo';
             tempColor = '#3b82f6';
         } else {
@@ -469,25 +542,44 @@ function renderInfoCards() {
         gravityTargetSubtitle = 'Sem alvo definido';
     }
 
-    const countingStatus = appState.espState.targetReached ? 
-        '✅ Contagem iniciada' : '⏳ Aguardando alvo';
-    const countingColor = appState.espState.targetReached ? '#10b981' : '#f59e0b';
+    const isReallyRunning = appState.espState.targetReached && 
+                            appState.espState.timeRemaining?.status === 'running';
+    
+    const countingStatus = isReallyRunning 
+        ? '✅ Contagem iniciada' 
+        : '⏳ Aguardando alvo';
+    
+    const countingColor = isReallyRunning ? '#10b981' : '#f59e0b';
 
     infoCards.innerHTML = `
         ${cardTemplate({
             title: 'Temp. Fermentador',
             icon: 'fas fa-thermometer-full',
-            value: currentTemp > 0 ? `${currentTemp.toFixed(1)}°C` : '--',
+            value: !isNaN(currentTemp) && currentTemp !== null ? `${currentTemp.toFixed(1)}°C` : '--',
             subtitle: tempStatus,
             color: tempColor
         })}
         ${cardTemplate({
-            title: 'Temp. Alvo Atual',
+            title: 'Temp. Geladeira',
+            icon: 'fas fa-thermometer-half',
+            value: !isNaN(fridgeTemp) && fridgeTemp !== null ? `${fridgeTemp.toFixed(1)}°C` : '--',
+            subtitle: 'Sensor ambiente',
+            color: '#3b82f6'
+        })}
+        ${cardTemplate({
+            title: 'Temp. Alvo da Etapa',
             icon: 'fas fa-crosshairs',
-            value: targetTemp > 0 ? `${targetTemp.toFixed(1)}°C` : '--',
+            value: !isNaN(stageTargetTemp) && stageTargetTemp !== null ? `${stageTargetTemp.toFixed(1)}°C` : '--',
             subtitle: countingStatus,
             color: countingColor
         })}
+        ${isRamping ? cardTemplate({
+            title: '🔄 Alvo do PID (Rampa Ativa)',
+            icon: 'fas fa-chart-line',
+            value: `${pidTarget.toFixed(1)}°C`,
+            subtitle: `Indo para ${stageTargetTemp.toFixed(1)}°C`,
+            color: '#f59e0b'
+        }) : ''}
         ${cardTemplate({
             title: 'Gravidade Atual',
             icon: 'fas fa-tint',
@@ -503,6 +595,43 @@ function renderInfoCards() {
             color: targetGravity > 0 ? '#8b5cf6' : '#9ca3af'
         })}
     `;
+
+    if (appState.heartbeat && appState.heartbeat.control_status) {
+        const cs = appState.heartbeat.control_status;
+        const coolerActive = appState.heartbeat.cooler_active === 1 || appState.heartbeat.cooler_active === true;
+        const heaterActive = appState.heartbeat.heater_active === 1 || appState.heartbeat.heater_active === true;
+        
+        let statusIcon = 'fas fa-check-circle';
+        let statusText = 'Sistema Estável';
+        let statusColor = '#10b981';
+        let statusSubtitle = '';
+        
+        if (cs.is_waiting && cs.wait_reason) {
+            statusIcon = 'fas fa-hourglass-half';
+            statusText = 'Aguardando';
+            statusSubtitle = cs.wait_reason;
+            if (cs.wait_display) {
+                statusSubtitle += ` (${cs.wait_display})`;
+            }
+            statusColor = '#f59e0b';
+        } else if (coolerActive) {
+            statusIcon = 'fas fa-snowflake';
+            statusText = 'Resfriando';
+            statusColor = '#3b82f6';
+        } else if (heaterActive) {
+            statusIcon = 'fas fa-fire';
+            statusText = 'Aquecendo';
+            statusColor = '#ef4444';
+        }
+        
+        infoCards.innerHTML += cardTemplate({
+            title: 'Status do Controle',
+            icon: statusIcon,
+            value: statusText,
+            subtitle: statusSubtitle,
+            color: statusColor
+        });
+    }
 }
 
 function renderStagesList() {
@@ -526,7 +655,7 @@ function renderChart() {
     const ctx = canvas ? canvas.getContext('2d') : null;
     const noDataMsg = document.getElementById('no-data-message');
 
-    if (!ctx || appState.readings.length === 0) {
+    if (!ctx || !appState.config || appState.readings.length === 0) {
         if (canvas) canvas.style.display = 'none';
         if (noDataMsg) noDataMsg.style.display = 'block';
         return;
@@ -547,6 +676,10 @@ function renderChart() {
         const minute = date.getMinutes().toString().padStart(2, '0');
         return `${hour}:${minute} ${day}/${month}`;
     });
+
+    const currentStageIndex = appState.config.current_stage_index || 0;
+    const currentStage = appState.config.stages[currentStageIndex] || {};
+    const stageTargetTemp = parseFloat(currentStage.target_temp) || 0;
 
     chart = new Chart(ctx, {
         type: 'line',
@@ -570,12 +703,23 @@ function renderChart() {
                     fill: false
                 },
                 {
-                    label: 'Temp. Alvo',
-                    data: appState.readings.map(r => parseFloat(r.temp_target)),
+                    label: 'Alvo da Etapa',
+                    data: appState.readings.map(() => stageTargetTemp),
                     borderColor: '#ef4444',
                     borderDash: [5, 5],
                     backgroundColor: 'rgba(239, 68, 68, 0.1)',
                     tension: 0,
+                    fill: false,
+                    pointRadius: 0
+                },
+                {
+                    label: 'Alvo do PID',
+                    data: appState.readings.map(r => parseFloat(r.temp_target)),
+                    borderColor: '#f59e0b',
+                    borderDash: [2, 2],
+                    borderWidth: 2,
+                    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                    tension: 0.4,
                     fill: false,
                     pointRadius: 0
                 },
@@ -640,7 +784,7 @@ function renderNoActiveFermentation() {
     }
 }
 
-// ========== TEMPLATES HTML ==========
+// ========== TEMPLATES ==========
 const cardTemplate = ({ title, icon, value, subtitle, color }) => `
     <div class="card">
         <div class="flex items-center gap-3 mb-2">
@@ -728,12 +872,10 @@ async function initAppAfterAuth() {
     }
 }
 
-// ========== EXPORTAÇÃO PARA ESCOPO GLOBAL ==========
 window.login = login;
 window.logout = logout;
 window.refreshData = loadCompleteState;
 
-// ========== INICIALIZAÇÃO ==========
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('App.js carregado. Verificando autenticação...');
     

@@ -1,4 +1,4 @@
-// config.js - Sistema de Configuração com MySQL (CORRIGIDO)
+// config.js
 const API_BASE_URL = '/api.php?path=';
 
 // ========== VARIÁVEIS GLOBAIS ==========

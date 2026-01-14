@@ -1,5 +1,5 @@
 <?php
-// api.php - API Backend Refatorado (ESP como fonte única de verdade)
+// api.php
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
@@ -260,40 +260,56 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             
             // 5. Limpa leituras antigas
             
-            $daysToKeep10 = 10;
-            $daysToKeep30 = 30;
+            // APAGAR LEITURAS COM id_config NULO
+            $stmt = $pdo->prepare("DELETE FROM `readings` WHERE config_id IS NULL");
+            $stmt->execute();
+            
+            $stmt = $pdo->prepare("DELETE FROM readings WHERE config_id = ?");
+            $stmt->execute([$configId]);
+            
+            $stmt = $pdo->prepare("DELETE FROM ispindel_readings WHERE config_id = ?");
+            $stmt->execute([$configId]);
+            
+            $stmt = $pdo->prepare("DELETE FROM controller_states WHERE config_id = ?");
+            $stmt->execute([$configId]);
+            
+            $stmt = $pdo->prepare("DELETE FROM fermentation_states WHERE config_id = ?");
+            $stmt->execute([$configId]);            
+            
+//            $daysToKeep10 = 10;
+//            $daysToKeep30 = 30;
             
             // readings
-            $stmt = $pdo->prepare("
-                DELETE FROM readings 
-                WHERE config_id = ? 
-                  AND reading_timestamp < NOW() - INTERVAL ? DAY
-            ");
-            $stmt->execute([$configId, $daysToKeep10]);
+//            $stmt = $pdo->prepare("
+//                DELETE FROM readings 
+//                WHERE config_id = ? 
+//                 AND reading_timestamp < NOW() - INTERVAL ? DAY
+//            ");
+//            $stmt->execute([$configId, $daysToKeep10]);
+//            
+//            // ispindel_readings
+//            $stmt = $pdo->prepare("
+//                DELETE FROM ispindel_readings 
+//                WHERE config_id = ? 
+//                  AND reading_timestamp < NOW() - INTERVAL ? DAY
+//            ");
+//            $stmt->execute([$configId, $daysToKeep10]);
+//            
+//            // controller_states
+//            $stmt = $pdo->prepare("
+//                DELETE FROM controller_states 
+//                    WHERE config_id = ? 
+//                  AND state_timestamp < NOW() - INTERVAL ? DAY
+//            ");
+//            $stmt->execute([$configId, $daysToKeep10]);
             
-            // ispindel_readings
-            $stmt = $pdo->prepare("
-                DELETE FROM ispindel_readings 
-                WHERE config_id = ? 
-                  AND reading_timestamp < NOW() - INTERVAL ? DAY
-            ");
-            $stmt->execute([$configId, $daysToKeep10]);
-            
-            // controller_states
-            $stmt = $pdo->prepare("
-                DELETE FROM controller_states 
-                WHERE config_id = ? 
-                  AND state_timestamp < NOW() - INTERVAL ? DAY
-            ");
-            $stmt->execute([$configId, $daysToKeep10]);
-            
-            // fermentation_states
-            $stmt = $pdo->prepare("
-                DELETE FROM fermentation_states 
-                WHERE config_id = ? 
-                  AND state_timestamp < NOW() - INTERVAL ? DAY
-            ");
-            $stmt->execute([$configId, $daysToKeep30]);
+//            // fermentation_states
+//            $stmt = $pdo->prepare("
+//                DELETE FROM fermentation_states 
+//                WHERE config_id = ? 
+//                  AND state_timestamp < NOW() - INTERVAL ? DAY
+//            ");
+//            $stmt->execute([$configId, $daysToKeep30]);
 
             
         } elseif ($status === 'paused') {
@@ -491,7 +507,10 @@ if ($path === 'state/complete' && $method === 'GET') {
             $now = new DateTime();
             $diff = $now->getTimestamp() - $lastSeen->getTimestamp();
             $isOnline = $diff < 120; // Online se < 2 minutos
+        if (isset($heartbeat['control_status']) && is_string($heartbeat['control_status'])) {
+            $heartbeat['control_status'] = json_decode($heartbeat['control_status'], true);
         }
+    }
     } catch (PDOException $e) {
         error_log("Error fetching heartbeat: " . $e->getMessage());
     }
