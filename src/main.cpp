@@ -1,6 +1,6 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "3.0.0-BREWPI"
+#define FIRMWARE_VERSION "3.0.1-BREWPI"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -61,7 +61,8 @@ const unsigned long SENSOR_CHECK_INTERVAL = 30000;   // 30 segundos
 void setupNTP() {
     Serial.println(F("[NTP] Configurando sincronização de tempo (UTC)..."));
 
-    configTime(-3 * 3600, 0, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
+    // ✅ UTC PURO (sem deslocamento de timezone)
+    configTime(0, 0, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
 
     Serial.print(F("[NTP] Aguardando sincronização"));
     int timeout = 0;
@@ -83,6 +84,11 @@ void setupNTP() {
         char buffer[64];
         strftime(buffer, sizeof(buffer), "%d/%m/%Y %H:%M:%S UTC", &timeinfo);
         Serial.printf("[NTP] Data/Hora UTC: %s\n", buffer);
+        
+        // Mostra também horário local de Brasília (informativo)
+        localtime_r(&now, &timeinfo);
+        strftime(buffer, sizeof(buffer), "%d/%m/%Y %H:%M:%S", &timeinfo);
+        Serial.printf("[NTP] Horário Brasília: %s (UTC-3)\n", buffer);
     } else {
         Serial.println(F("[NTP] ⚠️ Falha na sincronização"));
     }
