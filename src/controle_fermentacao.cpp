@@ -1001,7 +1001,12 @@ void enviarEstadoCompleto() {
         controlStatus["estimated_peak"] = detailedStatus.estimatedPeak;
     }
     
-    doc["timestamp"] = millis();
+    // ✅ CORREÇÃO: Usa timestamp Unix real (não uptime)
+    time_t now = getCurrentEpoch();
+    if (now > 0) {
+        doc["timestamp"] = now;  // Unix timestamp em segundos
+    }
+    doc["uptime_ms"] = millis();  // Uptime separado para debug
     
     String payload;
     serializeJson(doc, payload);
