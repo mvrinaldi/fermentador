@@ -1,4 +1,4 @@
-// controle_fermentacao.cpp
+// controle_fermentacao.cpp - Reescrito para integração BrewPi
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
@@ -9,11 +9,12 @@
 #include "estruturas.h"
 #include "globais.h"
 #include "http_client.h"
+#include "BrewPiStructs.h"
+#include "BrewPiTempControl.h"
 #include "controle_fermentacao.h"
 #include "eeprom_layout.h"
 #include "fermentacao_stages.h"
 #include "gerenciador_sensores.h"
-#include "controle_temperatura.h"
 
 extern FermentadorHTTPClient httpClient;
 
@@ -186,21 +187,39 @@ void clearEEPROM() {
 }
 
 // =====================================================
+// CONTROLE DE TEMPERATURA - INTEGRAÇÃO BREWPI
+// =====================================================
+
+void updateTargetTemperature(float newTemp) {
+    // Converte float para fixed-point BrewPi
+    temperature temp = floatToTemp(newTemp);
+    brewPiControl.setBeerTemp(temp);
+    
+    // Atualiza estado global (compatibilidade)
+    fermentacaoState.tempTarget = newTemp;
+    state.targetTemp = newTemp;
+    
+    Serial.printf("[BrewPi] 🎯 Novo alvo: %.2f°C\n", newTemp);
+}
+
+float getCurrentBeerTemp() {
+    temperature temp = brewPiControl.getBeerTemp();
+    float tempFloat = tempToFloat(temp);
+    
+    // Atualiza estado global (compatibilidade)
+    state.currentTemp = tempFloat;
+    
+    return tempFloat;
+}
+
+void resetPIDState() {
+    brewPiControl.reset();
+    Serial.println(F("[BrewPi] ✅ Estado do controle resetado"));
+}
+
+// =====================================================
 // CONTROLE DE ESTADO
 // =====================================================
-void updateTargetTemperature(float temp) {
-    if (temp < MIN_SAFE_TEMPERATURE) {
-        temp = MIN_SAFE_TEMPERATURE;
-        Serial.printf("[Segurança] ⚠️ Temperatura limitada para mínimo seguro: %.1f°C\n", temp);
-    }
-    if (temp > MAX_SAFE_TEMPERATURE) {
-        temp = MAX_SAFE_TEMPERATURE;
-        Serial.printf("[Segurança] ⚠️ Temperatura limitada para máximo seguro: %.1f°C\n", temp);
-    }
-    
-    fermentacaoState.tempTarget = temp;
-    state.targetTemp = temp;
-}
 
 void concluirFermentacaoMantendoTemperatura() {
     Serial.println(F("[Fase] ✅ Fermentação concluída - mantendo temperatura atual"));
@@ -229,7 +248,8 @@ void concluirFermentacaoMantendoTemperatura() {
 void deactivateCurrentFermentation() {
     Serial.println(F("[MySQL] 🧹 Desativando fermentação"));
 
-    resetPIDState();
+    // Reset do controle BrewPi
+    brewPiControl.reset();
     
     fermentacaoState.activeId[0] = '\0';
     lastActiveId[0] = '\0';
@@ -246,15 +266,16 @@ void deactivateCurrentFermentation() {
     clearEEPROM();
     saveStateToEEPROM();
     
-    Serial.println(F("[PID] ✅ Estado do PID resetado na desativação"));
+    Serial.println(F("[BrewPi] ✅ Sistema resetado na desativação"));
 }
 
 void setupActiveListener() {
     Serial.println(F("[MySQL] Sistema inicializado"));
     loadStateFromEEPROM();
     
-    resetPIDState();
-    Serial.println(F("[PID] ✅ Estado do PID resetado na inicialização do sistema"));
+    // Reset do controle BrewPi na inicialização
+    brewPiControl.reset();
+    Serial.println(F("[BrewPi] ✅ Sistema resetado na inicialização"));
 }
 
 // =====================================================
@@ -369,8 +390,9 @@ void getTargetFermentacao() {
             Serial.printf("     Novo:     '%s'\n", id);
             Serial.println(F("  → INICIANDO NOVA FERMENTAÇÃO"));
 
-            resetPIDState();
-            Serial.println(F("[PID] ✅ Estado do PID resetado para nova fermentação"));
+            // Reset completo do BrewPi
+            brewPiControl.reset();
+            Serial.println(F("[BrewPi] ✅ Sistema resetado para nova fermentação"));
             
             fermentacaoState.active = true;
             fermentacaoState.concluidaMantendoTemp = false;
@@ -395,20 +417,18 @@ void getTargetFermentacao() {
             Serial.println(F("  → MESMO ID do último conhecido"));
             Serial.println(F("  → Fermentação já configurada"));
             
-    if (currentStageIndex != fermentacaoState.currentStageIndex) {
-        Serial.printf("  → Etapa mudou EXTERNAMENTE: %d -> %d\n", 
-                    fermentacaoState.currentStageIndex, currentStageIndex);
-        
-        // ✅ CORREÇÃO: Só reseta se mudança veio do SERVIDOR
-        // (mudanças internas são processadas em verificarTrocaDeFase)
-        fermentacaoState.currentStageIndex = currentStageIndex;
-        stageStarted = false;
-        fermentacaoState.stageStartEpoch = 0;
-        fermentacaoState.targetReachedSent = false;
+            if (currentStageIndex != fermentacaoState.currentStageIndex) {
+                Serial.printf("  → Etapa mudou EXTERNAMENTE: %d -> %d\n", 
+                            fermentacaoState.currentStageIndex, currentStageIndex);
                 
-        resetPIDState();
-        saveStateToEEPROM();
-    }
+                fermentacaoState.currentStageIndex = currentStageIndex;
+                stageStarted = false;
+                fermentacaoState.stageStartEpoch = 0;
+                fermentacaoState.targetReachedSent = false;
+                        
+                brewPiControl.reset();
+                saveStateToEEPROM();
+            }
         }
     } else if (fermentacaoState.active && !active) {
         if (fermentacaoState.concluidaMantendoTemp) {
@@ -424,8 +444,8 @@ void getTargetFermentacao() {
         Serial.println(F("  → Sistema em STANDBY"));
         
         if (state.targetTemp == DEFAULT_TEMPERATURE) {
-            resetPIDState();
-            Serial.println(F("[PID] ✅ Estado do PID resetado em modo standby"));
+            brewPiControl.reset();
+            Serial.println(F("[BrewPi] ✅ Sistema resetado em modo standby"));
         }
     } else if (!active && fermentacaoState.active) {
         Serial.println(F("  → Servidor offline mas temos estado local"));
@@ -517,7 +537,7 @@ void loadConfigParameters(const char* configId) {
 void verificarTrocaDeFase() {
     if (!fermentacaoState.active) return;
     
-    // ✅ DEBUG TEMPORÁRIO (remover depois)
+    // Debug periódico
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > 30000) {
         lastDebug = millis();
@@ -564,30 +584,27 @@ void verificarTrocaDeFase() {
     // ✅ INÍCIO DE NOVA ETAPA
     // =====================================================
     if (!stageStarted) {
-        // ✅ 1. Marca como iniciada
         stageStarted = true;
         fermentacaoState.targetReachedSent = false;
-        fermentacaoState.stageStartEpoch = 0;  // Aguardando temperatura alvo
+        fermentacaoState.stageStartEpoch = 0;
         
-        // ✅ 2. Reset do PID (IMPORTANTE!)
-        resetPIDState();
-        Serial.println(F("[PID] ✅ Estado do PID resetado para nova etapa"));
+        // Reset do BrewPi para nova etapa
+        brewPiControl.reset();
+        Serial.println(F("[BrewPi] ✅ Sistema resetado para nova etapa"));
         
-        // ✅ 3. Determina temperatura alvo (IMPORTANTE para STAGE_RAMP!)
+        // Determina temperatura alvo
         float newTargetTemp;
         if (stage.type == STAGE_RAMP) {
-            newTargetTemp = stage.startTemp;  // ← Rampa começa da startTemp!
+            newTargetTemp = stage.startTemp;
         } else {
             newTargetTemp = stage.targetTemp;
         }
         
-        // ✅ 4. Define temperatura (SEM criar rampa_suave)
+        // Define temperatura no BrewPi
         updateTargetTemperature(newTargetTemp);
         
-        // ✅ 5. Salva no EEPROM
         saveStateToEEPROM();
         
-        // ✅ 6. Log informativo
         Serial.printf("[Fase] ▶️  Etapa %d/%d iniciada - Alvo: %.1f°C (tipo: ", 
                     fermentacaoState.currentStageIndex + 1,
                     fermentacaoState.totalStages,
@@ -618,27 +635,28 @@ void verificarTrocaDeFase() {
                             stage.type == STAGE_GRAVITY_TIME);
 
     if (needsTemperature) {
+        // Usa temperatura lida do BrewPi
+        float currentTemp = getCurrentBeerTemp();
         float stageTargetTemp = stage.targetTemp;
-        float diff = abs(state.currentTemp - stageTargetTemp);
+        float diff = abs(currentTemp - stageTargetTemp);
         targetReached = (diff <= TEMPERATURE_TOLERANCE);
         
-        // ✅ CORREÇÃO 2: Verificar se temperatura está atualizada
+        // Verifica se temperatura está atualizada
         unsigned long now = millis();
         unsigned long timeSinceUpdate = now - state.lastTempUpdate;
         
-        // Se não atualizou há mais de 30s, sensor pode estar travado
         if (timeSinceUpdate > 30000) {
             Serial.printf("[Fase] ⚠️  Temperatura não atualizada há %lus, aguardando sensor...\n", 
                          timeSinceUpdate / 1000);
-            targetReached = false;  // Força aguardar leitura válida
+            targetReached = false;
         }
         
-        // Debug periódico (apenas quando aguardando alvo)
-        static unsigned long lastDebug = 0;
-        if (now - lastDebug > 60000 && !fermentacaoState.targetReachedSent) {
-            lastDebug = now;
+        // Debug periódico
+        static unsigned long lastDebug2 = 0;
+        if (now - lastDebug2 > 60000 && !fermentacaoState.targetReachedSent) {
+            lastDebug2 = now;
             Serial.printf("[Fase] Aguardando alvo: Temp=%.1f°C, Alvo=%.1f°C, Diff=%.1f°C, ",
-                         state.currentTemp, stageTargetTemp, diff);
+                         currentTemp, stageTargetTemp, diff);
             Serial.printf("Atingiu=%s, UltimaAtualização=%lus atrás\n",
                          targetReached ? "SIM" : "NÃO", timeSinceUpdate / 1000);
         }
@@ -655,7 +673,6 @@ void verificarTrocaDeFase() {
         }
     } 
     else if (stage.type == STAGE_RAMP) {
-        // Para rampas, targetReached é sempre true
         targetReached = true;
         
         if (fermentacaoState.stageStartEpoch == 0) {
@@ -670,16 +687,15 @@ void verificarTrocaDeFase() {
     // =====================================================
     float elapsedH = 0;
     
-    // Só calcula tempo decorrido se a contagem foi iniciada
     if (fermentacaoState.stageStartEpoch > 0) {
         elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
-        if (elapsedH < 0) elapsedH = 0; // Proteção contra tempo negativo
+        if (elapsedH < 0) elapsedH = 0;
     }
     
     // Debug periódico
-    static unsigned long lastDebug2 = 0;
-    if (millis() - lastDebug2 > 300000) {
-        lastDebug2 = millis();
+    static unsigned long lastDebug3 = 0;
+    if (millis() - lastDebug3 > 300000) {
+        lastDebug3 = millis();
         
         Serial.printf("[Fase] Etapa %d/%d: ", 
                      fermentacaoState.currentStageIndex + 1,
@@ -709,7 +725,6 @@ void verificarTrocaDeFase() {
     // CONTROLE DE RAMPA
     // =====================================================
     if (stage.type == STAGE_RAMP) {
-        // Para rampas, progresso é baseado no tempo desde stageStartEpoch
         float progress = elapsedH / stage.rampTimeHours;
         if (progress < 0) progress = 0;
         if (progress > 1) progress = 1;
@@ -732,12 +747,7 @@ void verificarTrocaDeFase() {
 
     switch (stage.type) {
         case STAGE_TEMPERATURE:
-            // ✅ CORREÇÃO: Só considera concluída se:
-            // 1. Temperatura foi atingida (targetReached)
-            // 2. Contagem foi iniciada (stageStartEpoch > 0)
-            // 3. Tempo de hold passou
             if (targetReached && fermentacaoState.stageStartEpoch > 0) {
-                // Verifica se já passou o tempo necessário
                 if (elapsedH >= stage.holdTimeHours) {
                     stageCompleted = true;
                 }
@@ -745,7 +755,6 @@ void verificarTrocaDeFase() {
             break;
 
         case STAGE_RAMP:
-            // Para rampas, verifica se passou o tempo da rampa
             if (fermentacaoState.stageStartEpoch > 0 && 
                 elapsedH >= stage.rampTimeHours) {
                 stageCompleted = true;
@@ -760,7 +769,6 @@ void verificarTrocaDeFase() {
 
         case STAGE_GRAVITY_TIME:
             if (targetReached) {
-                // Só verifica tempo se a contagem foi iniciada
                 bool timeoutReached = (fermentacaoState.stageStartEpoch > 0 && 
                                       elapsedH >= stage.maxTimeHours);
                 if (mySpindel.gravity <= stage.targetGravity || timeoutReached) {
@@ -785,8 +793,6 @@ void verificarTrocaDeFase() {
         fermentacaoState.targetReachedSent = false;
 
         if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
-            FermentationStage& next = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-                                                
             saveStateToEEPROM();
             
             Serial.printf("[Fase] ↪️  Indo para etapa %d/%d\n", 
@@ -800,10 +806,19 @@ void verificarTrocaDeFase() {
     }
 }
 
+// =====================================================
+// STATUS DETALHADO - USANDO BREWPI
+// =====================================================
+
+DetailedControlStatus getDetailedStatus() {
+    return brewPiControl.getDetailedStatus();
+}
+
 void verificarTargetAtingido() {
     if (!fermentacaoState.active || fermentacaoState.targetReachedSent) return;
 
-    float diff = abs(state.currentTemp - fermentacaoState.tempTarget);
+    float currentTemp = getCurrentBeerTemp();
+    float diff = abs(currentTemp - fermentacaoState.tempTarget);
 
     if (diff <= TEMPERATURE_TOLERANCE) {
         if (httpClient.notifyTargetReached(fermentacaoState.activeId)) {
@@ -816,7 +831,7 @@ void verificarTargetAtingido() {
 }
 
 // =====================================================
-// ✅ CORREÇÃO: ENVIAR ESTADO COMPLETO
+// ✅ ENVIAR ESTADO COMPLETO
 // =====================================================
 void enviarEstadoCompleto() {
     if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
@@ -848,23 +863,17 @@ void enviarEstadoCompleto() {
     }
 
     doc["config_name"] = fermentacaoState.configName;
-
     doc["currentStageIndex"] = fermentacaoState.currentStageIndex;
     doc["totalStages"] = fermentacaoState.totalStages;
 
-    // ✅ CORREÇÃO: Enviar AMBAS as temperaturas
-    // Temperatura alvo da ETAPA (configurada pelo usuário)
+    // Temperatura alvo da ETAPA vs temperatura PID
     if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
         FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-        doc["stageTargetTemp"] = stage.targetTemp;  // ← NOVO: Temperatura da etapa (destino)
+        doc["stageTargetTemp"] = stage.targetTemp;
     }
 
-    // Temperatura alvo do PID (pode variar durante rampa)
-    doc["pidTargetTemp"] = fermentacaoState.tempTarget;  // ← NOVO: Temperatura PID (atual)
-
-    // ⚠️ MANTÉM POR COMPATIBILIDADE (mas agora é a do PID, não da etapa)
+    doc["pidTargetTemp"] = fermentacaoState.tempTarget;
     doc["currentTargetTemp"] = fermentacaoState.tempTarget;
-
     doc["targetReached"] = fermentacaoState.targetReachedSent;
     
     // Cálculo do tempo restante
@@ -876,10 +885,8 @@ void enviarEstadoCompleto() {
         if (nowEpoch > 0) {
             FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
             
-            // ✅ Para TEMPERATURE: só calcula SE temperatura foi atingida
             if (stage.type == STAGE_TEMPERATURE) {
                 if (fermentacaoState.targetReachedSent) {
-                    // Temperatura atingida, calcula tempo restante
                     float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
                     
                     JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
@@ -895,14 +902,12 @@ void enviarEstadoCompleto() {
                     }
                     timeRemaining["status"] = "running";
                 } else {
-                    // Ainda não atingiu temperatura, mostra duração total
                     JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
                     timeRemaining["value"] = stage.durationDays;
                     timeRemaining["unit"] = "days";
                     timeRemaining["status"] = "waiting";
                 }
             }
-            // Para RAMP
             else if (stage.type == STAGE_RAMP) {
                 float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
                 
@@ -919,7 +924,6 @@ void enviarEstadoCompleto() {
                 }
                 timeRemaining["status"] = "running";
             }
-            // Para GRAVITY_TIME
             else if (stage.type == STAGE_GRAVITY_TIME) {
                 if (fermentacaoState.targetReachedSent) {
                     float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
@@ -938,7 +942,6 @@ void enviarEstadoCompleto() {
                     timeRemaining["status"] = "waiting";
                 }
             }
-            // Para GRAVITY
             else if (stage.type == STAGE_GRAVITY) {
                 JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
                 timeRemaining["value"] = 0;
@@ -946,7 +949,6 @@ void enviarEstadoCompleto() {
                 timeRemaining["status"] = "waiting_gravity";
             }
             
-            // Progresso da rampa (se aplicável)
             if (stage.type == STAGE_RAMP) {
                 float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
                 float progress = elapsedH / stage.rampTimeHours;
@@ -958,14 +960,12 @@ void enviarEstadoCompleto() {
         }
     }
     
-    // Obter status detalhado do controle
-    DetailedControlStatus detailedStatus = getDetailedStatus();
+    // Status detalhado do BrewPi
+    DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus();
     
-    // Mantém compatibilidade com código antigo
     doc["cooling"] = detailedStatus.coolerActive;
     doc["heating"] = detailedStatus.heaterActive;
     
-    // Adiciona objeto com status detalhado
     JsonObject controlStatus = doc["control_status"].to<JsonObject>();
     controlStatus["state"] = detailedStatus.stateName;
     controlStatus["is_waiting"] = detailedStatus.isWaiting;
@@ -975,7 +975,6 @@ void enviarEstadoCompleto() {
             controlStatus["wait_seconds"] = detailedStatus.waitTimeRemaining;
             controlStatus["wait_reason"] = detailedStatus.waitReason;
             
-            // Formato amigável para exibição
             String waitDisplay;
             if (detailedStatus.waitTimeRemaining < 60) {
                 waitDisplay = String(detailedStatus.waitTimeRemaining) + "s";
@@ -992,13 +991,11 @@ void enviarEstadoCompleto() {
             }
             controlStatus["wait_display"] = waitDisplay;
         } else {
-            // Espera sem tempo definido (ex: peak detection)
             controlStatus["wait_reason"] = detailedStatus.waitReason;
             controlStatus["wait_display"] = "aguardando";
         }
     }
     
-    // Informação adicional para debug
     if (detailedStatus.peakDetection) {
         controlStatus["peak_detection"] = true;
         controlStatus["estimated_peak"] = detailedStatus.estimatedPeak;

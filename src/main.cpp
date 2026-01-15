@@ -1,6 +1,6 @@
-// main.cpp - Fermentador com MySQL
+// main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "1.0.2"
+#define FIRMWARE_VERSION "3.0.0-BREWPI"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -10,7 +10,7 @@
 #include <EEPROM.h>
 
 #include <time.h>
-#include <TZ.h>  // Para fusos horários
+#include <TZ.h>
 
 // Configuração NTP
 #define NTP_SERVER1 "pool.ntp.org"
@@ -18,7 +18,7 @@
 #define NTP_SERVER3 "time.google.com"
 
 // Fuso horário do Brasil (Brasília UTC-3)
-#define TZ_STRING "BRST3BRDT,M10.3.0/0,M2.3.0/0"  // UTC-3 com horário de verão
+#define TZ_STRING "BRST3BRDT,M10.3.0/0,M2.3.0/0"
 
 #include "secrets.h"
 #include "globais.h"
@@ -28,12 +28,18 @@
 #include "ispindel_handler.h"
 #include "ispindel_envio.h"
 #include "controle_fermentacao.h"
-#include "controle_temperatura.h"
+#include "BrewPiStructs.h"
+#include "BrewPiTicks.h"
+#include "TempSensor.h"
+#include "BrewPiTempControl.h"
 #include "ota.h"
 #include "wifi_manager.h"
 #include "network_manager.h"
 #include "eeprom_utils.h"
 #include "http_commands.h"
+
+// Declaração da função do controle_fermentacao.cpp
+DetailedControlStatus getDetailedStatus();
 
 ESP8266WebServer server(80);
 
@@ -55,7 +61,6 @@ const unsigned long SENSOR_CHECK_INTERVAL = 30000;   // 30 segundos
 void setupNTP() {
     Serial.println(F("[NTP] Configurando sincronização de tempo (UTC)..."));
 
-    // UTC puro
     configTime(-3 * 3600, 0, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
 
     Serial.print(F("[NTP] Aguardando sincronização"));
@@ -105,12 +110,11 @@ void sendHeartbeat() {
     static unsigned long lastHeartbeat = 0;
     unsigned long now = millis();
     
-    // Envia heartbeat a cada 30 segundos (ou quando há fermentação ativa)
     if (now - lastHeartbeat >= 30000) {
         lastHeartbeat = now;
         
         if (!isHTTPOnline() || !fermentacaoState.active) {
-            return; // Não envia se offline ou sem fermentação
+            return;
         }
         
         HTTPClient http;
@@ -121,25 +125,21 @@ void sendHeartbeat() {
         http.begin(client, url);
         http.addHeader("Content-Type", "application/json");
         
-        // Prepara dados do heartbeat
         JsonDocument doc;
         doc["config_id"] = fermentacaoState.activeId;
         doc["status"] = "online";
         doc["uptime_seconds"] = millis() / 1000;
         
-        // Adiciona temperaturas atuais (se disponíveis)
         float tempFermenter, tempFridge;
         if (readConfiguredTemperatures(tempFermenter, tempFridge)) {
             doc["temp_fermenter"] = tempFermenter;
             doc["temp_fridge"] = tempFridge;
         }
         
-        // Adiciona estado dos relés
         doc["cooler_active"] = cooler.estado;
         doc["heater_active"] = heater.estado;
         
-        // Adiciona status detalhado do controle
-        DetailedControlStatus detailedStatus = getDetailedStatus();
+        DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus();
         
         JsonObject controlStatus = doc["control_status"].to<JsonObject>();
         controlStatus["state"] = detailedStatus.stateName;
@@ -149,6 +149,7 @@ void sendHeartbeat() {
             controlStatus["wait_seconds"] = detailedStatus.waitTimeRemaining;
             controlStatus["wait_reason"] = detailedStatus.waitReason;
         }
+        
         String json;
         serializeJson(doc, json);
         
@@ -158,7 +159,7 @@ void sendHeartbeat() {
             // Heartbeat enviado com sucesso (silencioso)
         } else {
             static unsigned long lastError = 0;
-            if (now - lastError >= 300000) { // Log erro a cada 5 min
+            if (now - lastError >= 300000) {
                 Serial.printf("[HEARTBEAT] Erro HTTP: %d\n", httpCode);
                 lastError = now;
             }
@@ -168,15 +169,19 @@ void sendHeartbeat() {
     }
 }
 
+// ============================================
+// SETUP - INTEGRAÇÃO BREWPI
+// ============================================
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
     
-    // ✅ MOSTRAR INFORMAÇÕES DO FIRMWARE
+    // ✅ INFORMAÇÕES DO FIRMWARE
     Serial.println("\n\n");
     Serial.println("╔════════════════════════════════════════════════╗");
     Serial.println("║                                                ║");
-    Serial.println("║     🚀 FERMENTADOR INTELIGENTE - ESP8266     ║");
+    Serial.println("║     🚀 FERMENTADOR INTELIGENTE - BREWPI      ║");
     Serial.println("║                                                ║");
     Serial.println("╚════════════════════════════════════════════════╝");
     Serial.println("");
@@ -237,15 +242,38 @@ void setup() {
     Serial.printf("   • Heater: Pino %d (%s)\n",
                   heater.pino, heater.invertido ? "invertido" : "normal");
     
-    // ✅ 1. INICIALIZAÇÃO BÁSICA DOS SENSORES
+    // ✅ 1. INICIALIZAÇÃO DOS SENSORES DALLAS
+    Serial.println("\n🌡️  Inicializando sensores de temperatura...");
     setupSensorManager();
-    Serial.println("✅ Sensores inicializados");
+    Serial.println("✅ Sensores Dallas inicializados");
     
-    // ✅ 2. CARREGAR ESTADO SALVO (ANTES de qualquer conexão de rede)
-    // Isso garante que temos um estado válido mesmo sem WiFi
+    // ✅ 2. INICIALIZAR BREWPI COM SENSORES
+    Serial.println("\n🍺 Inicializando sistema BrewPi...");
+    
+    // Obter referência aos sensores Dallas
+    DallasTemperature* dallasPtr = getSensorsPointer();
+    
+    if (dallasPtr) {
+        // Configurar sensores no BrewPi (índices 0 e 1)
+        brewPiControl.setSensors(dallasPtr, 0, 1);
+        
+        // Configurar atuadores (relés)
+        brewPiControl.setActuators(&cooler, &heater);
+        
+        // Inicializar controle
+        brewPiControl.init();
+        
+        Serial.println("✅ Sistema BrewPi inicializado");
+    } else {
+        Serial.println("❌ ERRO: Não foi possível obter ponteiro dos sensores Dallas!");
+        Serial.println("⚠️  Sistema continuará mas controle pode não funcionar corretamente");
+    }
+    
+    // ✅ 3. CARREGAR ESTADO SALVO (ANTES de qualquer conexão de rede)
+    Serial.println("\n💾 Carregando estado salvo...");
     setupActiveListener();
     
-    // ✅ 3. CONFIGURAÇÃO DE REDE
+    // ✅ 4. CONFIGURAÇÃO DE REDE
     Serial.println("\n📡 Conectando à rede...");
     networkSetup(server);
     
@@ -254,19 +282,17 @@ void setup() {
         setupNTP();
     }
     
-    // ✅ 4. SINCRONIZAR COM SERVIDOR (se online)
+    // ✅ 5. SINCRONIZAR COM SERVIDOR (se online)
     if (isHTTPOnline()) {
         Serial.println(F("\n📡 Enviando sensores detectados ao servidor..."));
         scanAndSendSensors();
         
-        // Buscar sensores configurados do servidor
         Serial.println(F("\n📥 Buscando configuração de sensores do servidor..."));
         String fermenterAddr, fridgeAddr;
         
         if (httpClient.getAssignedSensors(fermenterAddr, fridgeAddr)) {
             bool updated = false;
             
-            // Salva fermentador na EEPROM
             if (!fermenterAddr.isEmpty()) {
                 if (saveSensorToEEPROM(SENSOR1_NOME, fermenterAddr)) {
                     Serial.println(F("✅ Sensor fermentador salvo na EEPROM"));
@@ -274,7 +300,6 @@ void setup() {
                 }
             }
             
-            // Salva geladeira na EEPROM
             if (!fridgeAddr.isEmpty()) {
                 if (saveSensorToEEPROM(SENSOR2_NOME, fridgeAddr)) {
                     Serial.println(F("✅ Sensor geladeira salvo na EEPROM"));
@@ -284,23 +309,27 @@ void setup() {
             
             if (updated) {
                 Serial.println(F("✅ Sensores sincronizados do servidor!"));
-                
-                // ✅ RECARREGAR SENSORES após atualização
                 setupSensorManager();
+                
+                // Reconfigura BrewPi com novos sensores
+                DallasTemperature* dallasPtr = getSensorsPointer();
+                if (dallasPtr) {
+                    brewPiControl.setSensors(dallasPtr, 0, 1);
+                    Serial.println(F("✅ Sensores BrewPi atualizados"));
+                }
             }
         } else {
             Serial.println(F("⚠️ Nenhum sensor configurado no servidor"));
         }
         
-        // ✅ 5. VERIFICAR FERMENTAÇÃO ATIVA NO SERVIDOR
-        // Se acabamos de carregar um estado local, verificar se ainda está válido
+        // ✅ 6. VERIFICAR FERMENTAÇÃO ATIVA NO SERVIDOR
         if (fermentacaoState.active) {
             Serial.println(F("\n🔍 Verificando se fermentação ainda está ativa no servidor..."));
-            getTargetFermentacao();  // Esta função também reseta o PID se necessário
+            getTargetFermentacao();
         }
     }
     
-    // ✅ 6. LISTAR SENSORES CONFIGURADOS
+    // ✅ 7. LISTAR SENSORES CONFIGURADOS
     auto lista = listSensors();
     if (lista.empty()) {
         Serial.println(F("\n⚠️ Nenhum sensor configurado"));
@@ -312,25 +341,71 @@ void setup() {
         }
     }
 
-    // ✅ 7. WEBSERVER / ISPINDEL / OTA
+    // ✅ 8. WEBSERVER / ISPINDEL / OTA
     setupSpindelRoutes(server);
     
-    // ✅ ENDPOINTS WEB (ANTES de setupOTA)
+    // ✅ ENDPOINTS WEB
     
-    // Endpoint: /version - informações do firmware
+    // Endpoint: /version
     server.on("/version", HTTP_GET, []() {
         String json = "{";
         json += "\"version\":\"" + String(FIRMWARE_VERSION) + "\",";
         json += "\"compiled\":\"" + String(BUILD_DATE) + " " + String(BUILD_TIME) + "\",";
         json += "\"md5\":\"" + ESP.getSketchMD5() + "\",";
         json += "\"size\":" + String(ESP.getSketchSize()) + ",";
-        json += "\"free_ota_space\":" + String(ESP.getFreeSketchSpace());
+        json += "\"free_ota_space\":" + String(ESP.getFreeSketchSpace()) + ",";
+        json += "\"control_system\":\"BrewPi\"";
         json += "}";
         
         server.send(200, "application/json", json);
     });
     
-    // Endpoint: / - página inicial do ESP
+    // Endpoint: /brewpi/status - Status detalhado do BrewPi
+    server.on("/brewpi/status", HTTP_GET, []() {
+        DetailedControlStatus status = brewPiControl.getDetailedStatus();
+        
+        JsonDocument doc;
+        doc["state"] = status.stateName;
+        doc["cooler_active"] = status.coolerActive;
+        doc["heater_active"] = status.heaterActive;
+        doc["is_waiting"] = status.isWaiting;
+        
+        if (status.isWaiting) {
+            doc["wait_seconds"] = status.waitTimeRemaining;
+            doc["wait_reason"] = status.waitReason;
+        }
+        
+        if (status.peakDetection) {
+            doc["peak_detection"] = true;
+            doc["estimated_peak"] = status.estimatedPeak;
+        }
+        
+        // Temperaturas
+        temperature beerTemp = brewPiControl.getBeerTemp();
+        temperature fridgeTemp = brewPiControl.getFridgeTemp();
+        temperature beerSetting = brewPiControl.getBeerSetting();
+        temperature fridgeSetting = brewPiControl.getFridgeSetting();
+        
+        if (beerTemp != INVALID_TEMP) {
+            doc["beer_temp"] = tempToFloat(beerTemp);
+        }
+        if (fridgeTemp != INVALID_TEMP) {
+            doc["fridge_temp"] = tempToFloat(fridgeTemp);
+        }
+        if (beerSetting != INVALID_TEMP) {
+            doc["beer_setting"] = tempToFloat(beerSetting);
+        }
+        if (fridgeSetting != INVALID_TEMP) {
+            doc["fridge_setting"] = tempToFloat(fridgeSetting);
+        }
+        
+        String json;
+        serializeJson(doc, json);
+        
+        server.send(200, "application/json", json);
+    });
+    
+    // Endpoint: / - página inicial
     server.on("/", HTTP_GET, []() {
         String html = R"(
 <!DOCTYPE html>
@@ -338,7 +413,7 @@ void setup() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fermentador ESP8266</title>
+    <title>Fermentador BrewPi</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -400,6 +475,7 @@ void setup() {
             font-size: 16px;
             font-weight: bold;
             transition: background 0.3s;
+            margin-bottom: 10px;
         }
         .btn:hover {
             background: #5568d3;
@@ -413,12 +489,21 @@ void setup() {
             font-size: 12px;
             font-weight: bold;
         }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            background: #f59e0b;
+            color: white;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>🍺 Fermentador ESP8266</h1>
-        <p class="subtitle">Sistema de Controle Inteligente</p>
+        <h1>🍺 Fermentador BrewPi</h1>
+        <p class="subtitle">Sistema de Controle Inteligente <span class="badge">v)" + String(FIRMWARE_VERSION) + R"(</span></p>
         
         <div class="info-box">
             <div class="info-row">
@@ -426,21 +511,25 @@ void setup() {
                 <span class="status">✓ ONLINE</span>
             </div>
             <div class="info-row">
-                <span class="info-label">Versão:</span>
-                <span class="info-value">)" + String(FIRMWARE_VERSION) + R"(</span>
+                <span class="info-label">Controle:</span>
+                <span class="info-value">BrewPi Algorithm</span>
             </div>
             <div class="info-row">
                 <span class="info-label">Compilado:</span>
                 <span class="info-value">)" + String(BUILD_DATE) + R"(</span>
             </div>
             <div class="info-row">
-                <span class="info-label">Endereço IP:</span>
+                <span class="info-label">IP:</span>
                 <span class="info-value">)" + WiFi.localIP().toString() + R"(</span>
             </div>
         </div>
         
         <a href="/update" class="btn">
             🔄 Atualizar Firmware (OTA)
+        </a>
+        
+        <a href="/brewpi/status" class="btn">
+            📊 Status BrewPi (JSON)
         </a>
     </div>
 </body>
@@ -450,35 +539,29 @@ void setup() {
         server.send(200, "text/html", html);
     });
     
-    // ✅ AGORA inicializa OTA (já com timeout configurado internamente)
     setupOTA(server);
     
     server.begin();
     Serial.println("🌐 Servidor Web ativo");
     
-    // ✅ 8. VALIDAÇÃO FINAL DO ESTADO
-    // Garantir temperatura segura se não houver fermentação ativa
+    // ✅ 9. VALIDAÇÃO FINAL DO ESTADO
     if (!fermentacaoState.active) {
-        // Se não há fermentação ativa, garantir temperatura padrão
         if (state.targetTemp != DEFAULT_TEMPERATURE) {
             Serial.printf("[Setup] ⚠️  Ajustando temperatura para padrão: %.1f°C\n", DEFAULT_TEMPERATURE);
             updateTargetTemperature(DEFAULT_TEMPERATURE);
-            resetPIDState();  // Reset adicional por segurança
         }
     } else {
-        // Se há fermentação ativa, validar temperatura
         if (fermentacaoState.tempTarget < MIN_SAFE_TEMPERATURE || 
             fermentacaoState.tempTarget > MAX_SAFE_TEMPERATURE) {
             Serial.printf("[Setup] ⚠️  Temperatura alvo inválida: %.1f°C, ajustando para %.1f°C\n",
                          fermentacaoState.tempTarget, DEFAULT_TEMPERATURE);
             updateTargetTemperature(DEFAULT_TEMPERATURE);
-            resetPIDState();
         }
     }
     
-    // Log inicial
+    // ✅ 10. LOG INICIAL
     Serial.println("\n==============================================");
-    Serial.println("✅ Sistema pronto");
+    Serial.println("✅ Sistema BrewPi pronto");
     Serial.printf("Fermentação ativa: %s\n",
                   fermentacaoState.active ? "SIM" : "NÃO");
                   
@@ -490,7 +573,6 @@ void setup() {
                       fermentacaoState.totalStages);
         Serial.printf("Temp alvo: %.1f°C\n", fermentacaoState.tempTarget);
         
-        // Mostra tempo decorrido se etapa estiver ativa
         if (fermentacaoState.stageStartEpoch > 0) {
             time_t now = time(nullptr);
             if (now > 1000000000L) {
@@ -499,92 +581,79 @@ void setup() {
             }
         }
         
-        // ✅ LOG ESPECÍFICO PARA PID
-        Serial.println("[PID] 🔄 Sistema carregado com fermentação ativa - PID pronto");
+        Serial.println("[BrewPi] 🔄 Sistema carregado com fermentação ativa");
     } else {
         Serial.printf("Temperatura padrão: %.1f°C\n", DEFAULT_TEMPERATURE);
-        Serial.println("[PID] 🛑 Sistema em standby - PID resetado");
+        Serial.println("[BrewPi] 🛑 Sistema em standby");
     }
-    Serial.println("==============================================");
+    Serial.println("==============================================\n");
 }
+
+// ============================================
+// LOOP - INTEGRAÇÃO BREWPI
+// ============================================
 
 void loop() {
     unsigned long now = millis();
     
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // ✅ PRIORIDADE MÁXIMA: OTA EM PROGRESSO
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Se OTA está ativo, IGNORA TUDO e processa SOMENTE servidor web + OTA
-    // Isso garante que o upload HTTP não sofra timeout e chegue a 100%
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     if (isOTAInProgress()) {
-        server.handleClient();  // Processa SOMENTE requisições HTTP do OTA
-        handleOTA();            // Processa SOMENTE a lógica do ElegantOTA
-        yield();                // Permite WiFi processar pacotes
-        return;                 // ← RETORNA IMEDIATAMENTE, não executa resto do loop!
+        server.handleClient();
+        handleOTA();
+        yield();
+        return;
     }
     
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     // Loop normal (quando OTA NÃO está ativo)
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     
-    // ⚠️ PRIMEIRO: Verifica comandos seriais
+    // Comandos seriais
     checkSerialCommands();
     
-    // === Verifica comandos HTTP a cada 10 segundos ===
+    // Comandos HTTP
     static unsigned long lastCommandCheck = 0;
-    if (now - lastCommandCheck >= 10000) {  // 10 segundos
+    if (now - lastCommandCheck >= 10000) {
         lastCommandCheck = now;
         checkPendingCommands();
     }
     
-    // === Network Manager ===
+    // Network Manager
     networkLoop();
     
-    // Envia heartbeat periódico para o site
+    // Heartbeat
     sendHeartbeat();
 
-    // WebServer (OTA + iSpindel)
+    // WebServer
     server.handleClient();
     handleOTA();
     
-    // ⏰ Verifica NTP periodicamente (tenta reconectar se perdeu sync)
+    // NTP
     checkNTPSync();
     
-    // 🔁 Verificação HTTP
-    static unsigned long lastCheck = 0;
-    if (isHTTPOnline() && now - lastCheck >= ACTIVE_CHECK_INTERVAL) {
-        lastCheck = now;
-        getTargetFermentacao();
-        
-        // Verifica se foi pausada/concluída pelo site
-        checkPauseOrComplete();
-    }
-
-    // 🍺 Troca de fase (sempre roda)
-    if (now - lastPhaseCheck >= PHASE_CHECK_INTERVAL) {
-        lastPhaseCheck = now;
-        verificarTrocaDeFase();
-    }
-    
-    // 📡 iSpindel
-    static unsigned long lastSpindel = 0;
-    if (now - lastSpindel >= 10000) {
-        lastSpindel = now;
-        processCloudUpdatesiSpindel();
-    }
-    
-    // 🌡️ Controle de temperatura (CORE DO SISTEMA - sempre roda)
-    if (now - lastTemperatureControl >= TEMPERATURE_CONTROL_INTERVAL) {
+    // ═══════════════════════════════════════════════════════════════
+    // ✅ CONTROLE DE TEMPERATURA BREWPI (NÚCLEO DO SISTEMA)
+    // ═══════════════════════════════════════════════════════════════
+    // Executa a cada 5 segundos (conforme BrewPi original)
+    if (now - lastTemperatureControl >= 5000) {
         lastTemperatureControl = now;
-        controle_temperatura();
         
-        // Envia dados ao MySQL apenas se online
+        // Se há fermentação ativa, executa controle BrewPi
+        if (fermentacaoState.active) {
+            brewPiControl.update();
+            
+            // Atualiza estado global para compatibilidade
+            state.currentTemp = tempToFloat(brewPiControl.getBeerTemp());
+            state.targetTemp = fermentacaoState.tempTarget;
+        }
+        
+        // Envia dados ao MySQL (se online)
         if (isHTTPOnline()) {
             enviarLeiturasSensores();
             verificarTargetAtingido();
             
-            // Envia estado do controlador
             httpClient.updateControlState(
                 fermentacaoState.activeId,
                 state.targetTemp,
@@ -592,12 +661,40 @@ void loop() {
                 heater.estado
             );
 
-            // ENVIA ESTADO COMPLETO A CADA 30s
             enviarEstadoCompleto();
         }
     }
     
-    // ==================== ATUALIZAÇÃO DE TEMPERATURAS PARA PÁGINA SENSORES ====================
+    // ═══════════════════════════════════════════════════════════════
+    // VERIFICAÇÃO DE FERMENTAÇÃO ATIVA
+    // ═══════════════════════════════════════════════════════════════
+    static unsigned long lastCheck = 0;
+    if (isHTTPOnline() && now - lastCheck >= ACTIVE_CHECK_INTERVAL) {
+        lastCheck = now;
+        getTargetFermentacao();
+        checkPauseOrComplete();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // TROCA DE FASE
+    // ═══════════════════════════════════════════════════════════════
+    if (now - lastPhaseCheck >= PHASE_CHECK_INTERVAL) {
+        lastPhaseCheck = now;
+        verificarTrocaDeFase();
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // ISPINDEL
+    // ═══════════════════════════════════════════════════════════════
+    static unsigned long lastSpindel = 0;
+    if (now - lastSpindel >= 10000) {
+        lastSpindel = now;
+        processCloudUpdatesiSpindel();
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // ATUALIZAÇÃO DE TEMPERATURAS (PÁGINA SENSORES)
+    // ═══════════════════════════════════════════════════════════════
     if (now - lastTempUpdate >= TEMP_UPDATE_INTERVAL) {
         float tempFermenter, tempFridge;
         
@@ -616,7 +713,9 @@ void loop() {
         lastTempUpdate = now;
     }
     
-    // ==================== VERIFICAÇÃO PERIÓDICA DE SENSORES ====================
+    // ═══════════════════════════════════════════════════════════════
+    // VERIFICAÇÃO PERIÓDICA DE SENSORES
+    // ═══════════════════════════════════════════════════════════════
     if (now - lastSensorCheck >= SENSOR_CHECK_INTERVAL) {
         auto lista = listSensors();
         
@@ -635,10 +734,16 @@ void loop() {
                     if (!fridgeAddr.isEmpty()) {
                         saveSensorToEEPROM(SENSOR2_NOME, fridgeAddr);
                     }
+                    
+                    // Reconfigura BrewPi
+                    setupSensorManager();
+                    DallasTemperature* dallasPtr = getSensorsPointer();
+                    if (dallasPtr) {
+                        brewPiControl.setSensors(dallasPtr, 0, 1);
+                    }
                 }
             }
         } else {
-            // Mantém o log periódico (importante para monitoramento)
             static unsigned long lastSuccessLog = 0;
             if (now - lastSuccessLog >= 300000) {
                 Serial.printf("✓ %d sensor(es) configurado(s)\n", lista.size());

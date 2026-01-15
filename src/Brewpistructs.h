@@ -192,18 +192,18 @@ const ControlConstants DEFAULT_CONTROL_CONSTANTS = {
     /* tempSettingMin */ intToTemp(1),     // +1°C
     /* tempSettingMax */ intToTemp(30),    // +30°C
     
-    /* Kp */ intToTempDiff(5),             // +5.0
-    /* Ki */ intToTempDiff(1)/4,           // +0.25
-    /* Kd */ intToTempDiff(-3)/2,          // -1.5
-    /* iMaxError */ intToTempDiff(5)/10,   // 0.5°C
+    /* Kp */ intToTempDiff(5),                        // +5.0
+    /* Ki */ (temperature)(intToTempDiff(1)/4),       // +0.25
+    /* Kd */ (temperature)(intToTempDiff(-3)/2),      // -1.5
+    /* iMaxError */ (temperature)(intToTempDiff(5)/10), // 0.5°C
     
     /* idleRangeHigh */ intToTempDiff(1),  // +1.0°C
     /* idleRangeLow */ intToTempDiff(-1),  // -1.0°C
     
-    /* heatingTargetUpper */ intToTempDiff(3)/10,  // +0.3°C
-    /* heatingTargetLower */ intToTempDiff(-2)/10, // -0.2°C
-    /* coolingTargetUpper */ intToTempDiff(2)/10,  // +0.2°C
-    /* coolingTargetLower */ intToTempDiff(-3)/10, // -0.3°C
+    /* heatingTargetUpper */ (temperature)(intToTempDiff(3)/10),  // +0.3°C
+    /* heatingTargetLower */ (temperature)(intToTempDiff(-2)/10), // -0.2°C
+    /* coolingTargetUpper */ (temperature)(intToTempDiff(2)/10),  // +0.2°C
+    /* coolingTargetLower */ (temperature)(intToTempDiff(-3)/10), // -0.3°C
     
     /* maxHeatTimeForEstimate */ 600,
     /* maxCoolTimeForEstimate */ 1200,
@@ -235,7 +235,7 @@ const ControlSettings DEFAULT_CONTROL_SETTINGS = {
     /* mode */ MODE_BEER_CONSTANT,
     /* beerSetting */ intToTemp(20),   // 20°C
     /* fridgeSetting */ intToTemp(20), // 20°C
-    /* heatEstimator */ intToTempDiff(2)/10,  // 0.2°C/h
+    /* heatEstimator */ (temperature)(intToTempDiff(2)/10),  // 0.2°C/h
     /* coolEstimator */ intToTempDiff(5)      // 5.0°C/h
 };
 

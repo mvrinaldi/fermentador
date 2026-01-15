@@ -1,3 +1,4 @@
+//gerenciador_sensores.h
 #pragma once
 
 #include <Arduino.h>
@@ -13,6 +14,9 @@ extern DallasTemperature sensors;
 
 // --- Inicialização ---
 void setupSensorManager();
+
+// --- Acesso ao ponteiro dos sensores (para integração BrewPi) ---
+DallasTemperature* getSensorsPointer();
 
 // --- Scan ---
 void scanAndSendSensors();

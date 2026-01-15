@@ -9,6 +9,20 @@
 extern FermentadorHTTPClient httpClient;
 
 // =================================================
+// ACESSO AO PONTEIRO DOS SENSORES (PARA BREWPI)
+// =================================================
+
+/**
+ * Retorna ponteiro para o objeto DallasTemperature global.
+ * Usado pelo BrewPi para acesso direto aos sensores.
+ * 
+ * @return Ponteiro para objeto sensors
+ */
+DallasTemperature* getSensorsPointer() {
+    return &sensors;
+}
+
+// =================================================
 // MAPEAMENTO DE SENSORES → EEPROM
 // =================================================
 
@@ -38,6 +52,11 @@ String addressToString(DeviceAddress deviceAddress) {
 void setupSensorManager() {
     EEPROM.begin(EEPROM_SIZE);
     Serial.println(F("✅ EEPROM iniciada (Gerenciador de Sensores)"));
+    
+    // Inicializa biblioteca Dallas
+    sensors.begin();
+    int count = sensors.getDeviceCount();
+    Serial.printf("[Sensores] %d dispositivo(s) OneWire detectado(s)\n", count);
     
     #ifdef DEBUG_EEPROM
     printEEPROMLayout();
@@ -326,7 +345,14 @@ bool readConfiguredTemperatures(float& tempFermenter, float& tempFridge) {
         return false;
     }
     
-    Serial.printf("🌡️ Fermentador: %.2f°C | Geladeira: %.2f°C\n", tempFermenter, tempFridge);
+    // Log periódico (a cada 5 minutos) para não poluir o Serial
+    static unsigned long lastLog = 0;
+    unsigned long now = millis();
+    
+    if (now - lastLog >= 300000) {  // 5 minutos
+        lastLog = now;
+        Serial.printf("🌡️ Fermentador: %.2f°C | Geladeira: %.2f°C\n", tempFermenter, tempFridge);
+    }
     
     return true;
 }
