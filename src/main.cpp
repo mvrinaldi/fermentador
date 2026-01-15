@@ -56,7 +56,7 @@ void setupNTP() {
     Serial.println(F("[NTP] Configurando sincronização de tempo (UTC)..."));
 
     // UTC puro
-    configTime(0, 0, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
+    configTime(-3 * 3600, 0, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
 
     Serial.print(F("[NTP] Aguardando sincronização"));
     int timeout = 0;

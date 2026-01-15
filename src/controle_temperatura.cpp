@@ -143,8 +143,8 @@ void loadDefaultBrewPiConstants() {
     cc.iMaxError = 0.5;
     
     // Faixas de operação - significa... quando chegar aqui, para!
-    cc.idleRangeHigh = 0.8; // BrewPi original tinha 1.0 - Claude sugeriu 0.5
-    cc.idleRangeLow = -0.8; // BrewPi original tinha -1.0 - Claude sugeriu -0.5
+    cc.idleRangeHigh = 0.3; // BrewPi original tinha 1.0 - Claude sugeriu 0.5
+    cc.idleRangeLow = -0.3; // BrewPi original tinha -1.0 - Claude sugeriu -0.5
     
     // Alvos de detecção de pico (MAIS TOLERANTES)
     cc.heatingTargetUpper = 0.3;   // ← Era 0.3
@@ -495,7 +495,6 @@ void updateControlState(float setpoint) {
     
     switch (controlState) {
         case STATE_OFF:
-            // Sistema desligado, não faz nada
             lastIdleTime = nowSeconds;
             break;
             
@@ -506,16 +505,13 @@ void updateControlState(float setpoint) {
             lastIdleTime = nowSeconds;
             waitTime = 0;
             
+            // ✅ CORREÇÃO: Compara temperatura da CERVEJA com SETPOINT
+            // (não a temperatura da geladeira com o alvo PID)
+            
             // Temperatura muito alta - precisa resfriar
-            if (fridgeFastFiltered > (fridgeSlowFiltered + cc.idleRangeHigh)) {
+            if (beerFastFiltered > (setpoint + cc.idleRangeHigh)) {
                 updateWaitTime(cc.mutexDeadTime, sinceHeating);
                 updateWaitTime(cc.minCoolIdleTime, sinceCooling);
-                
-                // Verifica se beer já está frio suficiente
-                if (beerFastFiltered < (setpoint + 0.03f)) {
-                    controlState = IDLE;
-                    break;
-                }
                 
                 if (waitTime > 0) {
                     controlState = WAITING_TO_COOL;
@@ -524,15 +520,9 @@ void updateControlState(float setpoint) {
                 }
             }
             // Temperatura muito baixa - precisa aquecer
-            else if (fridgeFastFiltered < (fridgeSlowFiltered + cc.idleRangeLow)) {
+            else if (beerFastFiltered < (setpoint + cc.idleRangeLow)) {
                 updateWaitTime(cc.mutexDeadTime, sinceCooling);
                 updateWaitTime(cc.minHeatIdleTime, sinceHeating);
-                
-                // Verifica se beer já está quente suficiente
-                if (beerFastFiltered > (setpoint - 0.03f)) {
-                    controlState = IDLE;
-                    break;
-                }
                 
                 if (waitTime > 0) {
                     controlState = WAITING_TO_HEAT;
@@ -558,9 +548,9 @@ void updateControlState(float setpoint) {
             updateEstimatedPeak(cc.maxCoolTimeForEstimate, cc.coolEstimator, sinceIdle);
             controlState = COOLING;
             
-            // Para se pico estimado atingir alvo
+            // ✅ Para quando cerveja atingir temperatura (com margem de segurança)
             if (cv.estimatedPeak <= fridgeSlowFiltered ||
-                beerFastFiltered < (setpoint - 0.03f)) {
+                beerFastFiltered < (setpoint - 0.1f)) {  // ← Margem maior para evitar overshooting
                 
                 if (sinceIdle > cc.minCoolTime) {
                     cv.negPeakEstimate = cv.estimatedPeak;
@@ -578,9 +568,9 @@ void updateControlState(float setpoint) {
             updateEstimatedPeak(cc.maxHeatTimeForEstimate, cc.heatEstimator, sinceIdle);
             controlState = HEATING;
             
-            // Para se pico estimado atingir alvo
+            // ✅ Para quando cerveja atingir temperatura
             if (cv.estimatedPeak >= fridgeSlowFiltered ||
-                beerFastFiltered > (setpoint + 0.03f)) {
+                beerFastFiltered > (setpoint + 0.1f)) {
                 
                 if (sinceIdle > cc.minHeatTime) {
                     cv.posPeakEstimate = cv.estimatedPeak;
