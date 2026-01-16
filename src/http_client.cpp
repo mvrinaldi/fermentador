@@ -31,9 +31,9 @@ bool FermentadorHTTPClient::makeRequest(const String& endpoint, const String& me
     // ✅ YIELD 1: Antes de iniciar conexão HTTP
     yield();
     
-    http.begin(wifiClient, url);
+    http.begin(wifiClient, String(SERVER_URL) + "/api.php?path=heartbeat");
     http.addHeader("Content-Type", "application/json");
-    http.setTimeout(10000);  // ✅ Timeout de 10 segundos
+    http.setTimeout(5000);
     
     if (payload.length() > 0) {
         Serial.println(F("[HTTP] Payload:"));

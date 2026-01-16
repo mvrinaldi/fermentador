@@ -7,6 +7,8 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
 #include <EEPROM.h>
 
 #include <time.h>
@@ -43,6 +45,8 @@ DetailedControlStatus getDetailedStatus();
 
 ESP8266WebServer server(80);
 
+WiFiClient wifiClient;
+
 // === Variáveis de Controle de Tempo === //
 unsigned long lastTemperatureControl = 0;
 unsigned long lastPhaseCheck = 0;
@@ -53,6 +57,10 @@ unsigned long lastSensorCheck = 0;
 
 const unsigned long TEMP_UPDATE_INTERVAL = 5000;     // 5 segundos
 const unsigned long SENSOR_CHECK_INTERVAL = 30000;   // 30 segundos
+
+unsigned long lastHeartbeat = 0;
+const unsigned long HEARTBEAT_INTERVAL = 30000; // 30 segundos
+int activeConfigId = 0; // Atualizado quando inicia fermentação
 
 // ============================================
 // FUNÇÃO DE SETUP DO NTP (UTC PURO)
@@ -113,66 +121,160 @@ void checkNTPSync() {
 }
 
 void sendHeartbeat() {
-    static unsigned long lastHeartbeat = 0;
-    unsigned long now = millis();
+    if (!WiFi.isConnected()) {
+        Serial.println("[HEARTBEAT] WiFi desconectado");
+        return;
+    }
     
-    if (now - lastHeartbeat >= 30000) {
-        lastHeartbeat = now;
+    if (activeConfigId <= 0) {
+        Serial.println("[HEARTBEAT] Nenhuma configuração ativa");
+        return;
+    }
+    
+    HTTPClient http;
+    // ✅ CORRETO: adiciona wifiClient como primeiro parâmetro
+    http.begin(wifiClient, String(SERVER_URL) + "/api.php?path=heartbeat");
+    http.addHeader("Content-Type", "application/json");
+    http.setTimeout(5000);
+    
+    // Monta JSON completo
+    JsonDocument doc;
+    
+    doc["config_id"] = activeConfigId;
+    doc["uptime"] = millis() / 1000;
+    doc["free_heap"] = ESP.getFreeHeap();
+    
+    // TEMPERATURAS (do BrewPi)
+    temperature beerTemp = brewPiControl.getBeerTemp();
+    temperature fridgeTemp = brewPiControl.getFridgeTemp();
+    
+    if (beerTemp != INVALID_TEMP) {
+        doc["temp_fermenter"] = tempToFloat(beerTemp);
+    }
+    if (fridgeTemp != INVALID_TEMP) {
+        doc["temp_fridge"] = tempToFloat(fridgeTemp);
+    }
+    
+    // ESTADO DOS RELÉS (leitura direta dos pinos)
+    doc["cooler_active"] = digitalRead(cooler.pino) == (cooler.invertido ? LOW : HIGH) ? 1 : 0;
+    doc["heater_active"] = digitalRead(heater.pino) == (heater.invertido ? LOW : HIGH) ? 1 : 0;
+    
+    // STATUS DO CONTROLE (do BrewPi)
+    DetailedControlStatus status = brewPiControl.getDetailedStatus();
+    
+    JsonObject controlStatus = doc["control_status"].to<JsonObject>();
+    controlStatus["state"] = String(status.stateName);
+    controlStatus["is_waiting"] = status.isWaiting;
+    
+    if (status.isWaiting) {
+        controlStatus["wait_seconds"] = status.waitTimeRemaining;
+        controlStatus["wait_reason"] = String(status.waitReason);
         
-        if (!isHTTPOnline() || !fermentacaoState.active) {
-            return;
+        // Formata tempo de espera
+        unsigned long waitSecs = status.waitTimeRemaining;
+        unsigned long minutes = waitSecs / 60;
+        unsigned long seconds = waitSecs % 60;
+        
+        char waitDisplay[32];
+        if (minutes > 0) {
+            snprintf(waitDisplay, sizeof(waitDisplay), "%lum%lus", minutes, seconds);
+        } else {
+            snprintf(waitDisplay, sizeof(waitDisplay), "%lus", seconds);
         }
-        
-        HTTPClient http;
-        WiFiClient client;
-        
-        String url = String(SERVER_URL) + "/api/esp/heartbeat.php";
-        
-        http.begin(client, url);
-        http.addHeader("Content-Type", "application/json");
+        controlStatus["wait_display"] = String(waitDisplay);
+    }
+    
+    // Detecção de pico
+    if (status.peakDetection) {
+        controlStatus["peak_detection"] = true;
+        controlStatus["estimated_peak"] = status.estimatedPeak;
+    }
+    
+    // Setpoint (temperatura alvo da geladeira calculado pelo PID)
+    temperature fridgeSetting = brewPiControl.getFridgeSetting();
+    if (fridgeSetting != INVALID_TEMP) {
+        controlStatus["setpoint"] = tempToFloat(fridgeSetting);
+    }
+    
+    // Serializa e envia
+    String payload;
+    serializeJson(doc, payload);
+    
+    // Debug local
+    Serial.println("\n[HEARTBEAT] Enviando:");
+    Serial.printf("  Config ID: %d\n", activeConfigId);
+    Serial.printf("  Uptime: %lu s\n", millis() / 1000);
+    Serial.printf("  Free Heap: %u bytes\n", ESP.getFreeHeap());
+    
+    if (beerTemp != INVALID_TEMP) {
+        Serial.printf("  Temp Beer: %.2f°C\n", tempToFloat(beerTemp));
+    }
+    if (fridgeTemp != INVALID_TEMP) {
+        Serial.printf("  Temp Fridge: %.2f°C\n", tempToFloat(fridgeTemp));
+    }
+    
+    Serial.printf("  Cooler: %s\n", doc["cooler_active"].as<int>() ? "ON" : "OFF");
+    Serial.printf("  Heater: %s\n", doc["heater_active"].as<int>() ? "ON" : "OFF");
+    Serial.printf("  State: %s\n", String(status.stateName).c_str());
+    
+    if (status.isWaiting) {
+        Serial.printf("  Waiting: %s (%s)\n", 
+            String(status.waitReason).c_str(),
+            controlStatus["wait_display"].as<const char*>());
+    }
+    
+    // Envia requisição
+    int httpCode = http.POST(payload);
+    
+    if (httpCode > 0) {
+        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
+            Serial.printf("[HEARTBEAT] ✅ Enviado com sucesso (HTTP %d)\n", httpCode);
+            
+            String response = http.getString();
+            Serial.printf("[HEARTBEAT] Resposta: %s\n", response.c_str());
+        } else {
+            Serial.printf("[HEARTBEAT] ⚠️ HTTP %d\n", httpCode);
+            String response = http.getString();
+            Serial.printf("[HEARTBEAT] Resposta: %s\n", response.c_str());
+        }
+    } else {
+        Serial.printf("[HEARTBEAT] ❌ Erro na conexão: %s\n", 
+            http.errorToString(httpCode).c_str());
+    }
+    
+    http.end();
+    
+    // Atualiza último heartbeat
+    lastHeartbeat = millis();
+}
+// ==================== CARREGA CONFIG ATIVA ====================
+
+void loadActiveConfiguration() {
+    HTTPClient http;
+    // ✅ CORRETO: passa WiFiClient como primeiro parâmetro
+    http.begin(wifiClient, String(SERVER_URL) + "/api.php?path=active");
+    http.addHeader("Content-Type", "application/json");
+    
+    int httpCode = http.GET();
+    
+    if (httpCode == HTTP_CODE_OK) {
+        String response = http.getString();
         
         JsonDocument doc;
-        doc["config_id"] = fermentacaoState.activeId;
-        doc["status"] = "online";
-        doc["uptime_seconds"] = millis() / 1000;
+        DeserializationError error = deserializeJson(doc, response);
         
-        float tempFermenter, tempFridge;
-        if (readConfiguredTemperatures(tempFermenter, tempFridge)) {
-            doc["temp_fermenter"] = tempFermenter;
-            doc["temp_fridge"] = tempFridge;
-        }
-        
-        doc["cooler_active"] = cooler.estado;
-        doc["heater_active"] = heater.estado;
-        
-        DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus();
-        
-        JsonObject controlStatus = doc["control_status"].to<JsonObject>();
-        controlStatus["state"] = detailedStatus.stateName;
-        controlStatus["is_waiting"] = detailedStatus.isWaiting;
-        
-        if (detailedStatus.isWaiting && detailedStatus.waitTimeRemaining > 0) {
-            controlStatus["wait_seconds"] = detailedStatus.waitTimeRemaining;
-            controlStatus["wait_reason"] = detailedStatus.waitReason;
-        }
-        
-        String json;
-        serializeJson(doc, json);
-        
-        int httpCode = http.POST(json);
-        
-        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
-            // Heartbeat enviado com sucesso (silencioso)
+        if (!error && doc["active"] == true) {
+            activeConfigId = doc["id"];
+            Serial.printf("[CONFIG] Fermentação ativa: ID %d\n", activeConfigId);
         } else {
-            static unsigned long lastError = 0;
-            if (now - lastError >= 300000) {
-                Serial.printf("[HEARTBEAT] Erro HTTP: %d\n", httpCode);
-                lastError = now;
-            }
+            activeConfigId = 0;
+            Serial.println("[CONFIG] Nenhuma fermentação ativa");
         }
-        
-        http.end();
+    } else {
+        Serial.printf("[CONFIG] Erro HTTP: %d\n", httpCode);
     }
+    
+    http.end();
 }
 
 // ============================================
