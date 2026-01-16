@@ -843,7 +843,7 @@ void enviarEstadoCompleto() {
     
     lastStateSend = now;
     
-    JsonDocument doc;
+    DynamicJsonDocument doc(2048);
     
     doc["config_id"] = fermentacaoState.activeId;
 
@@ -868,22 +868,47 @@ void enviarEstadoCompleto() {
     doc["currentTargetTemp"] = fermentacaoState.tempTarget;
     doc["targetReached"] = fermentacaoState.targetReachedSent;
     
+    // ✅ DEBUG ADICIONADO AQUI
+    Serial.println(F("\n╔══════════════════════════════════════════╗"));
+    Serial.println(F("║  DEBUG enviarEstadoCompleto()            ║"));
+    Serial.println(F("╠══════════════════════════════════════════╣"));
+    Serial.printf("║ stageStartEpoch:      %-18lu ║\n", fermentacaoState.stageStartEpoch);
+    Serial.printf("║ targetReachedSent:    %-18s ║\n", fermentacaoState.targetReachedSent ? "TRUE" : "FALSE");
+    Serial.printf("║ currentStageIndex:    %-18d ║\n", fermentacaoState.currentStageIndex);
+    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
+        Serial.printf("║ Stage type:           %-18d ║\n", fermentacaoState.stages[fermentacaoState.currentStageIndex].type);
+    }
+    Serial.println(F("╚══════════════════════════════════════════╝\n"));
+    
     // Cálculo do tempo restante
     if (fermentacaoState.stageStartEpoch > 0 && 
         fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
+        
+        Serial.println(F("✅ Entrando no bloco de timeRemaining"));
         
         time_t nowEpoch = getCurrentEpoch();
         
         if (nowEpoch > 0) {
             FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
             
+            Serial.printf("   Stage type no IF: %d\n", stage.type);
+            Serial.printf("   STAGE_TEMPERATURE = %d\n", STAGE_TEMPERATURE);
+            Serial.printf("   STAGE_RAMP = %d\n", STAGE_RAMP);
+            Serial.printf("   STAGE_GRAVITY = %d\n", STAGE_GRAVITY);
+            Serial.printf("   STAGE_GRAVITY_TIME = %d\n", STAGE_GRAVITY_TIME);
+            
             if (stage.type == STAGE_TEMPERATURE) {
+                Serial.println(F("   → Entrando em STAGE_TEMPERATURE"));
                 if (fermentacaoState.targetReachedSent) {
+                    Serial.println(F("      → targetReached = TRUE, calculando tempo"));
                     float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
                     
                     JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
                     float remainingH = (stage.holdTimeHours - elapsedH);
                     if (remainingH < 0) remainingH = 0;
+                    
+                    Serial.printf("      elapsedH: %.2f, holdTimeHours: %d, remainingH: %.2f\n", 
+                                 elapsedH, stage.holdTimeHours, remainingH);
                     
                     if (remainingH < 24) {
                         timeRemaining["value"] = remainingH;
@@ -893,14 +918,18 @@ void enviarEstadoCompleto() {
                         timeRemaining["unit"] = "days";
                     }
                     timeRemaining["status"] = "running";
+                    Serial.println(F("      ✅ timeRemaining criado (running)"));
                 } else {
+                    Serial.println(F("      → targetReached = FALSE, aguardando"));
                     JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
                     timeRemaining["value"] = stage.durationDays;
                     timeRemaining["unit"] = "days";
                     timeRemaining["status"] = "waiting";
+                    Serial.println(F("      ✅ timeRemaining criado (waiting)"));
                 }
             }
             else if (stage.type == STAGE_RAMP) {
+                Serial.println(F("   → Entrando em STAGE_RAMP"));
                 float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
                 
                 JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
@@ -915,8 +944,10 @@ void enviarEstadoCompleto() {
                     timeRemaining["unit"] = "days";
                 }
                 timeRemaining["status"] = "running";
+                Serial.println(F("   ✅ timeRemaining criado (RAMP)"));
             }
             else if (stage.type == STAGE_GRAVITY_TIME) {
+                Serial.println(F("   → Entrando em STAGE_GRAVITY_TIME"));
                 if (fermentacaoState.targetReachedSent) {
                     float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
                     
@@ -933,12 +964,18 @@ void enviarEstadoCompleto() {
                     timeRemaining["unit"] = "days";
                     timeRemaining["status"] = "waiting";
                 }
+                Serial.println(F("   ✅ timeRemaining criado (GRAVITY_TIME)"));
             }
             else if (stage.type == STAGE_GRAVITY) {
+                Serial.println(F("   → Entrando em STAGE_GRAVITY"));
                 JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
                 timeRemaining["value"] = 0;
                 timeRemaining["unit"] = "indefinite";
                 timeRemaining["status"] = "waiting_gravity";
+                Serial.println(F("   ✅ timeRemaining criado (GRAVITY)"));
+            }
+            else {
+                Serial.printf("   ❌ TIPO DE ETAPA DESCONHECIDO: %d\n", stage.type);
             }
             
             if (stage.type == STAGE_RAMP) {
@@ -949,7 +986,14 @@ void enviarEstadoCompleto() {
                 
                 doc["rampProgress"] = progress * 100.0;
             }
+        } else {
+            Serial.println(F("   ❌ nowEpoch = 0 (relógio não sincronizado)"));
         }
+    } else {
+        Serial.println(F("❌ NÃO entrando no bloco de timeRemaining!"));
+        Serial.printf("   stageStartEpoch = %lu (precisa ser > 0)\n", fermentacaoState.stageStartEpoch);
+        Serial.printf("   currentStageIndex = %d\n", fermentacaoState.currentStageIndex);
+        Serial.printf("   totalStages = %d\n", fermentacaoState.totalStages);
     }
     
     // Status detalhado do BrewPi
@@ -1003,12 +1047,17 @@ void enviarEstadoCompleto() {
     String payload;
     serializeJson(doc, payload);
     
+    Serial.println(F("\n📦 JSON FINAL:"));
+    serializeJsonPretty(doc, Serial);
+    Serial.println();
+    
     if (httpClient.updateFermentationState(fermentacaoState.activeId, payload)) {
         Serial.println(F("[Estado] ✅ Estado completo enviado ao servidor"));
     } else {
         Serial.println(F("[Estado] ⚠️ Falha ao enviar estado"));
     }
 }
+
 
 // =====================================================
 // ENVIAR LEITURAS DOS SENSORES
