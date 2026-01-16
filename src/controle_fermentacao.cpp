@@ -1058,7 +1058,183 @@ void enviarEstadoCompleto() {
     }
 }
 
+// --------------- ENVIAR ESTADO COMPLETO GEMINI / DEEPSEEK ------//
 
+void enviarEstadoCompleto() {
+    if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) return;
+    if (!isValidString(fermentacaoState.activeId)) return;
+    
+    static unsigned long lastStateSend = 0;
+    unsigned long now = millis();
+    if (now - lastStateSend < 30000) return;
+    lastStateSend = now;
+
+    JsonDocument doc;
+    doc.reserve(2048); 
+    
+    doc["config_id"] = fermentacaoState.activeId;
+
+    if (fermentacaoState.concluidaMantendoTemp) {
+        doc["status"] = "completed_holding_temp";
+        doc["message"] = "Fermentação concluída - mantendo temperatura";
+    } else {
+        doc["status"] = "running";
+    }
+
+    doc["config_name"] = fermentacaoState.configName;
+    doc["currentStageIndex"] = fermentacaoState.currentStageIndex;
+    doc["totalStages"] = fermentacaoState.totalStages;
+
+    // Temperatura alvo da ETAPA vs temperatura PID
+    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
+        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
+        doc["stageTargetTemp"] = stage.targetTemp;
+    }
+
+    doc["pidTargetTemp"] = fermentacaoState.tempTarget;
+    doc["currentTargetTemp"] = fermentacaoState.tempTarget;
+    doc["targetReached"] = fermentacaoState.targetReachedSent;
+
+    // Cálculo do tempo restante
+    if (fermentacaoState.stageStartEpoch > 0 && 
+        fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
+        
+        time_t nowEpoch = getCurrentEpoch();
+        
+        if (nowEpoch > 0) {
+            FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
+            
+            if (stage.type == STAGE_TEMPERATURE) {
+                if (fermentacaoState.targetReachedSent) {
+                    float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
+                    
+                    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+                    float remainingH = (stage.holdTimeHours - elapsedH);
+                    if (remainingH < 0) remainingH = 0;
+                    
+                    if (remainingH < 24) {
+                        timeRemaining["value"] = remainingH;
+                        timeRemaining["unit"] = "hours";
+                    } else {
+                        timeRemaining["value"] = remainingH / 24.0;
+                        timeRemaining["unit"] = "days";
+                    }
+                    timeRemaining["status"] = "running";
+                } else {
+                    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+                    timeRemaining["value"] = stage.durationDays;
+                    timeRemaining["unit"] = "days";
+                    timeRemaining["status"] = "waiting";
+                }
+            }
+            else if (stage.type == STAGE_RAMP) {
+                float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
+                
+                JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+                float remainingH = stage.rampTimeHours - elapsedH;
+                if (remainingH < 0) remainingH = 0;
+                
+                if (remainingH < 24) {
+                    timeRemaining["value"] = remainingH;
+                    timeRemaining["unit"] = "hours";
+                } else {
+                    timeRemaining["value"] = remainingH / 24.0;
+                    timeRemaining["unit"] = "days";
+                }
+                timeRemaining["status"] = "running";
+
+                // Calcular progresso da rampa
+                float progress = elapsedH / stage.rampTimeHours;
+                if (progress < 0) progress = 0;
+                if (progress > 1) progress = 1;
+                doc["rampProgress"] = progress * 100.0;
+            }
+            else if (stage.type == STAGE_GRAVITY_TIME) {
+                if (fermentacaoState.targetReachedSent) {
+                    float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
+                    
+                    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+                    float remainingH = (stage.maxTimeHours - elapsedH);
+                    if (remainingH < 0) remainingH = 0;
+                    
+                    timeRemaining["value"] = remainingH / 24.0;
+                    timeRemaining["unit"] = "days";
+                    timeRemaining["status"] = "running";
+                } else {
+                    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+                    timeRemaining["value"] = stage.timeoutDays;
+                    timeRemaining["unit"] = "days";
+                    timeRemaining["status"] = "waiting";
+                }
+            }
+            else if (stage.type == STAGE_GRAVITY) {
+                JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+                timeRemaining["value"] = 0;
+                timeRemaining["unit"] = "indefinite";
+                timeRemaining["status"] = "waiting_gravity";
+            }
+        }
+    }
+    
+    // Status detalhado do BrewPi
+    DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus();
+    
+    doc["cooling"] = detailedStatus.coolerActive;
+    doc["heating"] = detailedStatus.heaterActive;
+    
+    JsonObject controlStatus = doc["control_status"].to<JsonObject>();
+    controlStatus["state"] = detailedStatus.stateName;
+    controlStatus["is_waiting"] = detailedStatus.isWaiting;
+    
+    if (detailedStatus.isWaiting) {
+        if (detailedStatus.waitTimeRemaining > 0) {
+            controlStatus["wait_seconds"] = detailedStatus.waitTimeRemaining;
+            controlStatus["wait_reason"] = detailedStatus.waitReason;
+            
+            String waitDisplay;
+            if (detailedStatus.waitTimeRemaining < 60) {
+                waitDisplay = String(detailedStatus.waitTimeRemaining) + "s";
+            } else if (detailedStatus.waitTimeRemaining < 3600) {
+                uint16_t min = detailedStatus.waitTimeRemaining / 60;
+                uint16_t sec = detailedStatus.waitTimeRemaining % 60;
+                waitDisplay = String(min) + "m";
+                if (sec > 0) waitDisplay += String(sec) + "s";
+            } else {
+                uint16_t hours = detailedStatus.waitTimeRemaining / 3600;
+                uint16_t min = (detailedStatus.waitTimeRemaining % 3600) / 60;
+                waitDisplay = String(hours) + "h";
+                if (min > 0) waitDisplay += String(min) + "m";
+            }
+            controlStatus["wait_display"] = waitDisplay;
+        } else {
+            controlStatus["wait_reason"] = detailedStatus.waitReason;
+            controlStatus["wait_display"] = "aguardando";
+        }
+    }
+    
+    if (detailedStatus.peakDetection) {
+        controlStatus["peak_detection"] = true;
+        controlStatus["estimated_peak"] = detailedStatus.estimatedPeak;
+    }
+    
+    // Timestamp
+    time_t nowEpoch = getCurrentEpoch();
+    if (nowEpoch > 0) {
+        doc["timestamp"] = nowEpoch;
+    }
+    doc["uptime_ms"] = millis();
+
+    String payload;
+    serializeJson(doc, payload);
+
+    if (httpClient.updateFermentationState(fermentacaoState.activeId, payload)) {
+        Serial.println(F("[Estado] ✅ Estado completo enviado ao servidor"));
+    } else {
+        Serial.println(F("[Estado] ⚠️ Falha ao enviar estado"));
+    }
+}
+
+// --- FIM ---///
 // =====================================================
 // ENVIAR LEITURAS DOS SENSORES
 // =====================================================
