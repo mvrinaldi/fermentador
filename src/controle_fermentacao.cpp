@@ -635,30 +635,22 @@ void verificarTrocaDeFase() {
                             stage.type == STAGE_GRAVITY_TIME);
 
     if (needsTemperature) {
+        // ✅ CORREÇÃO: Atualiza timestamp ANTES de verificar
+        state.lastTempUpdate = millis();
+        
         // Usa temperatura lida do BrewPi
         float currentTemp = getCurrentBeerTemp();
         float stageTargetTemp = stage.targetTemp;
         float diff = abs(currentTemp - stageTargetTemp);
         targetReached = (diff <= TEMPERATURE_TOLERANCE);
         
-        // Verifica se temperatura está atualizada
-        unsigned long now = millis();
-        unsigned long timeSinceUpdate = now - state.lastTempUpdate;
-        
-        if (timeSinceUpdate > 30000) {
-            Serial.printf("[Fase] ⚠️  Temperatura não atualizada há %lus, aguardando sensor...\n", 
-                         timeSinceUpdate / 1000);
-            targetReached = false;
-        }
-        
         // Debug periódico
         static unsigned long lastDebug2 = 0;
+        unsigned long now = millis();
         if (now - lastDebug2 > 60000 && !fermentacaoState.targetReachedSent) {
             lastDebug2 = now;
-            Serial.printf("[Fase] Aguardando alvo: Temp=%.1f°C, Alvo=%.1f°C, Diff=%.1f°C, ",
-                         currentTemp, stageTargetTemp, diff);
-            Serial.printf("Atingiu=%s, UltimaAtualização=%lus atrás\n",
-                         targetReached ? "SIM" : "NÃO", timeSinceUpdate / 1000);
+            Serial.printf("[Fase] Aguardando alvo: Temp=%.1f°C, Alvo=%.1f°C, Diff=%.1f°C, Atingiu=%s\n",
+                         currentTemp, stageTargetTemp, diff, targetReached ? "SIM" : "NÃO");
         }
         
         if (targetReached && !fermentacaoState.targetReachedSent) {
@@ -1002,9 +994,9 @@ void enviarEstadoCompleto() {
     }
     
     // ✅ CORREÇÃO: Usa timestamp Unix real (não uptime)
-    time_t now = getCurrentEpoch();
-    if (now > 0) {
-        doc["timestamp"] = now;  // Unix timestamp em segundos
+    time_t nowEpoch = getCurrentEpoch();
+    if (nowEpoch > 0) {
+        doc["timestamp"] = nowEpoch;  // Unix timestamp em segundos
     }
     doc["uptime_ms"] = millis();  // Uptime separado para debug
     

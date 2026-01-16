@@ -1,6 +1,6 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "3.0.1-BREWPI"
+#define FIRMWARE_VERSION "3.0.2-BREWPI"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -261,7 +261,7 @@ void setup() {
     
     if (dallasPtr) {
         // Configurar sensores no BrewPi (índices 0 e 1)
-        brewPiControl.setSensors(dallasPtr, 0, 1);
+        brewPiControl.setSensors(dallasPtr, 1, 0);
         
         // Configurar atuadores (relés)
         brewPiControl.setActuators(&cooler, &heater);
@@ -320,7 +320,7 @@ void setup() {
                 // Reconfigura BrewPi com novos sensores
                 DallasTemperature* dallasPtr = getSensorsPointer();
                 if (dallasPtr) {
-                    brewPiControl.setSensors(dallasPtr, 0, 1);
+                    brewPiControl.setSensors(dallasPtr, 1, 0);
                     Serial.println(F("✅ Sensores BrewPi atualizados"));
                 }
             }
@@ -745,7 +745,7 @@ void loop() {
                     setupSensorManager();
                     DallasTemperature* dallasPtr = getSensorsPointer();
                     if (dallasPtr) {
-                        brewPiControl.setSensors(dallasPtr, 0, 1);
+                        brewPiControl.setSensors(dallasPtr, 1, 0);
                     }
                 }
             }
