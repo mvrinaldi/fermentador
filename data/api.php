@@ -39,80 +39,268 @@ try {
     exit;
 }
 
-// ==================== FUNÇÕES DE LIMPEZA ====================
+// ==================== FUNÇÕES AUXILIARES ====================
 
-/**
- * Limpa registros antigos de uma tabela mantendo apenas os N mais recentes
- * E também remove registros órfãos (sem config_id)
- */
-function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $timestampColumn = 'created_at') {
-    static $lastCleanup = [];
-    static $lastOrphanCleanup = [];
-    
-    $cacheKey = "{$tableName}_{$configId}";
-    
-    // Evita limpar a mesma tabela mais de uma vez a cada 5 minutos
-    if (isset($lastCleanup[$cacheKey]) && (time() - $lastCleanup[$cacheKey]) < 300) {
+function decompressStateData(&$data) {
+    if (!is_array($data)) {
         return;
     }
     
-    try {
-        // 1. LIMPA REGISTROS ANTIGOS DA CONFIGURAÇÃO ESPECÍFICA
-        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM {$tableName} WHERE config_id = ?");
-        $stmt->execute([$configId]);
-        $count = $stmt->fetch()['total'];
+    // ========== MAPEAMENTOS COMPATÍVEIS COM ESP32 ==========
+    $messageMap = [
+        // Mensagens gerais
+        'fconc' => 'Fermentação concluída automaticamente - mantendo temperatura',
+        'fcomp' => 'Fermentação concluída',
+        'fpaus' => 'Fermentação pausada',
+        'chold' => 'completed_holding_temp',
         
-        // Só limpa se houver mais de 150% do limite
-        $threshold = (int)($keepCount * 1.5);
+        // Estados do controle
+        'cool'  => 'Resfriando',
+        'heat'  => 'Aquecendo',
+        'wait'  => 'Aguardando',
+        'idle'  => 'Ocioso',
+        'run'   => 'Executando',
+        'wg'    => 'waiting_gravity',
         
-        if ($count > $threshold) {
-            $sql = "
-                DELETE t1 FROM {$tableName} t1
-                LEFT JOIN (
-                    SELECT id
-                    FROM {$tableName}
-                    WHERE config_id = ?
-                    ORDER BY {$timestampColumn} DESC
-                    LIMIT {$keepCount}
-                ) t2 ON t1.id = t2.id
-                WHERE t1.config_id = ?
-                  AND t2.id IS NULL
-            ";
+        // Adicionais para compatibilidade
+        'targ'  => 'Temperatura alvo atingida',
+        'strt'  => 'Etapa iniciada',
+        'ramp'  => 'Em rampa',
+        'peak'  => 'Detectando pico',
+        'err'   => 'Erro',
+        'off'   => 'Desligado'
+    ];
+    
+    $stageTypeMap = [
+        't'  => 'temperature',
+        'r'  => 'ramp',
+        'g'  => 'gravity',
+        'gt' => 'gravity_time'
+    ];
+    
+    $unitMap = [
+        'h' => 'hours',
+        'd' => 'days',
+        'm' => 'minutes',
+        'ind' => 'indefinite'
+    ];
+    
+    $statusMap = [
+        'run' => 'running',
+        'wait' => 'waiting',
+        'wg' => 'waiting_gravity'
+    ];
+    
+    error_log("DEBUG decompressStateData INPUT: " . json_encode($data));
+    
+    // ========== 1. PRIMEIRO: Expandir TODOS os campos abreviados ==========
+    $fieldMap = [
+        // Campos principais
+        'cn'  => 'config_name',
+        'csi' => 'currentStageIndex',
+        'ts'  => 'totalStages',
+        'stt' => 'stageTargetTemp',
+        'ptt' => 'pidTargetTemp',
+        'ctt' => 'currentTargetTemp',
+        'c'   => 'cooling',
+        'h'   => 'heating',
+        's'   => 'status',
+        'msg' => 'message',
+        'cid' => 'config_id',
+        'ca'  => 'completedAt',
+        'tms' => 'timestamp',
+        'um'  => 'uptime_ms',
+        'rp'  => 'rampProgress',
+        'st'  => 'stageType'
+        // NOTA: 'tr' NÃO está aqui porque precisa de processamento especial
+    ];
+    
+    foreach ($fieldMap as $short => $long) {
+        if (array_key_exists($short, $data)) {
+            $data[$long] = $data[$short];
+            unset($data[$short]);
+        }
+    }
+    
+    // ========== 2. SEGUNDO: Processar campo "tr" (CRÍTICO) ==========
+    // IMPORTANTE: O ESP está enviando "targetReached" como booleano DIRETAMENTE
+    // e NÃO está enviando "tr". A função compressStateData pode estar enviando "tr" como array
+    // mas na sua função enviarEstadoCompleto atual, você envia doc["targetReached"] = booleano
+    
+    if (isset($data['tr'])) {
+        error_log("DEBUG: Campo 'tr' encontrado. Tipo: " . gettype($data['tr']) . 
+                 ", Valor: " . json_encode($data['tr']));
+        
+        if (is_array($data['tr']) && count($data['tr']) >= 3) {
+            // É timeRemaining (array [valor, unidade, status])
+            error_log("DEBUG: 'tr' é array (timeRemaining)");
             
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute([$configId, $configId]);
+            $value = $data['tr'][0];
+            $unit = isset($data['tr'][1]) ? $data['tr'][1] : '';
+            $status = isset($data['tr'][2]) ? $data['tr'][2] : '';
             
-            $deleted = $stmt->rowCount();
-            if ($deleted > 0) {
-                error_log("[CLEANUP] {$tableName} (config {$configId}): removidos {$deleted} registros antigos ({$count} → " . ($count - $deleted) . ")");
+            $data['timeRemaining'] = [
+                'value' => $value,
+                'unit' => isset($unitMap[$unit]) ? $unitMap[$unit] : $unit,
+                'status' => isset($statusMap[$status]) ? $statusMap[$status] : 
+                           (isset($messageMap[$status]) ? $messageMap[$status] : $status)
+            ];
+            
+            // Se tem timeRemaining, targetReached é implicitamente true
+            $data['targetReached'] = true;
+            
+            unset($data['tr']);
+            
+        } elseif (is_bool($data['tr'])) {
+            // É targetReached (booleano)
+            error_log("DEBUG: 'tr' é booleano (targetReached): " . 
+                     ($data['tr'] ? 'true' : 'false'));
+            
+            $data['targetReached'] = $data['tr'];
+            unset($data['tr']);
+        }
+    }
+    // Se não tem 'tr' mas tem 'targetReached' (o ESP está enviando assim)
+    elseif (isset($data['targetReached'])) {
+        error_log("DEBUG: Campo 'targetReached' encontrado: " . 
+                 ($data['targetReached'] ? 'true' : 'false'));
+        // Mantém como está, já é booleano
+    }
+    
+    // ========== 3. Expandir mensagens ==========
+    if (isset($data['message']) && is_string($data['message'])) {
+        $msg = $data['message'];
+        if (isset($messageMap[$msg])) {
+            $data['message'] = $messageMap[$msg];
+        }
+    }
+    
+    // ========== 4. Expandir status ==========
+    if (isset($data['status']) && is_string($data['status'])) {
+        $status = $data['status'];
+        if (isset($messageMap[$status])) {
+            $data['status'] = $messageMap[$status];
+        } elseif (isset($statusMap[$status])) {
+            $data['status'] = $statusMap[$status];
+        }
+    }
+    
+    // ========== 5. Expandir stageType ==========
+    if (isset($data['stageType']) && is_string($data['stageType']) && isset($stageTypeMap[$data['stageType']])) {
+        $data['stageType'] = $stageTypeMap[$data['stageType']];
+    }
+    
+    // ========== 6. Expandir control_status ==========
+    if (isset($data['control_status']) && is_array($data['control_status'])) {
+        $cs = &$data['control_status'];
+        
+        // Mapear campos abreviados
+        $csMap = [
+            's'  => 'state',
+            'iw' => 'is_waiting',
+            'wr' => 'wait_reason',
+            'ws' => 'wait_seconds',
+            'wd' => 'wait_display',
+            'pd' => 'peak_detection',
+            'ep' => 'estimated_peak'
+        ];
+        
+        foreach ($csMap as $short => $long) {
+            if (isset($cs[$short])) {
+                $cs[$long] = $cs[$short];
+                unset($cs[$short]);
             }
         }
         
-        $lastCleanup[$cacheKey] = time();
+        // Expandir estado do controle
+        if (isset($cs['state']) && is_string($cs['state']) && isset($messageMap[$cs['state']])) {
+            $cs['state'] = $messageMap[$cs['state']];
+        }
+    }
+    
+    error_log("DEBUG decompressStateData OUTPUT: " . json_encode($data));
+}
+
+// ==================== ADICIONE ESTA FUNÇÃO LOG ====================
+function logData($message, $data = null) {
+    $logFile = __DIR__ . '/fermentation_api.log';
+    
+    $logMessage = date('Y-m-d H:i:s') . " - " . $message . PHP_EOL;
+    
+    if ($data !== null) {
+        if (is_array($data) || is_object($data)) {
+            $logMessage .= json_encode($data, JSON_PRETTY_PRINT) . PHP_EOL;
+        } else {
+            $logMessage .= $data . PHP_EOL;
+        }
+    }
+    
+    $logMessage .= "----------------------------------------" . PHP_EOL;
+    
+    // Escreve no arquivo
+    file_put_contents($logFile, $logMessage, FILE_APPEND);
+}
+
+/**
+ * Limpa registros antigos - versão simplificada e otimizada
+ */
+function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $timestampColumn = 'created_at') {
+    try {
+        // 1. Primeiro verifica se precisa limpar (otimização)
+        $sql = "SELECT COUNT(*) as total FROM {$tableName} WHERE config_id = ?";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$configId]);
+        $count = $stmt->fetch()['total'];
         
-        // 2. LIMPA REGISTROS ÓRFÃOS (apenas a cada 10 minutos para toda a tabela)
-        $orphanKey = "{$tableName}_orphans";
+        // Só limpa se tiver mais que 20% acima do limite
+        if ($count <= ($keepCount * 1.2)) {
+            return;
+        }
         
-        if (!isset($lastOrphanCleanup[$orphanKey]) || (time() - $lastOrphanCleanup[$orphanKey]) > 600) {
-            $stmt = $pdo->prepare("DELETE FROM {$tableName} WHERE config_id IS NULL");
-            $stmt->execute();
-            $orphansDeleted = $stmt->rowCount();
+        // 2. Encontra o ID mais antigo que deve ser mantido
+        $sql = "
+            SELECT id FROM {$tableName} 
+            WHERE config_id = ? 
+            ORDER BY {$timestampColumn} DESC 
+            LIMIT 1 OFFSET ?
+        ";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$configId, $keepCount - 1]);
+        $result = $stmt->fetch();
+        
+        if ($result && isset($result['id'])) {
+            $oldestIdToKeep = $result['id'];
             
-            if ($orphansDeleted > 0) {
-                error_log("[CLEANUP] {$tableName}: removidos {$orphansDeleted} registros órfãos");
+            // 3. Deleta tudo mais antigo que esse ID
+            $sql = "
+                DELETE FROM {$tableName} 
+                WHERE config_id = ? 
+                AND {$timestampColumn} < (
+                    SELECT {$timestampColumn} 
+                    FROM {$tableName} 
+                    WHERE id = ?
+                )
+                LIMIT 500
+            ";
+            
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$configId, $oldestIdToKeep]);
+            
+            $deleted = $stmt->rowCount();
+            if ($deleted > 0) {
+                error_log("[CLEANUP] {$tableName}: mantidos {$keepCount}, removidos {$deleted}");
             }
-            
-            $lastOrphanCleanup[$orphanKey] = time();
+        }
+        
+        // 4. Limpa órfãos ocasionalmente (apenas 10% das vezes)
+        if (rand(1, 10) === 1) {
+            $pdo->prepare("DELETE FROM {$tableName} WHERE config_id IS NULL LIMIT 50")->execute();
         }
         
     } catch (Exception $e) {
         error_log("[CLEANUP ERROR] {$tableName}: " . $e->getMessage());
     }
 }
-
-$method = $_SERVER['REQUEST_METHOD'];
-$path = isset($_GET['path']) ? $_GET['path'] : '';
-$input = json_decode(file_get_contents('php://input'), true);
 
 function requireAuth() {
     global $pdo;
@@ -147,11 +335,17 @@ function requireAuth() {
     }
 }
 
-function sendResponse($data, $code = 200) {
+function sendResponse($data, $code = 200, $options = 0) {
     http_response_code($code);
-    echo json_encode($data);
+    echo json_encode($data, $options);
     exit;
 }
+
+// ==================== ROTEAMENTO ====================
+
+$method = $_SERVER['REQUEST_METHOD'];
+$path = isset($_GET['path']) ? $_GET['path'] : '';
+$input = json_decode(file_get_contents('php://input'), true);
 
 // ==================== AUTENTICAÇÃO ====================
 
@@ -175,9 +369,10 @@ if ($path === 'auth/login' && $method === 'POST') {
         $stmt->execute([$user['id']]);
         
         sendResponse([
-            'success' => true, 
-            'user_id' => (int)$user['id']
-        ]);
+            'success' => true,
+            'input' => $originalData,
+            'output' => $testData
+        ], 200, JSON_FORCE_OBJECT);
     } else {
         sendResponse(['error' => 'Credenciais inválidas'], 401);
     }
@@ -590,7 +785,7 @@ if ($path === 'readings' && $method === 'POST') {
     $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget, $gravity]);
     
     // ✅ Limpa registros antigos E órfãos
-    cleanupOldRecords($pdo, 'readings', $configId, 500, 'reading_timestamp');
+    cleanupOldRecords($pdo, 'readings', $configId, 200, 'reading_timestamp'); //Mantém últimos 200
     
     sendResponse(['success' => true, 'reading_id' => $pdo->lastInsertId()], 201);
 }
@@ -664,13 +859,46 @@ if ($path === 'control' && $method === 'POST') {
 }
 
 // ==================== ESTADO FERMENTAÇÃO (COM LIMPEZA AUTOMÁTICA) ====================
-
 if ($path === 'fermentation-state' && $method === 'POST') {
-    $configId = $input['config_id'] ?? null;
+    $configId = $input['config_id'] ?? $input['cid'] ?? null;
     
     if (!$configId) {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
+    
+    // ✅ LOG 1: Dados recebidos do ESP32
+    error_log("=== FERMENTATION-STATE RECEBIDO ===");
+    error_log("Config ID: " . $configId);
+    error_log("Dados recebidos (CRUS): " . json_encode($input));
+    
+    // Descomprimir dados recebidos
+    decompressStateData($input);
+    
+    // ✅ LOG 2: Dados após descompressão
+    error_log("Dados descomprimidos: " . json_encode($input));
+    
+    // ✅ LOG 3: Campos específicos para debug
+    $debugInfo = [];
+    
+    if (isset($input['tr'])) {
+        $debugInfo['tr_type'] = gettype($input['tr']);
+        $debugInfo['tr_value'] = $input['tr'];
+    }
+    
+    if (isset($input['timeRemaining'])) {
+        $debugInfo['timeRemaining'] = $input['timeRemaining'];
+    }
+    
+    if (isset($input['targetReached'])) {
+        $debugInfo['targetReached'] = $input['targetReached'] ? 'true' : 'false';
+    }
+    
+    if (isset($input['status'])) {
+        $debugInfo['status'] = $input['status'];
+    }
+    
+    error_log("DEBUG ESPECÍFICO: " . json_encode($debugInfo));
+    error_log("=== FIM DOS DADOS ===");
     
     $stmt = $pdo->prepare("
         INSERT INTO fermentation_states (config_id, state_data)
@@ -678,7 +906,6 @@ if ($path === 'fermentation-state' && $method === 'POST') {
     ");
     $stmt->execute([$configId, json_encode($input)]);
     
-    // ✅ Limpa registros antigos E órfãos
     cleanupOldRecords($pdo, 'fermentation_states', $configId, 100, 'state_timestamp');
     
     sendResponse(['success' => true], 201);
@@ -687,7 +914,7 @@ if ($path === 'fermentation-state' && $method === 'POST') {
 // ==================== HEARTBEAT (COM LIMPEZA AGRESSIVA) ====================
 
 if ($path === 'heartbeat' && $method === 'POST') {
-    $configId = $input['config_id'] ?? null;
+    $configId = $input['config_id'] ?? $input['cid'] ?? null;
     $uptime = $input['uptime'] ?? null;
     $freeHeap = $input['free_heap'] ?? null;
     $controlStatus = $input['control_status'] ?? null;
@@ -697,6 +924,11 @@ if ($path === 'heartbeat' && $method === 'POST') {
     }
     
     try {
+        // Descomprimir control_status se necessário
+        if ($controlStatus && is_array($controlStatus)) {
+            decompressStateData($controlStatus);
+        }
+        
         $stmt = $pdo->prepare("
             INSERT INTO esp_heartbeat (config_id, uptime, free_heap, control_status)
             VALUES (?, ?, ?, ?)
@@ -708,7 +940,6 @@ if ($path === 'heartbeat' && $method === 'POST') {
             $controlStatus ? json_encode($controlStatus) : null
         ]);
         
-        // ✅ LIMPEZA AGRESSIVA - mantém apenas os últimos 50 registros E remove órfãos
         cleanupOldRecords($pdo, 'esp_heartbeat', $configId, 50, 'heartbeat_timestamp');
         
         sendResponse(['success' => true], 201);
@@ -752,6 +983,8 @@ if ($path === 'cleanup' && $method === 'POST') {
         sendResponse(['error' => 'Erro na limpeza: ' . $e->getMessage()], 500);
     }
 }
+
+// ==================== ROTA NÃO ENCONTRADA ====================
 
 http_response_code(404);
 echo json_encode(['error' => 'Rota não encontrada']);

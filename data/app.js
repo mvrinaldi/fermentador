@@ -254,8 +254,224 @@ function formatTimeRemaining(tr) {
     else if (tr.unit === 'indefinite') {
         return 'Aguardando gravidade';
     }
+    else if (tr.unit === 'ind') {
+        return 'Indefinido';
+    }
     
     return `${tr.value} ${tr.unit}`;
+}
+
+// ========== FUNÇÃO DE DESCOMPRESSÃO DOS DADOS ==========
+function decompressData(data) {
+    if (!data || typeof data !== 'object') {
+        return data;
+    }
+    
+    const messageMap = {
+        'fconc': 'Fermentação concluída automaticamente - mantendo temperatura',
+        'fcomp': 'Fermentação concluída',
+        'chold': 'completed_holding_temp',
+        'fpaus': 'Fermentação pausada',
+        'targ': 'Temperatura alvo atingida',
+        'strt': 'Etapa iniciada',
+        'ramp': 'Em rampa',
+        'wait': 'Aguardando alvo',
+        'run': 'Executando',
+        'cool': 'Resfriando',
+        'heat': 'Aquecendo',
+        'idle': 'Ocioso',
+        'peak': 'Detectando pico',
+        'err': 'Erro',
+        'off': 'Desligado',
+        'wg': 'waiting_gravity'
+    };
+    
+    const unitMap = {
+        'h': 'hours',
+        'd': 'days',
+        'm': 'minutes',
+        'ind': 'indefinite'
+    };
+    
+    const statusMap = {
+        'run': 'running',
+        'wait': 'waiting',
+        'wg': 'waiting_gravity'
+    };
+    
+    const stageTypeMap = {
+        't': 'temperature',
+        'r': 'ramp',
+        'g': 'gravity',
+        'gt': 'gravity_time'
+    };
+    
+    // Clonar o objeto para não modificar o original
+    const result = { ...data };
+    
+    console.log('🔍 DEBUG decompressData INPUT:', result);
+    
+    // ========== 1. PRIMEIRO: Expandir campos abreviados ==========
+    const fieldMap = {
+        'cn': 'config_name',
+        'csi': 'currentStageIndex',
+        'ts': 'totalStages',
+        'stt': 'stageTargetTemp',
+        'ptt': 'pidTargetTemp',
+        'ctt': 'currentTargetTemp',
+        'c': 'cooling',
+        'h': 'heating',
+        's': 'status',
+        'msg': 'message',
+        'cid': 'config_id',
+        'ca': 'completedAt',
+        'tms': 'timestamp',
+        'um': 'uptime_ms',
+        'rp': 'rampProgress',
+        'st': 'stageType'
+    };
+    
+    Object.keys(fieldMap).forEach(short => {
+        if (result[short] !== undefined) {
+            result[fieldMap[short]] = result[short];
+            delete result[short];
+        }
+    });
+    
+    // ========== 2. INFERIR targetReached baseado em outros campos ==========
+    // NOTA: O ESP está enviando "targetReached" como booleano, não como "tr"
+    // Removemos a lógica de inferência e mantemos o campo original
+    
+    // ========== 3. Processar campo "tr" (apenas para fallback/compatibilidade) ==========
+    // O PHP já deve ter processado, mas mantemos para segurança
+    if (result.tr !== undefined) {
+        console.log('⚠️ Campo "tr" ainda presente (PHP não processou?)');
+        
+        if (Array.isArray(result.tr) && result.tr.length >= 3) {
+            result.timeRemaining = {
+                value: result.tr[0],
+                unit: unitMap[result.tr[1]] || result.tr[1],
+                status: statusMap[result.tr[2]] || 
+                       messageMap[result.tr[2]] || 
+                       result.tr[2] || 'unknown'
+            };
+            result.targetReached = true;
+            delete result.tr;
+        } else if (typeof result.tr === 'boolean') {
+            // Se tr for booleano, é targetReached
+            result.targetReached = result.tr;
+            delete result.tr;
+        }
+    }
+    
+    // ========== 4. Expandir mensagens/status ==========
+    if (result.status && messageMap[result.status]) {
+        result.status = messageMap[result.status];
+    }
+    
+    if (result.message && messageMap[result.message]) {
+        result.message = messageMap[result.message];
+    }
+    
+    // ========== 5. Expandir stageType ==========
+    if (result.stageType && stageTypeMap[result.stageType]) {
+        result.stageType = stageTypeMap[result.stageType];
+    }
+    
+    // ========== 6. Expandir control_status ==========
+    if (result.control_status && typeof result.control_status === 'object') {
+        const cs = result.control_status;
+        
+        if (cs.s && messageMap[cs.s]) {
+            cs.state = messageMap[cs.s];
+            delete cs.s;
+        }
+        
+        const csMap = {
+            'iw': 'is_waiting',
+            'wr': 'wait_reason',
+            'ws': 'wait_seconds',
+            'wd': 'wait_display',
+            'pd': 'peak_detection',
+            'ep': 'estimated_peak'
+        };
+        
+        Object.keys(csMap).forEach(short => {
+            if (cs[short] !== undefined) {
+                cs[csMap[short]] = cs[short];
+                delete cs[short];
+            }
+        });
+    }
+    
+    console.log('🔍 DEBUG decompressData OUTPUT:', {
+        targetReached: result.targetReached,
+        timeRemaining: result.timeRemaining,
+        status: result.status,
+        stageType: result.stageType,
+        config_name: result.config_name,
+        config_id: result.config_id
+    });
+    
+    return result;
+}
+
+// ========== CARREGAMENTO ==========
+async function loadCompleteState() {
+    try {
+        const activeData = await apiRequest('active');
+        
+        if (!activeData.active || !activeData.id) {
+            appState.config = null;
+            renderNoActiveFermentation();
+            return;
+        }
+        
+        const completeState = await apiRequest(`state/complete&config_id=${activeData.id}`);
+        
+        console.log('🔍 DADOS BRUTOS DO SERVIDOR (completo):', completeState);
+        
+        // Descomprimir dados recebidos
+        if (completeState.state) {
+            console.log('🔍 Estado ANTES da descompressão:', completeState.state);
+            
+            completeState.state = decompressData(completeState.state);
+            
+            console.log('🔍 Estado APÓS descompressão:', {
+                targetReached: completeState.state.targetReached,
+                timeRemaining: completeState.state.timeRemaining,
+                status: completeState.state.status,
+                config_name: completeState.state.config_name
+            });
+        }
+        
+        appState.config = completeState.config;
+        appState.espState = completeState.state || {};
+        appState.readings = completeState.readings || [];
+        appState.ispindel = completeState.ispindel;
+        appState.controller = completeState.controller;
+        appState.controllerHistory = completeState.controller_history || [];
+        appState.lastUpdate = completeState.timestamp;
+        appState.heartbeat = completeState.heartbeat;
+        
+        checkESPStatus();
+        renderUI();
+        
+    } catch (error) {
+        console.error('Erro ao carregar estado:', error);
+        renderNoActiveFermentation();
+    }
+}
+
+async function autoRefreshData() {
+    console.log('🔄 Auto-refresh:', new Date().toLocaleTimeString());
+    
+    try {
+        await loadCompleteState();
+        console.log('✅ Dados atualizados');
+    } catch (error) {
+        console.error('❌ Erro no auto-refresh:', error);
+    }
 }
 
 // ========== STATUS ESP ==========
@@ -419,58 +635,6 @@ function updateRelayStatus() {
     }
 }
 
-// ========== CARREGAMENTO ==========
-async function loadCompleteState() {
-    try {
-        const activeData = await apiRequest('active');
-        
-        if (!activeData.active || !activeData.id) {
-            appState.config = null;
-            renderNoActiveFermentation();
-            return;
-        }
-        
-        const completeState = await apiRequest(`state/complete&config_id=${activeData.id}`);
-        
-        appState.config = completeState.config;
-        appState.espState = completeState.state || {};
-        appState.readings = completeState.readings || [];
-        appState.ispindel = completeState.ispindel;
-        appState.controller = completeState.controller;
-        appState.controllerHistory = completeState.controller_history || [];
-        appState.lastUpdate = completeState.timestamp;
-        appState.heartbeat = completeState.heartbeat;
-        
-        // ✅ DEBUG COMPLETO
-        console.log('✅ Estado completo carregado:', {
-            config: appState.config.name,
-            espState: appState.espState,
-            targetReached: appState.espState.targetReached,
-            timeRemaining: appState.espState.timeRemaining,
-            heartbeat: appState.heartbeat,
-            controllerHistory: appState.controllerHistory.length + ' registros'
-        });
-        
-        checkESPStatus();
-        renderUI();
-        
-    } catch (error) {
-        console.error('Erro ao carregar estado:', error);
-        renderNoActiveFermentation();
-    }
-}
-
-async function autoRefreshData() {
-    console.log('🔄 Auto-refresh:', new Date().toLocaleTimeString());
-    
-    try {
-        await loadCompleteState();
-        console.log('✅ Dados atualizados');
-    } catch (error) {
-        console.error('❌ Erro no auto-refresh:', error);
-    }
-}
-
 // ========== RENDERIZAÇÃO ==========
 function renderUI() {
     if (!appState.config || !appState.config.stages || appState.config.stages.length === 0) {
@@ -502,9 +666,13 @@ function renderUI() {
         } else if (tr.status === 'running') {
             icon = 'fas fa-hourglass-half';
             statusClass = 'text-green-600';
+        } else if (tr.status === 'waiting_gravity') {
+            icon = 'fas fa-hourglass-start';
+            statusClass = 'text-blue-600';
         }
         
-        const label = tr.status === 'waiting' ? '(aguardando alvo)' : 'restantes';
+        const label = tr.status === 'waiting' ? '(aguardando alvo)' : 
+                     tr.status === 'waiting_gravity' ? '(aguardando gravidade)' : 'restantes';
         const timeDisplay = formatTimeRemaining(tr);
         
         timeElement.innerHTML = `
@@ -579,7 +747,7 @@ function renderInfoCards() {
     }
 
     // ✅ CORREÇÃO: Usa apenas targetReached (sem verificar timeRemaining.status)
-    const isReallyRunning = appState.espState.targetReached === true;
+    const isReallyRunning = appState.espState?.targetReached === true;
     
     const countingStatus = isReallyRunning 
         ? '✅ Contagem iniciada' 
@@ -704,7 +872,7 @@ function renderChart() {
         const month = (date.getMonth() + 1).toString().padStart(2, '0');
         const hour = date.getHours().toString().padStart(2, '0');
         const minute = date.getMinutes().toString().padStart(2, '0');
-        return `${hour}:${minute} ${day}/${month}`;
+        return `${day}/${month} ${hour}:${minute}`;
     });
 
     // ✅ Processa histórico de controller_states
@@ -731,15 +899,6 @@ function renderChart() {
                 // Mostra temperatura da geladeira quando relé ativo
                 coolerData.push(coolerActive ? parseFloat(reading.temp_fridge) : null);
                 heaterData.push(heaterActive ? parseFloat(reading.temp_fridge) : null);
-                
-                if (idx === 0) { // Debug primeiro ponto
-                    console.log('🔍 Primeiro ponto:', {
-                        reading: reading.reading_timestamp,
-                        controller: controllerState.state_timestamp,
-                        cooler: coolerActive,
-                        heater: heaterActive
-                    });
-                }
             } else {
                 coolerData.push(null);
                 heaterData.push(null);
