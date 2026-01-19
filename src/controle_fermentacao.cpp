@@ -15,6 +15,8 @@
 #include "eeprom_layout.h"
 #include "fermentacao_stages.h"
 #include "gerenciador_sensores.h"
+#include "debug_config.h"
+#include "message_codes.h"
 
 extern FermentadorHTTPClient httpClient;
 
@@ -73,18 +75,23 @@ time_t getCurrentEpoch() {
             EEPROM.get(ADDR_LAST_VALID_EPOCH, lastValidEpoch);
             EEPROM.get(ADDR_LAST_VALID_MILLIS, lastValidMillis);
             epochInitialized = true;
-            
+
+            #if DEBUG_FERMENTATION
             if (lastValidEpoch > 1577836800L) {
                 Serial.print(F("[NTP] ⚠️  Usando backup EEPROM: "));
                 Serial.println(formatTime(lastValidEpoch));
             }
+            #endif
         }
         
         if (lastValidEpoch > 1577836800L) {
             return lastValidEpoch + ((millis() - lastValidMillis) / 1000);
         }
         
+        #if DEBUG_FERMENTATION
         Serial.println(F("[NTP] ⚠️  Relógio não sincronizado!"));
+        #endif
+
         return 0;
     }
     
@@ -118,6 +125,7 @@ void saveStateToEEPROM() {
     EEPROM.put(ADDR_STAGE_STARTED_FLAG, stageStarted);
     EEPROM.write(ADDR_CONFIG_SAVED, 1);
     
+    #if DEBUG_FERMENTATION
     if (!EEPROM.commit()) {
         Serial.println(F("[EEPROM] ❌ Falha ao salvar estado"));
     } else {
@@ -125,13 +133,18 @@ void saveStateToEEPROM() {
         Serial.print(formatTime(epoch));
         Serial.println(")");
     }
+    #endif    
 }
 
 void loadStateFromEEPROM() {
     EEPROM.begin(EEPROM_SIZE);
 
     if (EEPROM.read(ADDR_CONFIG_SAVED) != 1) {
+
+        #if DEBUG_FERMENTATION
         Serial.println(F("[EEPROM] Nenhum estado salvo"));
+        #endif
+
         return;
     }
 
@@ -141,7 +154,11 @@ void loadStateFromEEPROM() {
                      sizeof(fermentacaoState.activeId));
 
     if (!isValidString(fermentacaoState.activeId)) {
+
+        #if DEBUG_FERMENTATION
         Serial.println(F("[EEPROM] ⚠️  ID inválido, limpando..."));
+        #endif
+
         clearEEPROM();
         fermentacaoState.clear();
         return;
@@ -158,7 +175,11 @@ void loadStateFromEEPROM() {
     fermentacaoState.active = isValidString(fermentacaoState.activeId);
 
     if (fermentacaoState.active && !isValidString(fermentacaoState.activeId)) {
+
+        #if DEBUG_FERMENTATION
         Serial.println(F("[EEPROM] ⚠️  Estado inconsistente, limpando..."));
+        #endif
+
         clearEEPROM();
         fermentacaoState.clear();
         fermentacaoState.tempTarget = 20.0;
@@ -166,10 +187,12 @@ void loadStateFromEEPROM() {
         return;
     }
 
+    #if DEBUG_FERMENTATION
     Serial.print(F("[EEPROM] ✅ Estado restaurado: ID="));
     Serial.print(fermentacaoState.activeId);
     Serial.print(", início=");
     Serial.println(formatTime(savedEpoch));
+    #endif
 }
 
 void clearEEPROM() {
@@ -179,11 +202,13 @@ void clearEEPROM() {
         EEPROM.write(i, 0);
     }
     
+    #if DEBUG_FERMENTATION
     if (EEPROM.commit()) {
         Serial.println(F("[EEPROM] ✅ Seção de fermentação limpa"));
     } else {
         Serial.println(F("[EEPROM] ❌ Falha ao limpar EEPROM"));
     }
+    #endif
 }
 
 // =====================================================
@@ -199,7 +224,9 @@ void updateTargetTemperature(float newTemp) {
     fermentacaoState.tempTarget = newTemp;
     state.targetTemp = newTemp;
     
+    #if DEBUG_FERMENTATION
     Serial.printf("[BrewPi] 🎯 Novo alvo: %.2f°C\n", newTemp);
+    #endif
 }
 
 float getCurrentBeerTemp() {
@@ -214,7 +241,241 @@ float getCurrentBeerTemp() {
 
 void resetPIDState() {
     brewPiControl.reset();
+
+    #if DEBUG_FERMENTATION
     Serial.println(F("[BrewPi] ✅ Estado do controle resetado"));
+    #endif
+}
+
+// =====================================================
+// Função para comprimir dados de estado
+// =====================================================
+
+void compressStateData(JsonDocument &doc) {
+    #if DEBUG_ENVIODADOS
+    Serial.println(F("[Compress] 🗜️ Iniciando compressão de dados..."));
+    #endif
+    
+    // 1. Comprimir mensagens
+    if (doc["message"].is<const char*>()) {
+        const char* msg = doc["message"].as<const char*>();
+        #if DEBUG_ENVIODADOS
+        Serial.printf("[Compress] Mensagem original: %s\n", msg);
+        #endif
+        
+        if (strstr(msg, "Fermentação concluída automaticamente")) {
+            doc["msg"] = MSG_FCONC;
+            doc.remove("message");
+            #if DEBUG_ENVIODADOS
+            Serial.println(F("[Compress]   → Comprimido para: fconc"));
+            #endif
+        }
+    }
+    
+    // 2. Comprimir status de controle
+    if (doc["control_status"].is<JsonObject>()) {
+        JsonObject cs = doc["control_status"].as<JsonObject>();
+        if (cs["state"].is<const char*>()) {
+            const char* state = cs["state"].as<const char*>();
+            #if DEBUG_ENVIODADOS
+            Serial.printf("[Compress] Estado controle original: %s\n", state);
+            #endif
+            
+            if (strstr(state, "Cooling")) {
+                cs["s"] = MSG_COOL;
+                cs.remove("state");
+                #if DEBUG_ENVIODADOS
+                Serial.println(F("[Compress]   → Comprimido para: cool"));
+                #endif
+            } else if (strstr(state, "Heating")) {
+                cs["s"] = MSG_HEAT;
+                cs.remove("state");
+                #if DEBUG_ENVIODADOS
+                Serial.println(F("[Compress]   → Comprimido para: heat"));
+                #endif
+            } else if (strstr(state, "Waiting")) {
+                cs["s"] = MSG_WAIT;
+                cs.remove("state");
+                #if DEBUG_ENVIODADOS
+                Serial.println(F("[Compress]   → Comprimido para: wait"));
+                #endif
+            } else if (strstr(state, "Idle")) {
+                cs["s"] = MSG_IDLE;
+                cs.remove("state");
+                #if DEBUG_ENVIODADOS
+                Serial.println(F("[Compress]   → Comprimido para: idle"));
+                #endif
+            }
+        }
+    }
+    
+    // 3. Comprimir tipo de etapa
+    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
+        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
+        #if DEBUG_ENVIODADOS
+        Serial.printf("[Compress] Tipo etapa original: %d\n", stage.type);
+        #endif
+        
+        switch(stage.type) {
+            case STAGE_TEMPERATURE: 
+                doc["st"] = ST_TEMP; 
+                #if DEBUG_ENVIODADOS
+                Serial.println(F("[Compress]   → Comprimido para: t"));
+                #endif
+                break;
+            case STAGE_RAMP: 
+                doc["st"] = ST_RAMP; 
+                #if DEBUG_ENVIODADOS
+                Serial.println(F("[Compress]   → Comprimido para: r"));
+                #endif
+                break;
+            case STAGE_GRAVITY: 
+                doc["st"] = ST_GRAV; 
+                #if DEBUG_ENVIODADOS
+                Serial.println(F("[Compress]   → Comprimido para: g"));
+                #endif
+                break;
+            case STAGE_GRAVITY_TIME: 
+                doc["st"] = ST_GRAVT; 
+                #if DEBUG_ENVIODADOS
+                Serial.println(F("[Compress]   → Comprimido para: gt"));
+                #endif
+                break;
+        }
+    }
+    
+    // 4. Renomear campos longos para abreviações
+    struct FieldMapping {
+        const char* longName;
+        const char* shortName;
+    };
+    
+    FieldMapping fieldMappings[] = {
+        {"config_name", "cn"},
+        {"currentStageIndex", "csi"},
+        {"totalStages", "ts"},
+        {"stageTargetTemp", "stt"},
+        {"pidTargetTemp", "ptt"},
+        {"currentTargetTemp", "ctt"},
+        {"targetReached", "tr"},
+        {"cooling", "c"},
+        {"heating", "h"},
+        {"status", "s"},
+        {"config_id", "cid"},
+        {"completedAt", "ca"},
+        {"timestamp", "tms"},
+        {"uptime_ms", "um"},
+        {"rampProgress", "rp"}
+    };
+    
+    for (const auto& mapping : fieldMappings) {
+        if (!doc[mapping.longName].isNull()) {
+            #if DEBUG_ENVIODADOS
+            Serial.printf("[Compress] Campo '%s' → '%s'\n", mapping.longName, mapping.shortName);
+            #endif
+            doc[mapping.shortName] = doc[mapping.longName];
+            doc.remove(mapping.longName);
+        }
+    }
+    
+    // 5. VERIFICAÇÃO CRÍTICA: timeRemaining precisa ser processado ANTES de renomear targetReached
+    // Se timeRemaining existe, não podemos usar "tr" para targetReached
+    if (!doc["timeRemaining"].isNull() && doc["timeRemaining"].is<JsonObject>()) {
+        JsonObject tr = doc["timeRemaining"].as<JsonObject>();
+        float value = tr["value"] | 0.0f;
+        const char* unit = tr["unit"] | "";
+        const char* status = tr["status"] | "";
+        
+        #if DEBUG_ENVIODADOS
+        Serial.printf("[Compress] timeRemaining original: %.1f %s (%s)\n", 
+                     value, unit, status);
+        #endif
+        
+        // Converter para array compacto: [valor, unidade, status]
+        JsonArray compactTR = doc["tr"].to<JsonArray>();
+        compactTR.add(value);
+        
+        // Comprimir unidade
+        if (strcmp(unit, "hours") == 0) {
+            compactTR.add(UNIT_H);
+        } else if (strcmp(unit, "days") == 0) {
+            compactTR.add(UNIT_D);
+        } else if (strcmp(unit, "minutes") == 0) {
+            compactTR.add(UNIT_M);
+        } else if (strcmp(unit, "indefinite") == 0) {
+            compactTR.add("ind");
+        } else {
+            compactTR.add(unit);
+        }
+        
+        // Comprimir status
+        if (strcmp(status, "running") == 0) {
+            compactTR.add(MSG_RUN);
+        } else if (strcmp(status, "waiting") == 0) {
+            compactTR.add(MSG_WAIT);
+        } else if (strcmp(status, "waiting_gravity") == 0) {
+            compactTR.add(WG);
+        } else {
+            compactTR.add(status);
+        }
+        
+        doc.remove("timeRemaining");
+        
+        #if DEBUG_ENVIODADOS
+        Serial.print(F("[Compress]   → Comprimido para array tr: ["));
+        for (size_t i = 0; i < compactTR.size(); i++) {
+            if (i > 0) Serial.print(", ");
+            if (compactTR[i].is<float>()) {
+                Serial.print(compactTR[i].as<float>(), 1);
+            } else {
+                Serial.print(compactTR[i].as<const char*>());
+            }
+        }
+        Serial.println("]");
+        #endif
+        
+        // REMOVER targetReached se já tiver sido renomeado para "tr" incorretamente
+        if (!doc["targetReached"].isNull()) {
+            #if DEBUG_ENVIODADOS
+            Serial.println(F("[Compress]   ⚠️ Removendo targetReached que sobrou"));
+            #endif
+            doc.remove("targetReached");
+        }
+        
+        // Se já tivermos um "tr" booleano, remover (deve ser substituído pelo array)
+        if (doc["tr"].is<bool>()) {
+            #if DEBUG_ENVIODADOS
+            Serial.println(F("[Compress]   ⚠️ Removendo tr booleano antigo"));
+            #endif
+            doc.remove("tr");
+            // Recriar o array
+            JsonArray newTr = doc["tr"].to<JsonArray>();
+            newTr.add(value);
+            newTr.add(strcmp(unit, "hours") == 0 ? UNIT_H : 
+                     strcmp(unit, "days") == 0 ? UNIT_D : 
+                     strcmp(unit, "indefinite") == 0 ? "ind" : unit);
+            newTr.add(strcmp(status, "running") == 0 ? MSG_RUN :
+                     strcmp(status, "waiting") == 0 ? MSG_WAIT :
+                     strcmp(status, "waiting_gravity") == 0 ? WG : status);
+        }
+    } 
+    else if (!doc["targetReached"].isNull()) {
+        // Se não há timeRemaining mas há targetReached, usar "tr" para targetReached booleano
+        #if DEBUG_ENVIODADOS
+        Serial.printf("[Compress] targetReached: %s (usando tr como booleano)\n", 
+                     doc["targetReached"].as<bool>() ? "true" : "false");
+        #endif
+        
+        // Verificar se já existe um "tr" (não deveria, mas por segurança)
+        if (doc["tr"].isNull()) {
+            doc["tr"] = doc["targetReached"].as<bool>();
+        }
+        doc.remove("targetReached");
+    }
+    
+    #if DEBUG_ENVIODADOS
+    Serial.println(F("[Compress] ✅ Compressão concluída"));
+    #endif
 }
 
 // =====================================================
@@ -222,31 +483,37 @@ void resetPIDState() {
 // =====================================================
 
 void concluirFermentacaoMantendoTemperatura() {
+    #if DEBUG_FERMENTATION
     Serial.println(F("[Fase] ✅ Fermentação concluída - mantendo temperatura atual"));
+    #endif
     
     JsonDocument doc;
-    doc["status"] = "completed";
+    doc["s"] = MSG_CHOLD;  // status comprimido
     time_t completionEpoch = getCurrentEpoch();
     if (completionEpoch > 0) {
-        doc["completedAt"] = completionEpoch;
+        doc["ca"] = completionEpoch;  // completedAt comprimido
     }
-    doc["message"] = "Fermentação concluída automaticamente - mantendo temperatura";
+    doc["msg"] = MSG_FCONC;  // Mensagem comprimida
+    doc["cid"] = fermentacaoState.activeId;  // config_id comprimido
     
-    String payload;
-    serializeJson(doc, payload);
+    // Não precisa chamar compressStateData aqui porque já estamos usando chaves comprimidas
     
     if (httpClient.isConnected()) {
-        httpClient.updateFermentationState(fermentacaoState.activeId, payload);
+        httpClient.updateFermentationState(fermentacaoState.activeId, doc);
     }
     
     fermentacaoState.concluidaMantendoTemp = true;
     
+    #if DEBUG_FERMENTATION
     Serial.println(F("[Fase] 🌡️  Sistema mantém temperatura atual até comando manual"));
     Serial.printf("[Fase] 🔒 Temperatura mantida: %.1f°C\n", fermentacaoState.tempTarget);
+    #endif
 }
 
 void deactivateCurrentFermentation() {
+    #if DEBUG_FERMENTATION
     Serial.println(F("[MySQL] 🧹 Desativando fermentação"));
+    #endif
 
     // Reset do controle BrewPi
     brewPiControl.reset();
@@ -266,16 +533,24 @@ void deactivateCurrentFermentation() {
     clearEEPROM();
     saveStateToEEPROM();
     
+    #if DEBUG_FERMENTATION
     Serial.println(F("[BrewPi] ✅ Sistema resetado na desativação"));
+    #endif
 }
 
 void setupActiveListener() {
+    #if DEBUG_FERMENTATION
     Serial.println(F("[MySQL] Sistema inicializado"));
+    #endif
+
     loadStateFromEEPROM();
     
     // Reset do controle BrewPi na inicialização
     brewPiControl.reset();
+
+    #if DEBUG_FERMENTATION
     Serial.println(F("[BrewPi] ✅ Sistema resetado na inicialização"));
+    #endif
 }
 
 // =====================================================
@@ -294,13 +569,19 @@ void checkPauseOrComplete() {
     const char* status = doc["status"] | "active";
     
     if (strcmp(status, "paused") == 0) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[MySQL] ⏸️  Fermentação PAUSADA pelo site"));
+        #endif
         deactivateCurrentFermentation();
     } else if (strcmp(status, "completed") == 0) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[MySQL] ✅ Fermentação CONCLUÍDA pelo site"));
+        #endif
         
         if (fermentacaoState.concluidaMantendoTemp) {
+            #if DEBUG_FERMENTATION
             Serial.println(F("[MySQL] 🧹 Finalizando manutenção de temperatura por comando do site"));
+            #endif
             deactivateCurrentFermentation();
         } else {
             concluirFermentacaoMantendoTemperatura();
@@ -318,32 +599,42 @@ void getTargetFermentacao() {
     lastActiveCheck = now;
     
     if (WiFi.status() != WL_CONNECTED) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[MySQL] ⚠️ WiFi desconectado"));
+        #endif
         isFirstCheck = false;
         return;
     }
 
+    #if DEBUG_FERMENTATION
     Serial.println(F("\n========================================"));
     Serial.println(F("[MySQL] 🔍 INICIANDO BUSCA DE FERMENTAÇÃO"));
     Serial.println(F("========================================"));
+    #endif
 
     JsonDocument doc;
     
     bool requestOk = httpClient.getActiveFermentation(doc);
     
+    #if DEBUG_FERMENTATION
     Serial.printf("[MySQL] getActiveFermentation() retornou: %s\n", 
                   requestOk ? "TRUE" : "FALSE");
+    #endif
     
     if (!requestOk) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[MySQL] ❌ Falha na requisição HTTP"));
+        #endif
         isFirstCheck = false;
         return;
     }
 
+    #if DEBUG_FERMENTATION
     Serial.println(F("\n[MySQL] 📄 DOCUMENTO JSON RECEBIDO:"));
     serializeJsonPretty(doc, Serial);
     Serial.println();
-
+    #endif
+    
     bool active = doc["active"] | false;
     
     String idString;
@@ -354,10 +645,13 @@ void getTargetFermentacao() {
     }
     
     const char* id = idString.c_str();
+    #if DEBUG_FERMENTATION
     const char* name = doc["name"] | "";
     const char* status = doc["status"] | "";
+    #endif
     int currentStageIndex = doc["currentStageIndex"] | 0;
     
+    #if DEBUG_FERMENTATION
     Serial.println(F("\n[MySQL] 🔍 VALORES EXTRAÍDOS:"));
     Serial.printf("  active: %s\n", active ? "TRUE" : "FALSE");
     Serial.printf("  id: '%s' (length: %d)\n", id, strlen(id));
@@ -371,28 +665,41 @@ void getTargetFermentacao() {
     Serial.printf("  fermentacaoState.activeId: '%s'\n", 
                   fermentacaoState.activeId);
     Serial.printf("  lastActiveId: '%s'\n", lastActiveId);
+    #endif
 
     if (!isValidString(id)) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[MySQL] ⚠️ ID é inválido ou vazio!"));
+        #endif
         id = "";
     } else {
+        #if DEBUG_FERMENTATION
         Serial.printf("[MySQL] ✅ ID válido: '%s'\n", id);
+        #endif
     }
 
+    #if DEBUG_FERMENTATION
     Serial.println(F("\n[MySQL] 🔍 DECISÃO:"));
+    #endif
 
     if (active && isValidString(id)) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("  → Fermentação ATIVA detectada no servidor"));
+        #endif
         
         if (strcmp(id, lastActiveId) != 0) {
+            #if DEBUG_FERMENTATION
             Serial.println(F("  → ID DIFERENTE do último conhecido"));
             Serial.printf("     Anterior: '%s'\n", lastActiveId);
             Serial.printf("     Novo:     '%s'\n", id);
             Serial.println(F("  → INICIANDO NOVA FERMENTAÇÃO"));
+            #endif
 
             // Reset completo do BrewPi
             brewPiControl.reset();
+            #if DEBUG_FERMENTATION
             Serial.println(F("[BrewPi] ✅ Sistema resetado para nova fermentação"));
+            #endif
             
             fermentacaoState.active = true;
             fermentacaoState.concluidaMantendoTemp = false;
@@ -400,7 +707,10 @@ void getTargetFermentacao() {
             fermentacaoState.currentStageIndex = currentStageIndex;
             safe_strcpy(lastActiveId, id, sizeof(lastActiveId));
 
+            #if DEBUG_FERMENTATION
             Serial.printf("[MySQL] 🔧 Carregando configuração ID: %s\n", id);
+            #endif
+
             loadConfigParameters(id);
 
             stageStarted = false;
@@ -409,17 +719,23 @@ void getTargetFermentacao() {
 
             saveStateToEEPROM();
             
+            #if DEBUG_FERMENTATION
             Serial.println(F("[MySQL] ✅ CONFIGURAÇÃO CONCLUÍDA"));
             Serial.printf("  activeId: '%s'\n", fermentacaoState.activeId);
             Serial.printf("  tempTarget: %.1f°C\n", fermentacaoState.tempTarget);
             Serial.printf("  totalStages: %d\n", fermentacaoState.totalStages);
+            #endif
         } else {
+            #if DEBUG_FERMENTATION
             Serial.println(F("  → MESMO ID do último conhecido"));
             Serial.println(F("  → Fermentação já configurada"));
+            #endif
             
             if (currentStageIndex != fermentacaoState.currentStageIndex) {
+                #if DEBUG_FERMENTATION
                 Serial.printf("  → Etapa mudou EXTERNAMENTE: %d -> %d\n", 
                             fermentacaoState.currentStageIndex, currentStageIndex);
+                #endif
                 
                 fermentacaoState.currentStageIndex = currentStageIndex;
                 stageStarted = false;
@@ -432,30 +748,42 @@ void getTargetFermentacao() {
         }
     } else if (fermentacaoState.active && !active) {
         if (fermentacaoState.concluidaMantendoTemp) {
+            #if DEBUG_FERMENTATION
             Serial.println(F("  → Concluída localmente, mantendo temperatura (servidor offline)"));
+            #endif
         } else {
+            #if DEBUG_FERmentacaoState
             Serial.println(F("  → Fermentação estava ativa LOCALMENTE"));
             Serial.println(F("  → Servidor indica NÃO ATIVA"));
             Serial.println(F("  → DESATIVANDO"));
+            #endif
             deactivateCurrentFermentation();
         }
     } else if (!active && !fermentacaoState.active) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("  → Nenhuma fermentação ativa"));
         Serial.println(F("  → Sistema em STANDBY"));
+        #endif
         
         if (state.targetTemp == DEFAULT_TEMPERATURE) {
             brewPiControl.reset();
+            #if DEBUG_FERMENTATION
             Serial.println(F("[BrewPi] ✅ Sistema resetado em modo standby"));
+            #endif
         }
     } else if (!active && fermentacaoState.active) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("  → Servidor offline mas temos estado local"));
         Serial.println(F("  → MANTENDO fermentação local"));
+        #endif
     }
 
+    #if DEBUG_FERMENTATION
     Serial.println(F("========================================"));
     Serial.println(F("[MySQL] FIM DA VERIFICAÇÃO"));
     Serial.println(F("========================================\n"));
-
+    #endif
+    
     isFirstCheck = false;
 }
 
@@ -464,16 +792,22 @@ void getTargetFermentacao() {
 // =====================================================
 void loadConfigParameters(const char* configId) {
     if (!configId || strlen(configId) == 0) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[MySQL] ❌ ID inválido"));
+        #endif
         return;
     }
 
+    #if DEBUG_FERMENTATION
     Serial.printf("[MySQL] 🔧 Buscando config: %s\n", configId);
+    #endif
     
     JsonDocument doc;
     
     if (!httpClient.getConfiguration(configId, doc)) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[MySQL] ❌ Falha ao buscar configuração"));
+        #endif
         return;
     }
 
@@ -487,7 +821,9 @@ void loadConfigParameters(const char* configId) {
     
     for (JsonVariant stage : stages) {
         if (count >= MAX_STAGES) {
+            #if DEBUG_FERMENTATION
             Serial.println(F("[MySQL] ⚠️  Máximo de etapas excedido"));
+            #endif
             break;
         }
 
@@ -525,10 +861,15 @@ void loadConfigParameters(const char* configId) {
     if (count > 0 && fermentacaoState.currentStageIndex < count) {
         float targetTemp = fermentacaoState.stages[fermentacaoState.currentStageIndex].targetTemp;
         updateTargetTemperature(targetTemp);
+
+        #if DEBUG_FERMENTATION
         Serial.printf("[MySQL] 🌡️  Temperatura alvo: %.1f°C\n", targetTemp);
+        #endif
     }
 
+    #if DEBUG_FERMENTATION
     Serial.printf("[MySQL] ✅ Configuração carregada: %d etapas\n", count);
+    #endif
 }
 
 // =====================================================
@@ -537,6 +878,7 @@ void loadConfigParameters(const char* configId) {
 void verificarTrocaDeFase() {
     if (!fermentacaoState.active) return;
     
+    #if DEBUG_FERMENTATION
     // Debug periódico
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > 30000) {
@@ -552,19 +894,26 @@ void verificarTrocaDeFase() {
                      fermentacaoState.stages[fermentacaoState.currentStageIndex].targetTemp);
         Serial.println(F("╚════════════════════════════════════╝\n"));
     }
+    #endif
     
     if (fermentacaoState.totalStages == 0) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[Fase] ⚠️  0 etapas, desativando..."));
+        #endif
         deactivateCurrentFermentation();
         return;
     }
     
     if (fermentacaoState.currentStageIndex >= fermentacaoState.totalStages) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[Fase] ⚠️  Índice inválido"));
+        #endif
         
         if (fermentacaoState.totalStages > 0) {
             fermentacaoState.currentStageIndex = 0;
+            #if DEBUG_FERMENTATION
             Serial.println(F("[Fase] 🔄 Recomeçando da etapa 0"));
+            #endif
         } else {
             deactivateCurrentFermentation();
         }
@@ -576,7 +925,9 @@ void verificarTrocaDeFase() {
     time_t nowEpoch = getCurrentEpoch();
     
     if (nowEpoch == 0) {
+        #if DEBUG_FERMENTATION
         Serial.println(F("[Fase] ⚠️ Aguardando sincronização NTP..."));
+        #endif
         return;
     }
     
@@ -590,7 +941,10 @@ void verificarTrocaDeFase() {
         
         // Reset do BrewPi para nova etapa
         brewPiControl.reset();
+
+        #if DEBUG_FERMENTATION
         Serial.println(F("[BrewPi] ✅ Sistema resetado para nova etapa"));
+        #endif
         
         // Determina temperatura alvo
         float newTargetTemp;
@@ -605,6 +959,7 @@ void verificarTrocaDeFase() {
         
         saveStateToEEPROM();
         
+        #if DEBUG_FERMENTATION
         Serial.printf("[Fase] ▶️  Etapa %d/%d iniciada - Alvo: %.1f°C (tipo: ", 
                     fermentacaoState.currentStageIndex + 1,
                     fermentacaoState.totalStages,
@@ -624,6 +979,7 @@ void verificarTrocaDeFase() {
                 Serial.println("GRAVITY_TIME)");
                 break;
         }
+        #endif
     }
 
     // =====================================================
@@ -635,8 +991,9 @@ void verificarTrocaDeFase() {
                             stage.type == STAGE_GRAVITY_TIME);
 
     if (needsTemperature) {
-        // ✅ CORREÇÃO: Atualiza timestamp ANTES de verificar
+        #if DEBUG_FERMENTATION
         state.lastTempUpdate = millis();
+        #endif
         
         // Usa temperatura lida do BrewPi
         float currentTemp = getCurrentBeerTemp();
@@ -684,6 +1041,7 @@ void verificarTrocaDeFase() {
         if (elapsedH < 0) elapsedH = 0;
     }
     
+    #if DEBUG_FERMENTATION
     // Debug periódico
     static unsigned long lastDebug3 = 0;
     if (millis() - lastDebug3 > 300000) {
@@ -712,6 +1070,7 @@ void verificarTrocaDeFase() {
         
         Serial.printf(" (targetReached: %s)\n", targetReached ? "SIM" : "NÃO");
     }
+    #endif
 
     // =====================================================
     // CONTROLE DE RAMPA
@@ -724,12 +1083,14 @@ void verificarTrocaDeFase() {
         float temp = stage.startTemp + (stage.targetTemp - stage.startTemp) * progress;
         updateTargetTemperature(temp);
         
+        #if DEBUG_FERMENTATION
         static unsigned long lastRampDebug = 0;
         if (millis() - lastRampDebug > 60000) {
             lastRampDebug = millis();
             Serial.printf("[Rampa Etapa] Progresso: %.1f°C (%.0f%%)\n", 
                          temp, progress * 100.0f);
         }
+        #endif
     }
 
     // =====================================================
@@ -774,10 +1135,12 @@ void verificarTrocaDeFase() {
     // TRANSIÇÃO PARA PRÓXIMA ETAPA
     // =====================================================
     if (stageCompleted) {
+        #if DEBUG_FERMENTATION
         Serial.printf("[Fase] ✅ Etapa %d/%d concluída após %.1fh\n", 
                     fermentacaoState.currentStageIndex + 1,
                     fermentacaoState.totalStages,
                     elapsedH);
+        #endif
       
         fermentacaoState.currentStageIndex++;
         stageStarted = false;
@@ -786,13 +1149,17 @@ void verificarTrocaDeFase() {
 
         if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
             saveStateToEEPROM();
-            
+
+            #if DEBUG_FERMENTATION
             Serial.printf("[Fase] ↪️  Indo para etapa %d/%d\n", 
                          fermentacaoState.currentStageIndex + 1,
                          fermentacaoState.totalStages);
+            #endif
         } else {
+            #if DEBUG_FERMENTATION
             Serial.println(F("[Fase] 🎉 TODAS AS ETAPAS CONCLUÍDAS!"));
             Serial.println(F("[Fase] 🌡️  Mantendo temperatura atual até comando manual"));
+            #endif
             concluirFermentacaoMantendoTemperatura();
         }
     }
@@ -815,10 +1182,15 @@ void verificarTargetAtingido() {
     if (diff <= TEMPERATURE_TOLERANCE) {
         if (httpClient.notifyTargetReached(fermentacaoState.activeId)) {
             fermentacaoState.targetReachedSent = true;
+            #if DEBUG_FERMENTATION
             Serial.println(F("[MySQL] 🎯 Temperatura alvo atingida!"));
-        } else {
+            #endif
+        } 
+        #if DEBUG_FERMENTATION
+        else {
             Serial.println(F("[MySQL] ❌ Falha ao notificar alvo"));
         }
+        #endif
     }
 }
 
@@ -826,113 +1198,110 @@ void verificarTargetAtingido() {
 // ✅ ENVIAR ESTADO COMPLETO
 // =====================================================
 void enviarEstadoCompleto() {
+    // ========== VERIFICAÇÕES INICIAIS RÁPIDAS ==========
     if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
+        #if DEBUG_ENVIODADOS
+        Serial.println(F("[Envio] ❌ Não enviando: fermentação não ativa"));
+        #endif
         return;
     }
     
     if (!isValidString(fermentacaoState.activeId)) {
+        #if DEBUG_ENVIODADOS
+        Serial.println(F("[Envio] ❌ ID inválido"));
+        #endif
         return;
     }
     
+    // ========== CONTROLE DE TEMPO ENTRE ENVIOS ==========
     static unsigned long lastStateSend = 0;
     unsigned long now = millis();
     
     if (now - lastStateSend < 30000) {
+        #if DEBUG_ENVIODADOS
+        Serial.printf("[Envio] ⏳ Aguardando próximo envio: %lu ms restantes\n", 
+                     30000 - (now - lastStateSend));
+        #endif
         return;
     }
     
     lastStateSend = now;
     
-    DynamicJsonDocument doc(2048);
+    // ========== PREPARAÇÃO RÁPIDOS DOS DADOS ==========
+    JsonDocument doc;
     
+    // 1. Dados essenciais (mais críticos primeiro)
     doc["config_id"] = fermentacaoState.activeId;
-
+    doc["config_name"] = fermentacaoState.configName;
+    doc["currentStageIndex"] = fermentacaoState.currentStageIndex;
+    doc["totalStages"] = fermentacaoState.totalStages;
+    
     if (fermentacaoState.concluidaMantendoTemp) {
         doc["status"] = "completed_holding_temp";
         doc["message"] = "Fermentação concluída - mantendo temperatura";
     } else {
         doc["status"] = "running";
     }
-
-    doc["config_name"] = fermentacaoState.configName;
-    doc["currentStageIndex"] = fermentacaoState.currentStageIndex;
-    doc["totalStages"] = fermentacaoState.totalStages;
-
-    // Temperatura alvo da ETAPA vs temperatura PID
+    
+    // 2. Temperaturas
     if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
         FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
         doc["stageTargetTemp"] = stage.targetTemp;
     }
-
+    
     doc["pidTargetTemp"] = fermentacaoState.tempTarget;
     doc["currentTargetTemp"] = fermentacaoState.tempTarget;
     doc["targetReached"] = fermentacaoState.targetReachedSent;
     
-    // ✅ DEBUG ADICIONADO AQUI
-    Serial.println(F("\n╔══════════════════════════════════════════╗"));
-    Serial.println(F("║  DEBUG enviarEstadoCompleto()            ║"));
-    Serial.println(F("╠══════════════════════════════════════════╣"));
-    Serial.printf("║ stageStartEpoch:      %-18lu ║\n", fermentacaoState.stageStartEpoch);
-    Serial.printf("║ targetReachedSent:    %-18s ║\n", fermentacaoState.targetReachedSent ? "TRUE" : "FALSE");
-    Serial.printf("║ currentStageIndex:    %-18d ║\n", fermentacaoState.currentStageIndex);
-    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
-        Serial.printf("║ Stage type:           %-18d ║\n", fermentacaoState.stages[fermentacaoState.currentStageIndex].type);
-    }
-    Serial.println(F("╚══════════════════════════════════════════╝\n"));
-    
-    // Cálculo do tempo restante
+    // 3. Cálculo do tempo restante (execução otimizada)
     if (fermentacaoState.stageStartEpoch > 0 && 
         fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
-        
-        Serial.println(F("✅ Entrando no bloco de timeRemaining"));
         
         time_t nowEpoch = getCurrentEpoch();
         
         if (nowEpoch > 0) {
             FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-            
-            Serial.printf("   Stage type no IF: %d\n", stage.type);
-            Serial.printf("   STAGE_TEMPERATURE = %d\n", STAGE_TEMPERATURE);
-            Serial.printf("   STAGE_RAMP = %d\n", STAGE_RAMP);
-            Serial.printf("   STAGE_GRAVITY = %d\n", STAGE_GRAVITY);
-            Serial.printf("   STAGE_GRAVITY_TIME = %d\n", STAGE_GRAVITY_TIME);
+            JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+            float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
             
             if (stage.type == STAGE_TEMPERATURE) {
-                Serial.println(F("   → Entrando em STAGE_TEMPERATURE"));
                 if (fermentacaoState.targetReachedSent) {
-                    Serial.println(F("      → targetReached = TRUE, calculando tempo"));
-                    float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
+                    // CORREÇÃO AQUI: Converter durationDays para horas
+                    float stageTotalHours = stage.durationDays * 24.0;
+                    float remainingH = stageTotalHours - elapsedH;
                     
-                    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
-                    float remainingH = (stage.holdTimeHours - elapsedH);
                     if (remainingH < 0) remainingH = 0;
                     
-                    Serial.printf("      elapsedH: %.2f, holdTimeHours: %d, remainingH: %.2f\n", 
-                                 elapsedH, stage.holdTimeHours, remainingH);
-                    
+                    // CORREÇÃO: Ajustar para evitar 23.9h → 23h 60min
+                    // Quando restam menos de 24 horas, garantir que a parte decimal seja correta
                     if (remainingH < 24) {
-                        timeRemaining["value"] = remainingH;
-                        timeRemaining["unit"] = "hours";
+                        // Arredondar para minutos mais próximos para evitar 23h 60min
+                        float remainingMinutes = remainingH * 60.0;
+                        // Arredondar para o minuto mais próximo
+                        remainingMinutes = roundf(remainingMinutes);
+                        // Converter de volta para horas com mais precisão
+                        remainingH = remainingMinutes / 60.0;
+                        
+                        // Garantir que não fique 23.999... horas
+                        if (remainingH >= 23.983f) { // 23h 59min = 23.98333h
+                            timeRemaining["value"] = 24.0;
+                            timeRemaining["unit"] = "hours";
+                        } else {
+                            timeRemaining["value"] = remainingH;
+                            timeRemaining["unit"] = "hours";
+                        }
                     } else {
                         timeRemaining["value"] = remainingH / 24.0;
                         timeRemaining["unit"] = "days";
                     }
                     timeRemaining["status"] = "running";
-                    Serial.println(F("      ✅ timeRemaining criado (running)"));
                 } else {
-                    Serial.println(F("      → targetReached = FALSE, aguardando"));
-                    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
                     timeRemaining["value"] = stage.durationDays;
                     timeRemaining["unit"] = "days";
                     timeRemaining["status"] = "waiting";
-                    Serial.println(F("      ✅ timeRemaining criado (waiting)"));
                 }
             }
             else if (stage.type == STAGE_RAMP) {
-                Serial.println(F("   → Entrando em STAGE_RAMP"));
-                float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
-                
-                JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
                 float remainingH = stage.rampTimeHours - elapsedH;
                 if (remainingH < 0) remainingH = 0;
                 
@@ -944,59 +1313,36 @@ void enviarEstadoCompleto() {
                     timeRemaining["unit"] = "days";
                 }
                 timeRemaining["status"] = "running";
-                Serial.println(F("   ✅ timeRemaining criado (RAMP)"));
+                
+                // Progresso da rampa
+                float progress = constrain(elapsedH / stage.rampTimeHours, 0.0, 1.0);
+                doc["rampProgress"] = progress * 100.0;
             }
             else if (stage.type == STAGE_GRAVITY_TIME) {
-                Serial.println(F("   → Entrando em STAGE_GRAVITY_TIME"));
                 if (fermentacaoState.targetReachedSent) {
-                    float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
-                    
-                    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
-                    float remainingH = (stage.maxTimeHours - elapsedH);
+                    // CORREÇÃO AQUI: Converter timeoutDays para horas
+                    float maxTimeHours = stage.timeoutDays * 24.0;
+                    float remainingH = maxTimeHours - elapsedH;
                     if (remainingH < 0) remainingH = 0;
                     
                     timeRemaining["value"] = remainingH / 24.0;
                     timeRemaining["unit"] = "days";
                     timeRemaining["status"] = "running";
                 } else {
-                    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
                     timeRemaining["value"] = stage.timeoutDays;
                     timeRemaining["unit"] = "days";
                     timeRemaining["status"] = "waiting";
                 }
-                Serial.println(F("   ✅ timeRemaining criado (GRAVITY_TIME)"));
             }
             else if (stage.type == STAGE_GRAVITY) {
-                Serial.println(F("   → Entrando em STAGE_GRAVITY"));
-                JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
                 timeRemaining["value"] = 0;
                 timeRemaining["unit"] = "indefinite";
                 timeRemaining["status"] = "waiting_gravity";
-                Serial.println(F("   ✅ timeRemaining criado (GRAVITY)"));
             }
-            else {
-                Serial.printf("   ❌ TIPO DE ETAPA DESCONHECIDO: %d\n", stage.type);
-            }
-            
-            if (stage.type == STAGE_RAMP) {
-                float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
-                float progress = elapsedH / stage.rampTimeHours;
-                if (progress < 0) progress = 0;
-                if (progress > 1) progress = 1;
-                
-                doc["rampProgress"] = progress * 100.0;
-            }
-        } else {
-            Serial.println(F("   ❌ nowEpoch = 0 (relógio não sincronizado)"));
         }
-    } else {
-        Serial.println(F("❌ NÃO entrando no bloco de timeRemaining!"));
-        Serial.printf("   stageStartEpoch = %lu (precisa ser > 0)\n", fermentacaoState.stageStartEpoch);
-        Serial.printf("   currentStageIndex = %d\n", fermentacaoState.currentStageIndex);
-        Serial.printf("   totalStages = %d\n", fermentacaoState.totalStages);
     }
     
-    // Status detalhado do BrewPi
+    // 4. Status do BrewPi
     DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus();
     
     doc["cooling"] = detailedStatus.coolerActive;
@@ -1007,28 +1353,23 @@ void enviarEstadoCompleto() {
     controlStatus["is_waiting"] = detailedStatus.isWaiting;
     
     if (detailedStatus.isWaiting) {
+        controlStatus["wait_reason"] = detailedStatus.waitReason;
+        
         if (detailedStatus.waitTimeRemaining > 0) {
             controlStatus["wait_seconds"] = detailedStatus.waitTimeRemaining;
-            controlStatus["wait_reason"] = detailedStatus.waitReason;
             
-            String waitDisplay;
+            char waitDisplay[16];
             if (detailedStatus.waitTimeRemaining < 60) {
-                waitDisplay = String(detailedStatus.waitTimeRemaining) + "s";
+                snprintf(waitDisplay, sizeof(waitDisplay), "%us", 
+                        (unsigned int)detailedStatus.waitTimeRemaining);
             } else if (detailedStatus.waitTimeRemaining < 3600) {
-                uint16_t min = detailedStatus.waitTimeRemaining / 60;
-                uint16_t sec = detailedStatus.waitTimeRemaining % 60;
-                waitDisplay = String(min) + "m";
-                if (sec > 0) waitDisplay += String(sec) + "s";
+                snprintf(waitDisplay, sizeof(waitDisplay), "%um", 
+                        (unsigned int)(detailedStatus.waitTimeRemaining / 60));
             } else {
-                uint16_t hours = detailedStatus.waitTimeRemaining / 3600;
-                uint16_t min = (detailedStatus.waitTimeRemaining % 3600) / 60;
-                waitDisplay = String(hours) + "h";
-                if (min > 0) waitDisplay += String(min) + "m";
+                snprintf(waitDisplay, sizeof(waitDisplay), "%uh", 
+                        (unsigned int)(detailedStatus.waitTimeRemaining / 3600));
             }
             controlStatus["wait_display"] = waitDisplay;
-        } else {
-            controlStatus["wait_reason"] = detailedStatus.waitReason;
-            controlStatus["wait_display"] = "aguardando";
         }
     }
     
@@ -1037,27 +1378,101 @@ void enviarEstadoCompleto() {
         controlStatus["estimated_peak"] = detailedStatus.estimatedPeak;
     }
     
-    // ✅ CORREÇÃO: Usa timestamp Unix real (não uptime)
+    // 5. Timestamp e uptime
     time_t nowEpoch = getCurrentEpoch();
     if (nowEpoch > 0) {
-        doc["timestamp"] = nowEpoch;  // Unix timestamp em segundos
+        doc["timestamp"] = nowEpoch;
     }
-    doc["uptime_ms"] = millis();  // Uptime separado para debug
     
-    String payload;
-    serializeJson(doc, payload);
+    doc["uptime_ms"] = millis();
     
-    Serial.println(F("\n📦 JSON FINAL:"));
+    // 6. Adicionar stageType para debug
+    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
+        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
+        const char* stageTypeStr = "";
+        switch(stage.type) {
+            case STAGE_TEMPERATURE: stageTypeStr = "t"; break;
+            case STAGE_RAMP: stageTypeStr = "r"; break;
+            case STAGE_GRAVITY: stageTypeStr = "g"; break;
+            case STAGE_GRAVITY_TIME: stageTypeStr = "gt"; break;
+        }
+        doc["stageType"] = stageTypeStr;
+    }
+    
+    // ========== COMPRESSÃO DOS DADOS ==========
+    compressStateData(doc);
+    
+    // ========== ENVIO IMEDIATO PARA SERVIDOR ==========
+    #if DEBUG_ENVIODADOS
+    // No modo debug, usamos a variável para mostrar o resultado
+    bool sendSuccess = httpClient.updateFermentationState(fermentacaoState.activeId, doc);
+    Serial.printf("[Envio] Resultado: %s\n", sendSuccess ? "✅ Sucesso" : "❌ Falha");
+    #else
+    // No modo normal, não precisamos da variável
+    httpClient.updateFermentationState(fermentacaoState.activeId, doc);
+    #endif
+    
+    // ========== DEBUG APÓS ENVIO (se habilitado) ==========
+    #if DEBUG_ENVIODADOS
+    // Debug detalhado do cálculo de tempo
+    Serial.println(F("\n[DEBUG] ==========================================="));
+    Serial.println(F("[DEBUG] DETALHES DO CÁLCULO DE TEMPO RESTANTE"));
+    Serial.println(F("[DEBUG] ==========================================="));
+    
+    if (fermentacaoState.stageStartEpoch > 0 && 
+        fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
+        
+        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
+        time_t debugNowEpoch = getCurrentEpoch();
+        
+        Serial.printf("[DEBUG] Tipo de etapa: ");
+        switch(stage.type) {
+            case STAGE_TEMPERATURE: 
+                Serial.println(F("TEMPERATURA"));
+                Serial.printf("  durationDays: %d\n", stage.durationDays);
+                Serial.printf("  targetTemp: %.1f\n", stage.targetTemp);
+                break;
+            case STAGE_RAMP: 
+                Serial.println(F("RAMPA"));
+                Serial.printf("  rampTimeHours: %d\n", stage.rampTimeHours);
+                Serial.printf("  targetTemp: %.1f\n", stage.targetTemp);
+                break;
+            case STAGE_GRAVITY: 
+                Serial.println(F("GRAVIDADE"));
+                Serial.printf("  targetGravity: %.3f\n", stage.targetGravity);
+                break;
+            case STAGE_GRAVITY_TIME: 
+                Serial.println(F("GRAVIDADE+TEMPO"));
+                Serial.printf("  timeoutDays: %d\n", stage.timeoutDays);
+                Serial.printf("  targetGravity: %.3f\n", stage.targetGravity);
+                break;
+        }
+        
+        Serial.printf("[DEBUG] stageStartEpoch: %llu\n", (unsigned long long)fermentacaoState.stageStartEpoch);
+        Serial.printf("[DEBUG] nowEpoch: %llu\n", (unsigned long long)debugNowEpoch);
+        
+        if (debugNowEpoch > 0) {
+            float elapsedH = difftime(debugNowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
+            Serial.printf("[DEBUG] Tempo decorrido: %.2f horas\n", elapsedH);
+            
+            if (stage.type == STAGE_TEMPERATURE && fermentacaoState.targetReachedSent) {
+                float stageTotalHours = stage.durationDays * 24.0;
+                float remainingH = stageTotalHours - elapsedH;
+                Serial.printf("[DEBUG] Total horas da etapa: %.1f\n", stageTotalHours);
+                Serial.printf("[DEBUG] Horas restantes: %.1f\n", remainingH);
+            }
+        }
+    }
+    
+    // Mostrar dados enviados
+    Serial.println(F("\n[DEBUG] DADOS ENVIADOS:"));
     serializeJsonPretty(doc, Serial);
     Serial.println();
     
-    if (httpClient.updateFermentationState(fermentacaoState.activeId, payload)) {
-        Serial.println(F("[Estado] ✅ Estado completo enviado ao servidor"));
-    } else {
-        Serial.println(F("[Estado] ⚠️ Falha ao enviar estado"));
-    }
+    Serial.printf("[DEBUG] Heap livre: %d bytes\n", ESP.getFreeHeap());
+    Serial.println(F("[DEBUG] ===========================================\n"));
+    #endif
 }
-
 
 // =====================================================
 // ENVIAR LEITURAS DOS SENSORES
@@ -1066,56 +1481,21 @@ void enviarLeiturasSensores() {
     if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
         return;
     }
-    
-    if (!isValidString(fermentacaoState.activeId)) {
-        return;
-    }
-    
+
     static unsigned long lastSensorReading = 0;
     unsigned long now = millis();
-    
     if (now - lastSensorReading < READINGS_UPDATE_INTERVAL) {
         return;
     }
-    
     lastSensorReading = now;
-    
+
     float tempFermenter, tempFridge;
-    
     if (!readConfiguredTemperatures(tempFermenter, tempFridge)) {
-        Serial.println(F("[Readings] ⚠️  Erro ao ler sensores"));
         return;
     }
-    
+
     float gravity = mySpindel.gravity;
-    
-    JsonDocument doc;
-    doc["config_id"] = fermentacaoState.activeId;
-    doc["temp_fridge"] = tempFridge;
-    doc["temp_fermenter"] = tempFermenter;
-    doc["temp_target"] = fermentacaoState.tempTarget;
-    
-    if (gravity > 0.01) {
-        doc["gravity"] = gravity;
-    }
-    
-    String payload;
-    serializeJson(doc, payload);
-    
-    Serial.println(F("[Readings] 📊 Enviando leitura dos sensores..."));
-    
-    if (httpClient.sendReading(fermentacaoState.activeId, tempFridge, 
-                               tempFermenter, fermentacaoState.tempTarget, gravity)) {
-        Serial.println(F("[Readings] ✅ Dados enviados para tabela 'readings'"));
-        
-        Serial.printf("[Readings] Fridge: %.1f°C, Fermenter: %.1f°C, Target: %.1f°C",
-                     tempFridge, tempFermenter, fermentacaoState.tempTarget);
-        if (gravity > 0.01) {
-            Serial.printf(", Gravity: %.3f\n", gravity);
-        } else {
-            Serial.println();
-        }
-    } else {
-        Serial.println(F("[Readings] ❌ Falha ao enviar dados"));
-    }
+
+    httpClient.sendReading(fermentacaoState.activeId, tempFridge, 
+                           tempFermenter, fermentacaoState.tempTarget, gravity);
 }

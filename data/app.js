@@ -1,4 +1,4 @@
-// app.js - Monitor Passivo (COM visualização de Cooler/Heater)
+// app.js - Monitor Passivo (COM visualização de Cooler/Heater) - CORRIGIDO
 const API_BASE_URL = '/api.php?path=';
 
 // ========== VARIÁVEIS GLOBAIS ==========
@@ -17,7 +17,7 @@ let appState = {
     readings: [],
     ispindel: null,
     controller: null,
-    controllerHistory: [],  // ✅ NOVO: Histórico de estados
+    controllerHistory: [],
     heartbeat: null,
     lastUpdate: null
 };
@@ -334,11 +334,32 @@ function updateRelayStatus() {
     let heaterActive = false;
     let waitingStatus = null;
     
-    if (appState.heartbeat && appState.heartbeat.control_status) {
-        const cs = appState.heartbeat.control_status;
-        
+    // ✅ PRIORIDADE 1: heartbeat (tempo real, enviado a cada 30s)
+    if (appState.heartbeat) {
         coolerActive = appState.heartbeat.cooler_active === 1 || appState.heartbeat.cooler_active === true;
         heaterActive = appState.heartbeat.heater_active === 1 || appState.heartbeat.heater_active === true;
+        
+        // Verifica control_status no heartbeat
+        if (appState.heartbeat.control_status) {
+            const cs = appState.heartbeat.control_status;
+            
+            if (cs.is_waiting && cs.wait_reason) {
+                waitingStatus = {
+                    reason: cs.wait_reason,
+                    display: cs.wait_display || 'aguardando'
+                };
+            }
+        }
+    } 
+    // ✅ FALLBACK: controller_states (enviado a cada 5s, mais frequente)
+    else if (appState.controller) {
+        coolerActive = appState.controller.cooling === 1 || appState.controller.cooling === true;
+        heaterActive = appState.controller.heating === 1 || appState.controller.heating === true;
+    }
+    
+    // ✅ NOVO: Busca control_status no espState (fermentation_states)
+    if (!waitingStatus && appState.espState && appState.espState.control_status) {
+        const cs = appState.espState.control_status;
         
         if (cs.is_waiting && cs.wait_reason) {
             waitingStatus = {
@@ -346,11 +367,21 @@ function updateRelayStatus() {
                 display: cs.wait_display || 'aguardando'
             };
         }
-    } else if (appState.controller) {
-        coolerActive = appState.controller.cooling === 1 || appState.controller.cooling === true;
-        heaterActive = appState.controller.heating === 1 || appState.controller.heating === true;
     }
     
+    // ✅ DEBUG
+    console.log('🔌 Status Relés:', {
+        coolerActive,
+        heaterActive,
+        waitingStatus,
+        sources: {
+            heartbeat: !!appState.heartbeat,
+            controller: !!appState.controller,
+            espState: !!appState.espState
+        }
+    });
+    
+    // Atualiza visual dos relés
     if (coolerActive) {
         coolerStatusDiv.classList.remove('hidden');
     } else {
@@ -363,6 +394,7 @@ function updateRelayStatus() {
         heaterStatusDiv.classList.add('hidden');
     }
     
+    // Gerencia status de espera
     let existingWaitDiv = document.getElementById('waiting-status');
     
     if (waitingStatus) {
@@ -405,12 +437,19 @@ async function loadCompleteState() {
         appState.readings = completeState.readings || [];
         appState.ispindel = completeState.ispindel;
         appState.controller = completeState.controller;
-        appState.controllerHistory = completeState.controller_history || [];  // ✅ NOVO!
+        appState.controllerHistory = completeState.controller_history || [];
         appState.lastUpdate = completeState.timestamp;
         appState.heartbeat = completeState.heartbeat;
         
-        console.log('✅ Estado completo carregado:', completeState);
-        console.log('📊 Histórico controlador:', appState.controllerHistory.length, 'registros');
+        // ✅ DEBUG COMPLETO
+        console.log('✅ Estado completo carregado:', {
+            config: appState.config.name,
+            espState: appState.espState,
+            targetReached: appState.espState.targetReached,
+            timeRemaining: appState.espState.timeRemaining,
+            heartbeat: appState.heartbeat,
+            controllerHistory: appState.controllerHistory.length + ' registros'
+        });
         
         checkESPStatus();
         renderUI();
@@ -539,8 +578,8 @@ function renderInfoCards() {
         gravityTargetSubtitle = 'Sem alvo definido';
     }
 
-    const isReallyRunning = appState.espState.targetReached && 
-                            appState.espState.timeRemaining?.status === 'running';
+    // ✅ CORREÇÃO: Usa apenas targetReached (sem verificar timeRemaining.status)
+    const isReallyRunning = appState.espState.targetReached === true;
     
     const countingStatus = isReallyRunning 
         ? '✅ Contagem iniciada' 
@@ -672,14 +711,17 @@ function renderChart() {
     const coolerData = [];
     const heaterData = [];
     
+    console.log('📊 Processando histórico:', appState.controllerHistory.length, 'registros');
+    
     if (appState.controllerHistory && appState.controllerHistory.length > 0) {
-        appState.readings.forEach((reading) => {
+        appState.readings.forEach((reading, idx) => {
             const readingTime = new Date(reading.reading_timestamp).getTime();
             
             // Busca estado do controlador mais próximo (dentro de 5 minutos)
             const controllerState = appState.controllerHistory.find(cs => {
                 const stateTime = new Date(cs.state_timestamp).getTime();
-                return Math.abs(stateTime - readingTime) < 300000;
+                const diff = Math.abs(stateTime - readingTime);
+                return diff < 300000; // 5 minutos
             });
             
             if (controllerState) {
@@ -689,11 +731,22 @@ function renderChart() {
                 // Mostra temperatura da geladeira quando relé ativo
                 coolerData.push(coolerActive ? parseFloat(reading.temp_fridge) : null);
                 heaterData.push(heaterActive ? parseFloat(reading.temp_fridge) : null);
+                
+                if (idx === 0) { // Debug primeiro ponto
+                    console.log('🔍 Primeiro ponto:', {
+                        reading: reading.reading_timestamp,
+                        controller: controllerState.state_timestamp,
+                        cooler: coolerActive,
+                        heater: heaterActive
+                    });
+                }
             } else {
                 coolerData.push(null);
                 heaterData.push(null);
             }
         });
+    } else {
+        console.warn('⚠️ Nenhum histórico de controller disponível!');
     }
 
     const datasets = [
@@ -738,7 +791,7 @@ function renderChart() {
         }
     ];
 
-    // ✅ Adiciona datasets de cooler/heater (aparecem como áreas preenchidas)
+    // ✅ Adiciona datasets de cooler/heater
     if (coolerData.some(v => v !== null)) {
         datasets.push({
             label: '❄️ Cooler Ativo',
@@ -751,6 +804,9 @@ function renderChart() {
             tension: 0,
             order: 1
         });
+        console.log('✅ Dataset Cooler adicionado:', coolerData.filter(v => v !== null).length, 'pontos ativos');
+    } else {
+        console.warn('⚠️ Nenhum ponto ativo do Cooler');
     }
 
     if (heaterData.some(v => v !== null)) {
@@ -765,6 +821,9 @@ function renderChart() {
             tension: 0,
             order: 1
         });
+        console.log('✅ Dataset Heater adicionado:', heaterData.filter(v => v !== null).length, 'pontos ativos');
+    } else {
+        console.warn('⚠️ Nenhum ponto ativo do Heater');
     }
 
     chart = new Chart(ctx, {

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <cstring>
+#include "debug_config.h"
 
 // ===============================================
 // LAYOUT UNIFICADO DA EEPROM - 512 BYTES
@@ -73,6 +74,7 @@ inline void eepromWriteString(const char* src, int address, size_t maxLength) {
 // ===============================================
 
 inline void printEEPROMLayout() {
+    #if DEBUG_EEPROM
     Serial.println(F("\n╔═══════════════════════════════════════════╗"));
     Serial.println(F("║      LAYOUT DA EEPROM CORRIGIDO (V3)      ║"));
     Serial.println(F("╠══════════════════════════════════════════╣"));
@@ -92,9 +94,11 @@ inline void printEEPROMLayout() {
     Serial.printf( "║ Flags:          %3d, %3d                 ║\n", 
                    ADDR_STAGE_STARTED_FLAG, ADDR_CONFIG_SAVED);
     Serial.println(F("╚═══════════════════════════════════════════╝\n"));
+    #endif
 }
 
 inline void debugEEPROMContents() {
+    #if DEBUG_EEPROM
     Serial.println(F("\n╔═══════════════════════════════════════════╗"));
     Serial.println(F("║            CONTEÚDO DA EEPROM             ║"));
     Serial.println(F("╠══════════════════════════════════════════╣"));
@@ -134,6 +138,7 @@ inline void debugEEPROMContents() {
         Serial.printf( "║ Tempo:    %-29lu ║\n", stageStartTime);
     }
     Serial.println(F("╚═══════════════════════════════════════════╝\n"));
+    #endif
 }
 
 inline void clearEEPROMSection(int startAddr, int endAddr) {

@@ -6,6 +6,8 @@
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
 #include "ESP8266WiFi.h"
+#include "BrewPiStructs.h"        // Define o tipo 'temperature' [2]
+#include "controle_temperatura.h"   // Define a struct 'DetailedControlStatus'
 
 // ========== CONFIGURAÇÕES ==========
 #define SERVER_URL "http://fermentador.mvrinaldi.com.br/"
@@ -17,9 +19,9 @@ class FermentadorHTTPClient {
 private:
     WiFiClient wifiClient;
     HTTPClient http;
-    
+
     bool makeRequest(const String& endpoint, const String& method, 
-                    const String& payload, String& response);
+                    const JsonDocument* payloadDoc, String& response);
 
 public:
     FermentadorHTTPClient();
@@ -28,19 +30,20 @@ public:
     // ==================== FERMENTAÇÃO ====================
     bool getActiveFermentation(JsonDocument& doc);
     bool getConfiguration(const char* configId, JsonDocument& doc);
-    bool updateFermentationState(const char* configId, const String& stateJson);
+    bool updateFermentationState(const char* configId, const JsonDocument& doc);
     bool notifyTargetReached(const char* configId);
     
     // ==================== LEITURAS ====================
     bool sendReading(const char* configId, float tempFridge, 
-                    float tempFermenter, float tempTarget, float gravity);
+                     float tempFermenter, float tempTarget, float gravity);
     
     // ==================== CONTROLE ====================
     bool updateControlState(const char* configId, float setpoint, 
                           bool cooling, bool heating);
     
     // ==================== SENSORES ====================
-    bool sendSensors(const String& sensorsJson);
+    bool sendSensors(const JsonDocument& sensorsDoc);
+    bool sendSensorsData(const JsonDocument& sensorsDoc);
     bool getAssignedSensors(String& fermenterAddr, String& fridgeAddr);
     bool updateCurrentTemperatures(float tempFermenter, float tempFridge);
     
@@ -50,6 +53,8 @@ public:
     // ==================== UTILIDADES ====================
     bool isConnected();
     void printError(const char* context);
+
+    bool sendHeartbeat(int configId, const DetailedControlStatus& status, temperature beerTemp, temperature fridgeTemp);
 };
 
 // Instância global (declarada em http_client.cpp)

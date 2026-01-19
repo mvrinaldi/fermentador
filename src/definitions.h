@@ -15,7 +15,7 @@
 // === Configurações do Sistema === //
 #define EEPROM_SIZE 512                    // Tamanho da EEPROM
 #define MAX_STAGES 10                      // Máximo de etapas por fermentação
-#define TEMPERATURE_TOLERANCE 0.5f         // Tolerância para considerar temperatura atingida (°C)
+#define TEMPERATURE_TOLERANCE 0.3f         // Tolerância para considerar temperatura atingida (°C)
 #define DEFAULT_TEMPERATURE 5.0f          // Temperatura padrão quando não há fermentação ativa (°C)
 
 // === Intervalos de Tempo (em milissegundos) === //
@@ -40,10 +40,8 @@
 #define MIN_HEATER_ON 120000UL             // 2 minutos
 #define MIN_DELAY_BETWEEN_RELAYS 900000UL  // 15 minutos ← EVITAR CICLOS CURTOS!
 
-// === Controle de rampas suaves === //
-#define RAMP_THRESHOLD 3.0f      // Acima de 2°C de diferença, usa rampa suave
-#define RAMP_RATE 0.5f           // Taxa de rampa: 0.5°C por hora
-
 // === Constantes de segurança === //
 #define MIN_SAFE_TEMPERATURE 0.0f         // Não deixar congelar
 #define MAX_SAFE_TEMPERATURE 30.0f        // Limite superior de segurança
+
+#define FERMENTATION_STATE_ENDPOINT "api/esp/state.php"

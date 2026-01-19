@@ -39,6 +39,77 @@ try {
     exit;
 }
 
+// ==================== FUNÇÕES DE LIMPEZA ====================
+
+/**
+ * Limpa registros antigos de uma tabela mantendo apenas os N mais recentes
+ * E também remove registros órfãos (sem config_id)
+ */
+function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $timestampColumn = 'created_at') {
+    static $lastCleanup = [];
+    static $lastOrphanCleanup = [];
+    
+    $cacheKey = "{$tableName}_{$configId}";
+    
+    // Evita limpar a mesma tabela mais de uma vez a cada 5 minutos
+    if (isset($lastCleanup[$cacheKey]) && (time() - $lastCleanup[$cacheKey]) < 300) {
+        return;
+    }
+    
+    try {
+        // 1. LIMPA REGISTROS ANTIGOS DA CONFIGURAÇÃO ESPECÍFICA
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM {$tableName} WHERE config_id = ?");
+        $stmt->execute([$configId]);
+        $count = $stmt->fetch()['total'];
+        
+        // Só limpa se houver mais de 150% do limite
+        $threshold = (int)($keepCount * 1.5);
+        
+        if ($count > $threshold) {
+            $sql = "
+                DELETE t1 FROM {$tableName} t1
+                LEFT JOIN (
+                    SELECT id
+                    FROM {$tableName}
+                    WHERE config_id = ?
+                    ORDER BY {$timestampColumn} DESC
+                    LIMIT {$keepCount}
+                ) t2 ON t1.id = t2.id
+                WHERE t1.config_id = ?
+                  AND t2.id IS NULL
+            ";
+            
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$configId, $configId]);
+            
+            $deleted = $stmt->rowCount();
+            if ($deleted > 0) {
+                error_log("[CLEANUP] {$tableName} (config {$configId}): removidos {$deleted} registros antigos ({$count} → " . ($count - $deleted) . ")");
+            }
+        }
+        
+        $lastCleanup[$cacheKey] = time();
+        
+        // 2. LIMPA REGISTROS ÓRFÃOS (apenas a cada 10 minutos para toda a tabela)
+        $orphanKey = "{$tableName}_orphans";
+        
+        if (!isset($lastOrphanCleanup[$orphanKey]) || (time() - $lastOrphanCleanup[$orphanKey]) > 600) {
+            $stmt = $pdo->prepare("DELETE FROM {$tableName} WHERE config_id IS NULL");
+            $stmt->execute();
+            $orphansDeleted = $stmt->rowCount();
+            
+            if ($orphansDeleted > 0) {
+                error_log("[CLEANUP] {$tableName}: removidos {$orphansDeleted} registros órfãos");
+            }
+            
+            $lastOrphanCleanup[$orphanKey] = time();
+        }
+        
+    } catch (Exception $e) {
+        error_log("[CLEANUP ERROR] {$tableName}: " . $e->getMessage());
+    }
+}
+
 $method = $_SERVER['REQUEST_METHOD'];
 $path = isset($_GET['path']) ? $_GET['path'] : '';
 $input = json_decode(file_get_contents('php://input'), true);
@@ -228,15 +299,14 @@ if ($path === 'configurations/status' && $method === 'PUT') {
         $updateData = ['status' => $status];
         
         if ($status === 'active') {
-            // ===== RESET COMPLETO AO REINICIAR FERMENTAÇÃO =====
+            // RESET COMPLETO AO REINICIAR FERMENTAÇÃO
             
-            // 1. Limpa dados de conclusão anterior
             $updateData['started_at'] = date('Y-m-d H:i:s');
             $updateData['paused_at'] = null;
             $updateData['completed_at'] = null;
             $updateData['current_stage_index'] = 0;
             
-            // 2. Reseta todas as etapas para status inicial
+            // Reseta todas as etapas
             $stmt = $pdo->prepare("
                 UPDATE stages 
                 SET status = 'pending',
@@ -246,7 +316,7 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             ");
             $stmt->execute([$configId]);
             
-            // 3. Ativa primeira etapa
+            // Ativa primeira etapa
             $stmt = $pdo->prepare("
                 UPDATE stages 
                 SET status = 'running', start_time = NOW() 
@@ -254,16 +324,11 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             ");
             $stmt->execute([$configId]);
             
-            // 4. Incrementa contador de uso
+            // Incrementa contador de uso
             $stmt = $pdo->prepare("UPDATE configurations SET times_used = times_used + 1 WHERE id = ?");
             $stmt->execute([$configId]);
             
-            // 5. Limpa leituras antigas
-            
-            // APAGAR LEITURAS COM id_config NULO
-            $stmt = $pdo->prepare("DELETE FROM `readings` WHERE config_id IS NULL");
-            $stmt->execute();
-            
+            // LIMPEZA COMPLETA - Remove TUDO da fermentação anterior
             $stmt = $pdo->prepare("DELETE FROM readings WHERE config_id = ?");
             $stmt->execute([$configId]);
             
@@ -274,43 +339,10 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             $stmt->execute([$configId]);
             
             $stmt = $pdo->prepare("DELETE FROM fermentation_states WHERE config_id = ?");
-            $stmt->execute([$configId]);            
+            $stmt->execute([$configId]);
             
-//            $daysToKeep10 = 10;
-//            $daysToKeep30 = 30;
-            
-            // readings
-//            $stmt = $pdo->prepare("
-//                DELETE FROM readings 
-//                WHERE config_id = ? 
-//                 AND reading_timestamp < NOW() - INTERVAL ? DAY
-//            ");
-//            $stmt->execute([$configId, $daysToKeep10]);
-//            
-//            // ispindel_readings
-//            $stmt = $pdo->prepare("
-//                DELETE FROM ispindel_readings 
-//                WHERE config_id = ? 
-//                  AND reading_timestamp < NOW() - INTERVAL ? DAY
-//            ");
-//            $stmt->execute([$configId, $daysToKeep10]);
-//            
-//            // controller_states
-//            $stmt = $pdo->prepare("
-//                DELETE FROM controller_states 
-//                    WHERE config_id = ? 
-//                  AND state_timestamp < NOW() - INTERVAL ? DAY
-//            ");
-//            $stmt->execute([$configId, $daysToKeep10]);
-            
-//            // fermentation_states
-//            $stmt = $pdo->prepare("
-//                DELETE FROM fermentation_states 
-//                WHERE config_id = ? 
-//                  AND state_timestamp < NOW() - INTERVAL ? DAY
-//            ");
-//            $stmt->execute([$configId, $daysToKeep30]);
-
+            $stmt = $pdo->prepare("DELETE FROM esp_heartbeat WHERE config_id = ?");
+            $stmt->execute([$configId]);
             
         } elseif ($status === 'paused') {
             $updateData['paused_at'] = date('Y-m-d H:i:s');
@@ -404,7 +436,6 @@ if ($path === 'active/activate' && $method === 'POST') {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
     
-    // Verifica se a config pertence ao usuário
     $stmt = $pdo->prepare("SELECT id FROM configurations WHERE id = ? AND user_id = ?");
     $stmt->execute([$configId, $userId]);
     
@@ -420,7 +451,7 @@ if ($path === 'active/deactivate' && $method === 'POST') {
     sendResponse(['success' => true]);
 }
 
-// ==================== ESTADO COMPLETO (ESP → FRONTEND) - ATUALIZADO ====================
+// ==================== ESTADO COMPLETO (ESP → FRONTEND) ====================
 
 if ($path === 'state/complete' && $method === 'GET') {
     requireAuth();
@@ -444,7 +475,7 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $stages = $stmt->fetchAll();
     
-    // Busca estado da fermentação (enviado pelo ESP)
+    // Busca estado da fermentação
     $stmt = $pdo->prepare("
         SELECT * FROM fermentation_states 
         WHERE config_id = ?
@@ -479,7 +510,7 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $ispindel = $stmt->fetch();
     
-    // ✅ NOVO: Busca HISTÓRICO de estados do controlador (últimas 24h)
+    // Busca histórico de estados do controlador (últimas 24h)
     $stmt = $pdo->prepare("
         SELECT * FROM controller_states 
         WHERE config_id = ?
@@ -489,7 +520,7 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $controllerHistory = $stmt->fetchAll();
     
-    // Busca estado ATUAL do controlador (para compatibilidade)
+    // Busca estado atual do controlador
     $stmt = $pdo->prepare("
         SELECT * FROM controller_states 
         WHERE config_id = ?
@@ -499,7 +530,7 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $controller = $stmt->fetch();
     
-    // Busca último heartbeat do ESP
+    // Busca último heartbeat
     $heartbeat = null;
     $isOnline = false;
     try {
@@ -516,7 +547,7 @@ if ($path === 'state/complete' && $method === 'GET') {
             $lastSeen = new DateTime($heartbeat['heartbeat_timestamp']);
             $now = new DateTime();
             $diff = $now->getTimestamp() - $lastSeen->getTimestamp();
-            $isOnline = $diff < 120; // Online se < 2 minutos
+            $isOnline = $diff < 120;
             
             if (isset($heartbeat['control_status']) && is_string($heartbeat['control_status'])) {
                 $heartbeat['control_status'] = json_decode($heartbeat['control_status'], true);
@@ -532,14 +563,14 @@ if ($path === 'state/complete' && $method === 'GET') {
         'readings' => $readings,
         'ispindel' => $ispindel ?: null,
         'controller' => $controller ?: null,
-        'controller_history' => $controllerHistory ?: [],  // ✅ NOVO!
+        'controller_history' => $controllerHistory ?: [],
         'heartbeat' => $heartbeat ?: null,
         'is_online' => $isOnline,
         'timestamp' => date('Y-m-d H:i:s')
     ]);
 }
 
-// ==================== LEITURAS (VINCULADAS AO CONFIG_ID) ====================
+// ==================== LEITURAS (COM LIMPEZA AUTOMÁTICA) ====================
 
 if ($path === 'readings' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
@@ -558,10 +589,13 @@ if ($path === 'readings' && $method === 'POST') {
     ");
     $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget, $gravity]);
     
+    // ✅ Limpa registros antigos E órfãos
+    cleanupOldRecords($pdo, 'readings', $configId, 500, 'reading_timestamp');
+    
     sendResponse(['success' => true, 'reading_id' => $pdo->lastInsertId()], 201);
 }
 
-// ==================== ISPINDEL (VINCULADO AO CONFIG_ID) ====================
+// ==================== ISPINDEL (COM LIMPEZA AUTOMÁTICA) ====================
 
 if ($path === 'ispindel/data' && $method === 'POST') {
     $name = $input['name'] ?? 'iSpindel';
@@ -586,12 +620,17 @@ if ($path === 'ispindel/data' && $method === 'POST') {
         
         $configId = $activeConfig ? $activeConfig['id'] : null;
         
-        // Insere leitura do iSpindel VINCULADA ao config_id
+        // Insere leitura
         $stmt = $pdo->prepare("
             INSERT INTO ispindel_readings (config_id, name, temperature, gravity, battery, angle)
             VALUES (?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([$configId, $name, $temperature, $gravity, $battery, $angle]);
+        
+        // ✅ Limpa registros antigos E órfãos
+        if ($configId) {
+            cleanupOldRecords($pdo, 'ispindel_readings', $configId, 500, 'reading_timestamp');
+        }
         
         sendResponse(['success' => true, 'message' => 'iSpindel data saved'], 201);
         
@@ -600,7 +639,7 @@ if ($path === 'ispindel/data' && $method === 'POST') {
     }
 }
 
-// ==================== CONTROLE ====================
+// ==================== CONTROLE (COM LIMPEZA AUTOMÁTICA) ====================
 
 if ($path === 'control' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
@@ -618,10 +657,13 @@ if ($path === 'control' && $method === 'POST') {
     ");
     $stmt->execute([$configId, $setpoint, $cooling, $heating]);
     
+    // ✅ Limpa registros antigos E órfãos
+    cleanupOldRecords($pdo, 'controller_states', $configId, 200, 'state_timestamp');
+    
     sendResponse(['success' => true], 201);
 }
 
-// ==================== ESTADO FERMENTAÇÃO (ESP ENVIA) ====================
+// ==================== ESTADO FERMENTAÇÃO (COM LIMPEZA AUTOMÁTICA) ====================
 
 if ($path === 'fermentation-state' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
@@ -636,7 +678,79 @@ if ($path === 'fermentation-state' && $method === 'POST') {
     ");
     $stmt->execute([$configId, json_encode($input)]);
     
+    // ✅ Limpa registros antigos E órfãos
+    cleanupOldRecords($pdo, 'fermentation_states', $configId, 100, 'state_timestamp');
+    
     sendResponse(['success' => true], 201);
+}
+
+// ==================== HEARTBEAT (COM LIMPEZA AGRESSIVA) ====================
+
+if ($path === 'heartbeat' && $method === 'POST') {
+    $configId = $input['config_id'] ?? null;
+    $uptime = $input['uptime'] ?? null;
+    $freeHeap = $input['free_heap'] ?? null;
+    $controlStatus = $input['control_status'] ?? null;
+    
+    if (!$configId) {
+        sendResponse(['error' => 'config_id é obrigatório'], 400);
+    }
+    
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO esp_heartbeat (config_id, uptime, free_heap, control_status)
+            VALUES (?, ?, ?, ?)
+        ");
+        $stmt->execute([
+            $configId, 
+            $uptime, 
+            $freeHeap,
+            $controlStatus ? json_encode($controlStatus) : null
+        ]);
+        
+        // ✅ LIMPEZA AGRESSIVA - mantém apenas os últimos 50 registros E remove órfãos
+        cleanupOldRecords($pdo, 'esp_heartbeat', $configId, 50, 'heartbeat_timestamp');
+        
+        sendResponse(['success' => true], 201);
+        
+    } catch (Exception $e) {
+        sendResponse(['error' => 'Error saving heartbeat: ' . $e->getMessage()], 500);
+    }
+}
+
+// ==================== LIMPEZA MANUAL (ENDPOINT ADICIONAL) ====================
+
+if ($path === 'cleanup' && $method === 'POST') {
+    $userId = requireAuth();
+    
+    try {
+        // Busca todas as configurações do usuário
+        $stmt = $pdo->prepare("SELECT id FROM configurations WHERE user_id = ?");
+        $stmt->execute([$userId]);
+        $configs = $stmt->fetchAll();
+        
+        $cleaned = 0;
+        foreach ($configs as $config) {
+            $configId = $config['id'];
+            
+            // Força limpeza de todas as tabelas (incluindo órfãos)
+            cleanupOldRecords($pdo, 'readings', $configId, 500, 'reading_timestamp');
+            cleanupOldRecords($pdo, 'controller_states', $configId, 200, 'state_timestamp');
+            cleanupOldRecords($pdo, 'fermentation_states', $configId, 100, 'state_timestamp');
+            cleanupOldRecords($pdo, 'esp_heartbeat', $configId, 50, 'heartbeat_timestamp');
+            cleanupOldRecords($pdo, 'ispindel_readings', $configId, 500, 'reading_timestamp');
+            
+            $cleaned++;
+        }
+        
+        sendResponse([
+            'success' => true, 
+            'message' => "Limpeza executada em {$cleaned} configurações"
+        ]);
+        
+    } catch (Exception $e) {
+        sendResponse(['error' => 'Erro na limpeza: ' . $e->getMessage()], 500);
+    }
 }
 
 http_response_code(404);

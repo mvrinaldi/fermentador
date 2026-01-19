@@ -1,61 +1,84 @@
-// eeprom_utils.h - Utilitários para gerenciar EEPROM
+// eeprom_utils.h
 #pragma once
 #include <Arduino.h>
 #include <EEPROM.h>
+#include "debug_config.h"
 
-// ==================== FUNÇÃO PARA LIMPAR TODA A EEPROM ====================
+// ==================== FUNÇÕES PÚBLICAS (sempre disponíveis) ====================
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void clearAllEEPROM();
+void diagnosticEEPROM();
+void checkSerialCommands();
+
+#ifdef __cplusplus
+}
+#endif
+
+// ==================== IMPLEMENTAÇÃO ====================
+// REMOVER O extern "C" DAQUI - as implementações já correspondem às declarações acima
+
 void clearAllEEPROM() {
-    Serial.println(F("\n⚠️ LIMPANDO TODA A EEPROM..."));
+    #if DEBUG_EEPROM
+    LOG_EEPROM("⚠️ LIMPANDO TODA A EEPROM...");
+    #endif
     
     EEPROM.begin(512);
     
-    // Zera todos os 512 bytes
     for (int i = 0; i < 512; i++) {
         EEPROM.write(i, 0);
     }
     
     if (EEPROM.commit()) {
-        Serial.println(F("✅ EEPROM completamente limpa!"));
-        Serial.println(F("🔄 Reiniciando ESP em 3 segundos..."));
+        #if DEBUG_EEPROM
+        LOG_EEPROM("✅ EEPROM limpa! Reiniciando em 3s...");
+        #endif
         delay(3000);
-        ESP.restart();
-    } else {
-        Serial.println(F("❌ Falha ao limpar EEPROM"));
+        ESP.restart();  // ✅ SEMPRE REINICIA
     }
+    #if DEBUG_EEPROM
+    else {
+        LOG_EEPROM("❌ Falha ao limpar EEPROM");
+    }
+    #endif
 }
 
-// ==================== FUNÇÃO PARA DIAGNOSTICAR EEPROM ====================
 void diagnosticEEPROM() {
-    Serial.println(F("\n📊 DIAGNÓSTICO DA EEPROM"));
-    Serial.println(F("=============================================="));
+    #if DEBUG_EEPROM
+    // Toda a função dentro do #if
+    LOG_EEPROM("📊 DIAGNÓSTICO DA EEPROM");
+    LOG_EEPROM("==============================================");
     
     EEPROM.begin(512);
     
-    // Verifica bytes não-zero
     int nonZeroCount = 0;
     for (int i = 0; i < 512; i++) {
-        if (EEPROM.read(i) != 0) {
-            nonZeroCount++;
-        }
+        if (EEPROM.read(i) != 0) nonZeroCount++;
     }
     
-    Serial.printf("Bytes não-zero: %d/512\n", nonZeroCount);
+    LOG_EEPROM("Bytes não-zero: %d/512", nonZeroCount);
+    LOG_EEPROM("Primeiros 128 bytes:");
     
-    // Mostra primeiros 128 bytes (área de configuração)
-    Serial.println(F("\nPrimeiros 128 bytes (config):"));
     for (int i = 0; i < 128; i += 16) {
-        Serial.printf("%03d: ", i);
+        char line[64] = {0};
+        char* ptr = line;
+        ptr += sprintf(ptr, "%03d: ", i);
+        
         for (int j = 0; j < 16 && (i + j) < 128; j++) {
-            Serial.printf("%02X ", EEPROM.read(i + j));
+            ptr += sprintf(ptr, "%02X ", EEPROM.read(i + j));
         }
-        Serial.println();
+        LOG_EEPROM("%s", line);
     }
     
-    Serial.println(F("==============================================\n"));
+    LOG_EEPROM("==============================================");
+    #endif
 }
 
-// ==================== COMANDOS VIA SERIAL ====================
 void checkSerialCommands() {
+    #if DEBUG_EEPROM || defined(ENABLE_SERIAL_COMMANDS)
+    // Só verifica comandos se debug habilitado ou comandos explicitamente habilitados
     if (Serial.available()) {
         String cmd = Serial.readStringUntil('\n');
         cmd.trim();
@@ -65,15 +88,21 @@ void checkSerialCommands() {
         } else if (cmd.equalsIgnoreCase("DIAG_EEPROM")) {
             diagnosticEEPROM();
         } else if (cmd.equalsIgnoreCase("RESTART")) {
-            Serial.println(F("🔄 Reiniciando..."));
+            #if DEBUG_EEPROM
+            LOG_EEPROM("🔄 Reiniciando...");
+            #endif
             delay(1000);
             ESP.restart();
-        } else if (cmd.equalsIgnoreCase("HELP")) {
+        }
+        #if DEBUG_EEPROM
+        else if (cmd.equalsIgnoreCase("HELP")) {
             Serial.println(F("\n📋 COMANDOS DISPONÍVEIS:"));
             Serial.println(F("  CLEAR_EEPROM - Limpa toda a EEPROM"));
             Serial.println(F("  DIAG_EEPROM  - Mostra diagnóstico"));
             Serial.println(F("  RESTART      - Reinicia o ESP"));
             Serial.println(F("  HELP         - Mostra esta ajuda\n"));
         }
+        #endif
     }
+    #endif
 }

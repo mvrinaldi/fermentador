@@ -18,8 +18,10 @@ struct Rele {
     digitalWrite(pino, pinValue);
     
     // ✅ DEBUG temporário
+    #if DEBUG_RELES
     Serial.printf("[RELE] %s: estado=%d, invertido=%d, pino=%d, valor=%d\n",
                   nome, estado, invertido, pino, pinValue);
+    #endif
   }
 };
 

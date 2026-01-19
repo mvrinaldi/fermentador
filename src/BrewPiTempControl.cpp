@@ -1,6 +1,7 @@
 // BrewPiTempControl.cpp - Implementação COMPLETA do controle BrewPi
 #include "BrewPiTempControl.h"
 #include "globais.h"
+#include "debug_config.h"
 
 // Definição da instância global
 BrewPiTempControl brewPiControl;
@@ -38,14 +39,18 @@ void BrewPiTempControl::init() {
     updateTemperatures();
     reset();
     
+    #if DEBUG_BREWPI
     Serial.println(F("[BrewPi] ✅ Sistema inicializado"));
+    #endif
 }
 
 void BrewPiTempControl::reset() {
     doPosPeakDetect = false;
     doNegPeakDetect = false;
     
+    #if DEBUG_BREWPI
     Serial.println(F("[BrewPi] 🔄 Controle resetado"));
+    #endif
 }
 
 void BrewPiTempControl::setSensors(DallasTemperature* sensors, uint8_t beerIdx, uint8_t fridgeIdx) {
@@ -60,25 +65,35 @@ void BrewPiTempControl::setSensors(DallasTemperature* sensors, uint8_t beerIdx, 
     
     initFilters();
     
+    #if DEBUG_BREWPI
     Serial.println(F("[BrewPi] 📡 Sensores configurados"));
+    #endif
 }
 
 void BrewPiTempControl::setActuators(Rele* cool, Rele* heat) {
     cooler = cool;
     heater = heat;
     
+        #if DEBUG_BREWPI
     Serial.println(F("[BrewPi] ⚡ Atuadores configurados"));
+    #endif
 }
 
 void BrewPiTempControl::loadDefaultConstants() {
     cc = DEFAULT_CONTROL_CONSTANTS;
+
+    #if DEBUG_BREWPI
     Serial.println(F("[BrewPi] 📋 Constantes padrão carregadas"));
+    #endif
 }
 
 void BrewPiTempControl::loadDefaultSettings() {
     cs = DEFAULT_CONTROL_SETTINGS;
     storedBeerSetting = cs.beerSetting;
+
+    #if DEBUG_BREWPI
     Serial.println(F("[BrewPi] ⚙️  Configurações padrão carregadas"));
+    #endif
 }
 
 void BrewPiTempControl::initFilters() {
@@ -92,7 +107,9 @@ void BrewPiTempControl::initFilters() {
     beerSensor->setSlowFilterCoefficients(cc.beerSlowFilter);
     beerSensor->setSlopeFilterCoefficients(cc.beerSlopeFilter);
     
+    #if DEBUG_BREWPI
     Serial.println(F("[BrewPi] 🔧 Filtros inicializados"));
+    #endif
 }
 
 // ========================================
@@ -198,6 +215,7 @@ void BrewPiTempControl::updatePID() {
         cs.fridgeSetting = constrainTemp(constrainTemp16(newFridgeSetting), lowerBound, upperBound);
         
         // Debug periódico
+        #if DEBUG_BREWPI
         static unsigned long lastPIDDebug = 0;
         if (millis() - lastPIDDebug >= 30000) {
             lastPIDDebug = millis();
@@ -212,6 +230,7 @@ void BrewPiTempControl::updatePID() {
             Serial.printf("Fridge Setting: %.2f°C\n", tempToFloat(cs.fridgeSetting));
             Serial.println(F("━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
         }
+        #endif
     }
     else if (cs.mode == MODE_FRIDGE_CONSTANT) {
         cs.beerSetting = INVALID_TEMP;
@@ -401,7 +420,9 @@ void BrewPiTempControl::increaseEstimator(temperature* estimator, temperature er
         *estimator = intToTempDiff(5)/100;  // Mínimo 0.05
     }
     
+    #if DEBUG_BREWPI
     Serial.printf("[BrewPi] ↑ Estimador aumentado para %.3f\n", tempToFloat(*estimator));
+    #endif
 }
 
 void BrewPiTempControl::decreaseEstimator(temperature* estimator, temperature error) {
@@ -409,7 +430,9 @@ void BrewPiTempControl::decreaseEstimator(temperature* estimator, temperature er
     temperature factor = 426 - constrainTemp(abs((int)error)>>5, 0, 85);  // 0.833 - 3.1% do erro
     *estimator = multiplyFactorTemperatureDiff(factor, *estimator);
     
+    #if DEBUG_BREWPI
     Serial.printf("[BrewPi] ↓ Estimador diminuído para %.3f\n", tempToFloat(*estimator));
+    #endif
 }
 
 void BrewPiTempControl::detectPeaks() {
@@ -434,9 +457,11 @@ void BrewPiTempControl::detectPeaks() {
             
             cv.posPeak = peak;
             doPosPeakDetect = false;
-            
+          
+            #if DEBUG_BREWPI
             Serial.printf("[BrewPi] 🔺 Pico positivo: %.2f°C (esperado: %.2f°C)\n",
                          tempToFloat(peak), tempToFloat(estimate));
+            #endif
         }
         else if (timeSinceHeating() > HEAT_PEAK_DETECT_TIME) {
             // Timeout - sem pico detectado
@@ -464,8 +489,10 @@ void BrewPiTempControl::detectPeaks() {
             cv.negPeak = peak;
             doNegPeakDetect = false;
             
+            #if DEBUG_BREWPI
             Serial.printf("[BrewPi] 🔻 Pico negativo: %.2f°C (esperado: %.2f°C)\n",
                          tempToFloat(peak), tempToFloat(estimate));
+            #endif
         }
         else if (timeSinceCooling() > COOL_PEAK_DETECT_TIME) {
             // Timeout - sem pico detectado
@@ -546,7 +573,9 @@ void BrewPiTempControl::setBeerTemp(temperature newTemp) {
     updateState();
     storedBeerSetting = newTemp;
     
+    #if DEBUG_BREWPI
     Serial.printf("[BrewPi] 🎯 Beer setting: %.2f°C\n", tempToFloat(newTemp));
+    #endif
 }
 
 void BrewPiTempControl::setFridgeTemp(temperature newTemp) {
@@ -555,7 +584,9 @@ void BrewPiTempControl::setFridgeTemp(temperature newTemp) {
     updatePID();
     updateState();
     
+    #if DEBUG_BREWPI
     Serial.printf("[BrewPi] ❄️  Fridge setting: %.2f°C\n", tempToFloat(newTemp));
+    #endif
 }
 
 void BrewPiTempControl::setMode(char newMode, bool force) {
@@ -575,7 +606,9 @@ void BrewPiTempControl::setMode(char newMode, bool force) {
             cs.fridgeSetting = INVALID_TEMP;
         }
         
+        #if DEBUG_BREWPI
         Serial.printf("[BrewPi] 📋 Modo alterado para: %c\n", newMode);
+        #endif
     }
 }
 
