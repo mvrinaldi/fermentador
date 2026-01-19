@@ -7,4 +7,3 @@ secrets.h
 .DS_Store
 *.log
 *.bin
-.vscode/sftp.json
