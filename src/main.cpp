@@ -1,7 +1,7 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "3.1.6"
-#define IMPLEMENTACAO "Correção de tempo 23h 60 min"
+#define FIRMWARE_VERSION "3.2.2"
+#define IMPLEMENTACAO "Retorno commit etapas somente dias"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 

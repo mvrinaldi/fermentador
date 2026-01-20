@@ -825,12 +825,9 @@ const stageTemplate = (stage, index) => {
                     ${stage.type === 'temperature' ? `
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">Duração (dias)</label>
-                            <input type="number" 
-                               min="0.1"
-                               step="0.1"
-                               value="${stage.duration}"
-                               onchange="updateStage(${stage.id}, 'duration', parseFloat(this.value))"
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                                <input type="number" min="1" value="${stage.duration}"
+                                    onchange="updateStage(${stage.id}, 'duration', parseInt(this.value))"
+                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                         </div>
                     ` : ''}
 
