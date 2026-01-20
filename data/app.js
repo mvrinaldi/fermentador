@@ -224,41 +224,69 @@ function formatTimestamp(date) {
 }
 
 function formatTimeRemaining(tr) {
-    if (!tr || !tr.value || !tr.unit) {
+    if (!tr) {
         return '--';
     }
     
-    if (tr.unit === 'hours') {
-        const totalHours = parseFloat(tr.value);
-        const hours = Math.floor(totalHours);
-        const minutes = Math.round((totalHours - hours) * 60);
+    // ✅ NOVO FORMATO: {days, hours, minutes, unit: 'detailed', status}
+    if (tr.unit === 'detailed' && tr.days !== undefined) {
+        const parts = [];
         
-        if (totalHours < 1) {
-            return `${Math.round(totalHours * 60)}min`;
-        } else if (minutes > 0) {
-            return `${hours}h ${minutes}min`;
-        } else {
-            return `${hours}h`;
+        if (tr.days > 0) {
+            parts.push(`${tr.days}d`);
         }
-    } 
-    else if (tr.unit === 'days') {
-        const totalDays = parseFloat(tr.value);
+        if (tr.hours > 0) {
+            parts.push(`${tr.hours}h`);
+        }
+        if (tr.minutes > 0) {
+            parts.push(`${tr.minutes}m`);
+        }
         
-        if (totalDays >= 1) {
-            return `${totalDays.toFixed(1)} dias`;
-        } else {
-            const hours = Math.round(totalDays * 24);
-            return `${hours}h`;
+        // Se todos forem zero (menos de 1 minuto)
+        if (parts.length === 0) {
+            return '< 1m';
         }
-    }
-    else if (tr.unit === 'indefinite') {
-        return 'Aguardando gravidade';
-    }
-    else if (tr.unit === 'ind') {
-        return 'Indefinido';
+        
+        return parts.join(' ');
     }
     
-    return `${tr.value} ${tr.unit}`;
+    // ✅ FORMATO ANTIGO: {value, unit, status}
+    if (tr.value !== undefined && tr.unit) {
+        if (tr.unit === 'indefinite' || tr.unit === 'ind') {
+            return 'Aguardando gravidade';
+        }
+        
+        if (tr.unit === 'hours') {
+            const totalHours = parseFloat(tr.value);
+            const hours = Math.floor(totalHours);
+            const minutes = Math.round((totalHours - hours) * 60);
+            
+            if (totalHours < 1) {
+                return `${Math.round(totalHours * 60)}min`;
+            } else if (minutes > 0) {
+                return `${hours}h ${minutes}min`;
+            } else {
+                return `${hours}h`;
+            }
+        } 
+        else if (tr.unit === 'days') {
+            const totalDays = parseFloat(tr.value);
+            
+            if (totalDays >= 1) {
+                return `${totalDays.toFixed(1)} dias`;
+            } else {
+                const hours = Math.round(totalDays * 24);
+                return `${hours}h`;
+            }
+        }
+        else if (tr.unit === 'minutes') {
+            return `${Math.round(tr.value)}min`;
+        }
+        
+        return `${tr.value} ${tr.unit}`;
+    }
+    
+    return '--';
 }
 
 // ========== FUNÇÃO DE DESCOMPRESSÃO DOS DADOS ==========
@@ -338,29 +366,64 @@ function decompressData(data) {
         }
     });
     
-    // ========== 2. INFERIR targetReached baseado em outros campos ==========
-    // NOTA: O ESP está enviando "targetReached" como booleano, não como "tr"
-    // Removemos a lógica de inferência e mantemos o campo original
-    
-    // ========== 3. Processar campo "tr" (apenas para fallback/compatibilidade) ==========
-    // O PHP já deve ter processado, mas mantemos para segurança
+    // ========== 2. Processar campo "tr" ==========
     if (result.tr !== undefined) {
         console.log('⚠️ Campo "tr" ainda presente (PHP não processou?)');
         
-        if (Array.isArray(result.tr) && result.tr.length >= 3) {
-            result.timeRemaining = {
-                value: result.tr[0],
-                unit: unitMap[result.tr[1]] || result.tr[1],
-                status: statusMap[result.tr[2]] || 
-                       messageMap[result.tr[2]] || 
-                       result.tr[2] || 'unknown'
-            };
-            result.targetReached = true;
-            delete result.tr;
-        } else if (typeof result.tr === 'boolean') {
-            // Se tr for booleano, é targetReached
+        if (Array.isArray(result.tr)) {
+            // Formato novo: [dias, horas, minutos, status]
+            if (result.tr.length === 4 && 
+                typeof result.tr[0] === 'number' && 
+                typeof result.tr[1] === 'number' && 
+                typeof result.tr[2] === 'number') {
+                
+                result.timeRemaining = {
+                    days: result.tr[0],
+                    hours: result.tr[1],
+                    minutes: result.tr[2],
+                    unit: 'detailed',
+                    status: statusMap[result.tr[3]] || 
+                           messageMap[result.tr[3]] || 
+                           result.tr[3] || 'unknown'
+                };
+                result.targetReached = true;
+                
+            // Formato antigo: [valor, unidade, status]
+            } else if (result.tr.length >= 3) {
+                result.timeRemaining = {
+                    value: result.tr[0],
+                    unit: unitMap[result.tr[1]] || result.tr[1],
+                    status: statusMap[result.tr[2]] || 
+                           messageMap[result.tr[2]] || 
+                           result.tr[2] || 'unknown'
+                };
+                result.targetReached = true;
+            }
+        } 
+        // Se tr é booleano (targetReached direto)
+        else if (typeof result.tr === 'boolean') {
+            console.log('✅ tr é booleano (targetReached):', result.tr);
             result.targetReached = result.tr;
-            delete result.tr;
+        }
+        
+        delete result.tr;
+    }
+    
+    // ========== 3. Inferir targetReached se necessário ==========
+    // Se targetReached ainda não foi definido e temos timeRemaining
+    if (result.targetReached === undefined) {
+        if (result.timeRemaining) {
+            // Se tem timeRemaining, targetReached é true
+            result.targetReached = true;
+            console.log('✅ Inferido targetReached = true (tem timeRemaining)');
+        } else if (result.status === 'running' || result.status === 'Executando') {
+            // Se status é running e não tem timeRemaining, targetReached é false
+            result.targetReached = false;
+            console.log('✅ Inferido targetReached = false (status running, sem timeRemaining)');
+        } else if (result.status === 'waiting' || result.status === 'Aguardando') {
+            // Se status é waiting, targetReached é false
+            result.targetReached = false;
+            console.log('✅ Inferido targetReached = false (status waiting)');
         }
     }
     
@@ -461,6 +524,20 @@ async function loadCompleteState() {
         console.error('Erro ao carregar estado:', error);
         renderNoActiveFermentation();
     }
+}
+
+// Adicione esta função para obter o texto do status
+function getStatusText(tr) {
+    if (!tr || !tr.status) return '';
+    
+    const statusMap = {
+        'running': 'restantes',
+        'waiting': 'aguardando temperatura',
+        'waiting_gravity': 'aguardando gravidade',
+        'waiting_gravity': 'aguardando gravidade'
+    };
+    
+    return statusMap[tr.status] || tr.status;
 }
 
 async function autoRefreshData() {
@@ -671,14 +748,14 @@ function renderUI() {
             statusClass = 'text-blue-600';
         }
         
-        const label = tr.status === 'waiting' ? '(aguardando alvo)' : 
-                     tr.status === 'waiting_gravity' ? '(aguardando gravidade)' : 'restantes';
+        // ✅ Use a nova função formatTimeRemaining e getStatusText
         const timeDisplay = formatTimeRemaining(tr);
+        const statusText = getStatusText(tr);
         
         timeElement.innerHTML = `
             <i class="${icon} ${statusClass}"></i> 
             <span class="${statusClass}">
-                ${timeDisplay} ${label}
+                ${timeDisplay} ${statusText}
             </span>
         `;
         timeElement.style.display = 'flex';

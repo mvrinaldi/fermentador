@@ -122,32 +122,36 @@ function decompressStateData(&$data) {
         }
     }
     
-    // ========== 2. SEGUNDO: Processar campo "tr" (CRÍTICO) ==========
-    // IMPORTANTE: O ESP está enviando "targetReached" como booleano DIRETAMENTE
-    // e NÃO está enviando "tr". A função compressStateData pode estar enviando "tr" como array
-    // mas na sua função enviarEstadoCompleto atual, você envia doc["targetReached"] = booleano
-    
+    // ========== 2. Processar campo "tr" ==========
     if (isset($data['tr'])) {
         error_log("DEBUG: Campo 'tr' encontrado. Tipo: " . gettype($data['tr']) . 
                  ", Valor: " . json_encode($data['tr']));
         
-        if (is_array($data['tr']) && count($data['tr']) >= 3) {
-            // É timeRemaining (array [valor, unidade, status])
-            error_log("DEBUG: 'tr' é array (timeRemaining)");
+        if (is_array($data['tr'])) {
+            $tr = $data['tr'];
             
-            $value = $data['tr'][0];
-            $unit = isset($data['tr'][1]) ? $data['tr'][1] : '';
-            $status = isset($data['tr'][2]) ? $data['tr'][2] : '';
-            
-            $data['timeRemaining'] = [
-                'value' => $value,
-                'unit' => isset($unitMap[$unit]) ? $unitMap[$unit] : $unit,
-                'status' => isset($statusMap[$status]) ? $statusMap[$status] : 
-                           (isset($messageMap[$status]) ? $messageMap[$status] : $status)
-            ];
-            
-            // Se tem timeRemaining, targetReached é implicitamente true
-            $data['targetReached'] = true;
+            // Formato novo: [dias, horas, minutos, status]
+            if (count($tr) == 4 && is_numeric($tr[0]) && is_numeric($tr[1]) && is_numeric($tr[2])) {
+                $data['timeRemaining'] = [
+                    'days' => (int)$tr[0],
+                    'hours' => (int)$tr[1],
+                    'minutes' => (int)$tr[2],
+                    'status' => isset($statusMap[$tr[3]]) ? $statusMap[$tr[3]] : 
+                              (isset($messageMap[$tr[3]]) ? $messageMap[$tr[3]] : $tr[3]),
+                    'unit' => 'detailed'
+                ];
+                $data['targetReached'] = true;
+            }
+            // Formato antigo: [valor, unidade, status]
+            elseif (count($tr) == 3) {
+                $data['timeRemaining'] = [
+                    'value' => $tr[0],
+                    'unit' => isset($unitMap[$tr[1]]) ? $unitMap[$tr[1]] : $tr[1],
+                    'status' => isset($statusMap[$tr[2]]) ? $statusMap[$tr[2]] : 
+                              (isset($messageMap[$tr[2]]) ? $messageMap[$tr[2]] : $tr[2])
+                ];
+                $data['targetReached'] = true;
+            }
             
             unset($data['tr']);
             
@@ -160,7 +164,7 @@ function decompressStateData(&$data) {
             unset($data['tr']);
         }
     }
-    // Se não tem 'tr' mas tem 'targetReached' (o ESP está enviando assim)
+    // Se não tem 'tr' mas tem 'targetReached' (caso direto do ESP)
     elseif (isset($data['targetReached'])) {
         error_log("DEBUG: Campo 'targetReached' encontrado: " . 
                  ($data['targetReached'] ? 'true' : 'false'));

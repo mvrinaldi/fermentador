@@ -378,105 +378,113 @@ void compressStateData(JsonDocument &doc) {
         }
     }
     
-    // 5. VERIFICAÇÃO CRÍTICA: timeRemaining precisa ser processado ANTES de renomear targetReached
-    // Se timeRemaining existe, não podemos usar "tr" para targetReached
+    // 5. Comprimir timeRemaining (nova versão para formato detalhado)
     if (!doc["timeRemaining"].isNull() && doc["timeRemaining"].is<JsonObject>()) {
         JsonObject tr = doc["timeRemaining"].as<JsonObject>();
-        float value = tr["value"] | 0.0f;
         const char* unit = tr["unit"] | "";
-        const char* status = tr["status"] | "";
         
         #if DEBUG_ENVIODADOS
-        Serial.printf("[Compress] timeRemaining original: %.1f %s (%s)\n", 
-                     value, unit, status);
+        Serial.printf("[Compress] timeRemaining original - unit: %s\n", unit);
         #endif
         
-        // Converter para array compacto: [valor, unidade, status]
-        JsonArray compactTR = doc["tr"].to<JsonArray>();
-        compactTR.add(value);
-        
-        // Comprimir unidade
-        if (strcmp(unit, "hours") == 0) {
-            compactTR.add(UNIT_H);
-        } else if (strcmp(unit, "days") == 0) {
-            compactTR.add(UNIT_D);
-        } else if (strcmp(unit, "minutes") == 0) {
-            compactTR.add(UNIT_M);
-        } else if (strcmp(unit, "indefinite") == 0) {
-            compactTR.add("ind");
-        } else {
-            compactTR.add(unit);
-        }
-        
-        // Comprimir status
-        if (strcmp(status, "running") == 0) {
-            compactTR.add(MSG_RUN);
-        } else if (strcmp(status, "waiting") == 0) {
-            compactTR.add(MSG_WAIT);
-        } else if (strcmp(status, "waiting_gravity") == 0) {
-            compactTR.add(WG);
-        } else {
-            compactTR.add(status);
-        }
-        
-        doc.remove("timeRemaining");
-        
-        #if DEBUG_ENVIODADOS
-        Serial.print(F("[Compress]   → Comprimido para array tr: ["));
-        for (size_t i = 0; i < compactTR.size(); i++) {
-            if (i > 0) Serial.print(", ");
-            if (compactTR[i].is<float>()) {
-                Serial.print(compactTR[i].as<float>(), 1);
+        // Novo formato: se for "detailed", compactar como array [d, h, m, status]
+        if (strcmp(unit, "detailed") == 0) {
+            int days = tr["days"] | 0;
+            int hours = tr["hours"] | 0;
+            int minutes = tr["minutes"] | 0;
+            const char* status = tr["status"] | "";
+            
+            #if DEBUG_ENVIODADOS
+            Serial.printf("[Compress] timeRemaining detailed: %dd %dh %dm (%s)\n", 
+                         days, hours, minutes, status);
+            #endif
+            
+            // Compactar como array: [dias, horas, minutos, status_code]
+            JsonArray compactTR = doc["tr"].to<JsonArray>();
+            compactTR.add(days);
+            compactTR.add(hours);
+            compactTR.add(minutes);
+            
+            // Comprimir status
+            if (strcmp(status, "running") == 0) {
+                compactTR.add(MSG_RUN);
+            } else if (strcmp(status, "waiting") == 0) {
+                compactTR.add(MSG_WAIT);
+            } else if (strcmp(status, "waiting_gravity") == 0) {
+                compactTR.add(WG);
             } else {
-                Serial.print(compactTR[i].as<const char*>());
+                compactTR.add(status);
             }
+            
+            doc.remove("timeRemaining");
+            
+            #if DEBUG_ENVIODADOS
+            Serial.print(F("[Compress]   → Comprimido para array tr: ["));
+            for (size_t i = 0; i < compactTR.size(); i++) {
+                if (i > 0) Serial.print(", ");
+                if (compactTR[i].is<int>()) {
+                    Serial.print(compactTR[i].as<int>());
+                } else {
+                    Serial.print(compactTR[i].as<const char*>());
+                }
+            }
+            Serial.println("]");
+            #endif
+            
+        } 
+        // Formato antigo (compatibilidade)
+        else if (tr["value"].is<float>() || tr["value"].is<int>()) {
+            float value = tr["value"].is<float>() ? tr["value"].as<float>() : (float)tr["value"].as<int>();
+            const char* status = tr["status"] | "";
+            
+            #if DEBUG_ENVIODADOS
+            Serial.printf("[Compress] timeRemaining legacy: %.1f %s (%s)\n", 
+                         value, unit, status);
+            #endif
+            
+            JsonArray compactTR = doc["tr"].to<JsonArray>();
+            compactTR.add(value);
+            
+            // Comprimir unidade
+            if (strcmp(unit, "hours") == 0) {
+                compactTR.add(UNIT_H);
+            } else if (strcmp(unit, "days") == 0) {
+                compactTR.add(UNIT_D);
+            } else if (strcmp(unit, "minutes") == 0) {
+                compactTR.add(UNIT_M);
+            } else if (strcmp(unit, "indefinite") == 0) {
+                compactTR.add("ind");
+            } else {
+                compactTR.add(unit);
+            }
+            
+            // Comprimir status
+            if (strcmp(status, "running") == 0) {
+                compactTR.add(MSG_RUN);
+            } else if (strcmp(status, "waiting") == 0) {
+                compactTR.add(MSG_WAIT);
+            } else if (strcmp(status, "waiting_gravity") == 0) {
+                compactTR.add(WG);
+            } else {
+                compactTR.add(status);
+            }
+            
+            doc.remove("timeRemaining");
         }
-        Serial.println("]");
-        #endif
         
-        // REMOVER targetReached se já tiver sido renomeado para "tr" incorretamente
+        // REMOVER targetReached se já existir
         if (!doc["targetReached"].isNull()) {
             #if DEBUG_ENVIODADOS
-            Serial.println(F("[Compress]   ⚠️ Removendo targetReached que sobrou"));
+            Serial.println(F("[Compress]   ⚠️ Removendo targetReached para evitar conflito"));
             #endif
             doc.remove("targetReached");
         }
-        
-        // Se já tivermos um "tr" booleano, remover (deve ser substituído pelo array)
-        if (doc["tr"].is<bool>()) {
-            #if DEBUG_ENVIODADOS
-            Serial.println(F("[Compress]   ⚠️ Removendo tr booleano antigo"));
-            #endif
-            doc.remove("tr");
-            // Recriar o array
-            JsonArray newTr = doc["tr"].to<JsonArray>();
-            newTr.add(value);
-            newTr.add(strcmp(unit, "hours") == 0 ? UNIT_H : 
-                     strcmp(unit, "days") == 0 ? UNIT_D : 
-                     strcmp(unit, "indefinite") == 0 ? "ind" : unit);
-            newTr.add(strcmp(status, "running") == 0 ? MSG_RUN :
-                     strcmp(status, "waiting") == 0 ? MSG_WAIT :
-                     strcmp(status, "waiting_gravity") == 0 ? WG : status);
-        }
-    } 
-    else if (!doc["targetReached"].isNull()) {
-        // Se não há timeRemaining mas há targetReached, usar "tr" para targetReached booleano
-        #if DEBUG_ENVIODADOS
-        Serial.printf("[Compress] targetReached: %s (usando tr como booleano)\n", 
-                     doc["targetReached"].as<bool>() ? "true" : "false");
-        #endif
-        
-        // Verificar se já existe um "tr" (não deveria, mas por segurança)
-        if (doc["tr"].isNull()) {
-            doc["tr"] = doc["targetReached"].as<bool>();
-        }
-        doc.remove("targetReached");
-    }
+    } // FECHAMENTO ADICIONADO AQUI - esta chave estava faltando!
     
     #if DEBUG_ENVIODADOS
     Serial.println(F("[Compress] ✅ Compressão concluída"));
     #endif
-}
+} // Fim da função
 
 // =====================================================
 // CONTROLE DE ESTADO
@@ -1266,36 +1274,66 @@ void enviarEstadoCompleto() {
             
             if (stage.type == STAGE_TEMPERATURE) {
                 if (fermentacaoState.targetReachedSent) {
-                    // CORREÇÃO AQUI: Converter durationDays para horas
                     float stageTotalHours = stage.durationDays * 24.0;
                     float remainingH = stageTotalHours - elapsedH;
                     
                     if (remainingH < 0) remainingH = 0;
                     
-                    // CORREÇÃO: Ajustar para evitar 23.9h → 23h 60min
-                    // Quando restam menos de 24 horas, garantir que a parte decimal seja correta
-                    if (remainingH < 24) {
-                        // Arredondar para minutos mais próximos para evitar 23h 60min
-                        float remainingMinutes = remainingH * 60.0;
-                        // Arredondar para o minuto mais próximo
-                        remainingMinutes = roundf(remainingMinutes);
-                        // Converter de volta para horas com mais precisão
-                        remainingH = remainingMinutes / 60.0;
+                    #if DEBUG_ENVIODADOS
+                    Serial.printf("[DEBUG] stage.durationDays: %d\n", stage.durationDays);
+                    Serial.printf("[DEBUG] stageTotalHours: %.1f\n", stageTotalHours);
+                    Serial.printf("[DEBUG] elapsedH: %.1f\n", elapsedH);
+                    Serial.printf("[DEBUG] remainingH: %.1f\n", remainingH);
+                    #endif
+                    
+                    // NOVA LÓGICA: Calcular dias, horas, minutos
+                    if (remainingH >= 24.0) {
+                        // Para mais de 1 dia, calcular dias, horas, minutos
+                        int totalMinutes = roundf(remainingH * 60.0);
+                        int days = totalMinutes / (24 * 60);
+                        int hours = (totalMinutes % (24 * 60)) / 60;
+                        int minutes = totalMinutes % 60;
                         
-                        // Garantir que não fique 23.999... horas
-                        if (remainingH >= 23.983f) { // 23h 59min = 23.98333h
-                            timeRemaining["value"] = 24.0;
-                            timeRemaining["unit"] = "hours";
+                        // Enviar como objeto detalhado
+                        timeRemaining["days"] = days;
+                        timeRemaining["hours"] = hours;
+                        timeRemaining["minutes"] = minutes;
+                        timeRemaining["total_hours"] = remainingH; // manter compatibilidade
+                        timeRemaining["unit"] = "detailed"; // nova unidade
+                        
+                        #if DEBUG_ENVIODADOS
+                        Serial.printf("[DEBUG] Tempo detalhado: %dd %dh %dm\n", days, hours, minutes);
+                        #endif
+                    } else if (remainingH >= 1.0) {
+                        // Para menos de 1 dia mas mais de 1 hora
+                        int totalMinutes = roundf(remainingH * 60.0);
+                        int hours = totalMinutes / 60;
+                        int minutes = totalMinutes % 60;
+                        
+                        if (hours > 0) {
+                            timeRemaining["hours"] = hours;
+                            timeRemaining["minutes"] = minutes;
+                            timeRemaining["total_hours"] = remainingH;
+                            timeRemaining["unit"] = "detailed";
                         } else {
-                            timeRemaining["value"] = remainingH;
-                            timeRemaining["unit"] = "hours";
+                            // Menos de 1 hora, mostrar apenas minutos
+                            timeRemaining["value"] = totalMinutes;
+                            timeRemaining["unit"] = "minutes";
                         }
+                        
+                        #if DEBUG_ENVIODADOS
+                        Serial.printf("[DEBUG] Tempo detalhado: %dh %dm\n", hours, minutes);
+                        #endif
                     } else {
-                        timeRemaining["value"] = remainingH / 24.0;
-                        timeRemaining["unit"] = "days";
+                        // Menos de 1 hora, mostrar minutos
+                        int minutes = roundf(remainingH * 60.0);
+                        timeRemaining["value"] = minutes;
+                        timeRemaining["unit"] = "minutes";
                     }
                     timeRemaining["status"] = "running";
+                    
                 } else {
+                    // Aguardando temperatura alvo - manter formato original para dias
                     timeRemaining["value"] = stage.durationDays;
                     timeRemaining["unit"] = "days";
                     timeRemaining["status"] = "waiting";
@@ -1305,12 +1343,36 @@ void enviarEstadoCompleto() {
                 float remainingH = stage.rampTimeHours - elapsedH;
                 if (remainingH < 0) remainingH = 0;
                 
-                if (remainingH < 24) {
-                    timeRemaining["value"] = remainingH;
-                    timeRemaining["unit"] = "hours";
+                // Aplicar mesma lógica de formatação para rampa
+                if (remainingH >= 24.0) {
+                    int totalMinutes = roundf(remainingH * 60.0);
+                    int days = totalMinutes / (24 * 60);
+                    int hours = (totalMinutes % (24 * 60)) / 60;
+                    int minutes = totalMinutes % 60;
+                    
+                    timeRemaining["days"] = days;
+                    timeRemaining["hours"] = hours;
+                    timeRemaining["minutes"] = minutes;
+                    timeRemaining["total_hours"] = remainingH;
+                    timeRemaining["unit"] = "detailed";
+                } else if (remainingH >= 1.0) {
+                    int totalMinutes = roundf(remainingH * 60.0);
+                    int hours = totalMinutes / 60;
+                    int minutes = totalMinutes % 60;
+                    
+                    if (hours > 0) {
+                        timeRemaining["hours"] = hours;
+                        timeRemaining["minutes"] = minutes;
+                        timeRemaining["total_hours"] = remainingH;
+                        timeRemaining["unit"] = "detailed";
+                    } else {
+                        timeRemaining["value"] = totalMinutes;
+                        timeRemaining["unit"] = "minutes";
+                    }
                 } else {
-                    timeRemaining["value"] = remainingH / 24.0;
-                    timeRemaining["unit"] = "days";
+                    int minutes = roundf(remainingH * 60.0);
+                    timeRemaining["value"] = minutes;
+                    timeRemaining["unit"] = "minutes";
                 }
                 timeRemaining["status"] = "running";
                 
@@ -1320,27 +1382,57 @@ void enviarEstadoCompleto() {
             }
             else if (stage.type == STAGE_GRAVITY_TIME) {
                 if (fermentacaoState.targetReachedSent) {
-                    // CORREÇÃO AQUI: Converter timeoutDays para horas
                     float maxTimeHours = stage.timeoutDays * 24.0;
                     float remainingH = maxTimeHours - elapsedH;
                     if (remainingH < 0) remainingH = 0;
                     
-                    timeRemaining["value"] = remainingH / 24.0;
-                    timeRemaining["unit"] = "days";
+                    // Formatar similarmente
+                    if (remainingH >= 24.0) {
+                        int totalMinutes = roundf(remainingH * 60.0);
+                        int days = totalMinutes / (24 * 60);
+                        int hours = (totalMinutes % (24 * 60)) / 60;
+                        int minutes = totalMinutes % 60;
+                        
+                        timeRemaining["days"] = days;
+                        timeRemaining["hours"] = hours;
+                        timeRemaining["minutes"] = minutes;
+                        timeRemaining["total_hours"] = remainingH;
+                        timeRemaining["unit"] = "detailed";
+                    } else if (remainingH >= 1.0) {
+                        int totalMinutes = roundf(remainingH * 60.0);
+                        int hours = totalMinutes / 60;
+                        int minutes = totalMinutes % 60;
+                        
+                        if (hours > 0) {
+                            timeRemaining["hours"] = hours;
+                            timeRemaining["minutes"] = minutes;
+                            timeRemaining["total_hours"] = remainingH;
+                            timeRemaining["unit"] = "detailed";
+                        } else {
+                            timeRemaining["value"] = totalMinutes;
+                            timeRemaining["unit"] = "minutes";
+                        }
+                    } else {
+                        int minutes = roundf(remainingH * 60.0);
+                        timeRemaining["value"] = minutes;
+                        timeRemaining["unit"] = "minutes";
+                    }
                     timeRemaining["status"] = "running";
                 } else {
+                    // Aguardando temperatura para gravidade+tempo
                     timeRemaining["value"] = stage.timeoutDays;
                     timeRemaining["unit"] = "days";
                     timeRemaining["status"] = "waiting";
                 }
             }
             else if (stage.type == STAGE_GRAVITY) {
+                // Para gravidade pura, não há contagem de tempo
                 timeRemaining["value"] = 0;
                 timeRemaining["unit"] = "indefinite";
                 timeRemaining["status"] = "waiting_gravity";
             }
-        }
-    }
+        } // Fecha if (nowEpoch > 0)
+    } // Fecha if (fermentacaoState.stageStartEpoch > 0 && ...)
     
     // 4. Status do BrewPi
     DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus();
