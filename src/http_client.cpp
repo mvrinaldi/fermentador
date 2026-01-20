@@ -180,7 +180,7 @@ bool FermentadorHTTPClient::updateControlState(const char* configId, float setpo
 
     String response;
     yield();
-    // CORREÇÃO: Removida serialização local para String. Passa &doc [6]
+
     bool result = makeRequest("api/esp/control.php", "POST", &doc, response);
     
     #if DEBUG_HTTP

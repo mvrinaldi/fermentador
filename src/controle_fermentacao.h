@@ -12,6 +12,10 @@ extern bool isFirstCheck;
 extern unsigned long stageStartTime;
 extern bool stageStarted;
 
+// Funções auxiliares para timeRemaining
+void formatTimeRemaining(JsonObject& timeRemaining, float remainingH, const char* status);
+void setInitialTimeRemaining(JsonObject& timeRemaining, FermentationStage& stage, bool targetReached);
+
 // FUNÇÕES DE TEMPO
 time_t getCurrentEpoch();
 String formatTime(time_t timestamp);

@@ -70,17 +70,6 @@ try {
         $stmt->execute([json_encode($sensors)]);
         
         try {
-            $pdo->exec("
-                CREATE TABLE IF NOT EXISTS detected_sensors (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    address VARCHAR(20) UNIQUE NOT NULL,
-                    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    INDEX idx_address (address),
-                    INDEX idx_last_seen (last_seen DESC)
-                )
-            ");
-            
             $stmt = $pdo->prepare("
                 INSERT INTO detected_sensors (address, detected_at, last_seen) 
                 VALUES (?, NOW(), NOW())
@@ -225,19 +214,6 @@ try {
         
         // ===== ENVIA COMANDO CLEAR_EEPROM PARA O ESP =====
         try {
-            // Cria tabela de comandos se não existir
-            $pdo->exec("
-                CREATE TABLE IF NOT EXISTS esp_commands (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    command VARCHAR(50) NOT NULL,
-                    status ENUM('pending', 'executed', 'failed') DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    executed_at TIMESTAMP NULL,
-                    INDEX idx_status (status),
-                    INDEX idx_created (created_at DESC)
-                )
-            ");
-            
             // Registra comando CLEAR_EEPROM
             $cmdStmt = $pdo->prepare("
                 INSERT INTO esp_commands (command, status, created_at)
