@@ -41,7 +41,6 @@ async function apiRequest(endpoint, options = {}) {
         
         return await response.json();
     } catch (error) {
-        console.error('Erro na API:', error);
         throw error;
     }
 }
@@ -99,7 +98,6 @@ async function logout() {
         showLoginScreen();
         
     } catch (error) {
-        console.error('Erro ao fazer logout:', error);
         alert('Erro ao fazer logout: ' + error.message);
     }
 }
@@ -118,7 +116,6 @@ async function checkAuthStatus() {
             showLoginScreen();
         }
     } catch (error) {
-        console.error('Erro ao verificar autenticação:', error);
         showLoginScreen();
     }
 }
@@ -368,7 +365,6 @@ function decompressData(data) {
     
     // ========== 2. Processar campo "tr" ==========
     if (result.tr !== undefined) {
-        console.log('⚠️ Campo "tr" ainda presente (PHP não processou?)');
         
         if (Array.isArray(result.tr)) {
             // Formato novo: [dias, horas, minutos, status]
@@ -402,7 +398,6 @@ function decompressData(data) {
         } 
         // Se tr é booleano (targetReached direto)
         else if (typeof result.tr === 'boolean') {
-            console.log('✅ tr é booleano (targetReached):', result.tr);
             result.targetReached = result.tr;
         }
         
@@ -466,16 +461,6 @@ function decompressData(data) {
             }
         });
     }
-    
-    console.log('🔍 DEBUG decompressData OUTPUT:', {
-        targetReached: result.targetReached,
-        timeRemaining: result.timeRemaining,
-        status: result.status,
-        stageType: result.stageType,
-        config_name: result.config_name,
-        config_id: result.config_id
-    });
-    
     return result;
 }
 
@@ -521,7 +506,6 @@ async function loadCompleteState() {
         renderUI();
         
     } catch (error) {
-        console.error('Erro ao carregar estado:', error);
         renderNoActiveFermentation();
     }
 }
@@ -541,11 +525,9 @@ function getStatusText(tr) {
 }
 
 async function autoRefreshData() {
-    console.log('🔄 Auto-refresh:', new Date().toLocaleTimeString());
     
     try {
         await loadCompleteState();
-        console.log('✅ Dados atualizados');
     } catch (error) {
         console.error('❌ Erro no auto-refresh:', error);
     }
@@ -662,18 +644,6 @@ function updateRelayStatus() {
         }
     }
     
-    // ✅ DEBUG
-    console.log('🔌 Status Relés:', {
-        coolerActive,
-        heaterActive,
-        waitingStatus,
-        sources: {
-            heartbeat: !!appState.heartbeat,
-            controller: !!appState.controller,
-            espState: !!appState.espState
-        }
-    });
-    
     // Atualiza visual dos relés
     if (coolerActive) {
         coolerStatusDiv.classList.remove('hidden');
@@ -714,6 +684,13 @@ function updateRelayStatus() {
 
 // ========== RENDERIZAÇÃO ==========
 function renderUI() {
+    console.log('🔍 RenderUI chamada', {
+        temConfig: !!appState.config,
+        temStages: appState.config?.stages?.length || 0,
+        temEspState: !!appState.espState,
+        timeRemaining: appState.espState?.timeRemaining
+    });
+    
     if (!appState.config || !appState.config.stages || appState.config.stages.length === 0) {
         renderNoActiveFermentation();
         return;
@@ -734,6 +711,14 @@ function renderUI() {
     if (timeElement && appState.espState && appState.espState.timeRemaining) {
         const tr = appState.espState.timeRemaining;
         
+        // Log mais informativo e único
+        console.log('⏱️ TimeRemaining:', {
+            status: tr.status,
+            valor: tr.value,
+            formatado: formatTimeRemaining(tr),
+            statusText: getStatusText(tr)
+        });
+        
         let icon = 'fas fa-clock';
         let statusClass = '';
         
@@ -748,7 +733,6 @@ function renderUI() {
             statusClass = 'text-blue-600';
         }
         
-        // ✅ Use a nova função formatTimeRemaining e getStatusText
         const timeDisplay = formatTimeRemaining(tr);
         const statusText = getStatusText(tr);
         
@@ -759,10 +743,15 @@ function renderUI() {
             </span>
         `;
         timeElement.style.display = 'flex';
+        
+        console.log(`🎨 Time element atualizado: ${timeDisplay} (${tr.status})`);
     } else if (timeElement) {
         timeElement.style.display = 'none';
+        console.log('⚠️ Time element escondido - sem timeRemaining disponível');
     }
     
+    // Logs para outras funções de renderização
+
     checkESPStatus();
     renderInfoCards();
     renderChart();
@@ -956,8 +945,6 @@ function renderChart() {
     const coolerData = [];
     const heaterData = [];
     
-    console.log('📊 Processando histórico:', appState.controllerHistory.length, 'registros');
-    
     if (appState.controllerHistory && appState.controllerHistory.length > 0) {
         appState.readings.forEach((reading, idx) => {
             const readingTime = new Date(reading.reading_timestamp).getTime();
@@ -1040,7 +1027,6 @@ function renderChart() {
             tension: 0,
             order: 1
         });
-        console.log('✅ Dataset Cooler adicionado:', coolerData.filter(v => v !== null).length, 'pontos ativos');
     } else {
         console.warn('⚠️ Nenhum ponto ativo do Cooler');
     }
@@ -1057,7 +1043,6 @@ function renderChart() {
             tension: 0,
             order: 1
         });
-        console.log('✅ Dataset Heater adicionado:', heaterData.filter(v => v !== null).length, 'pontos ativos');
     } else {
         console.warn('⚠️ Nenhum ponto ativo do Heater');
     }
@@ -1227,7 +1212,6 @@ function getStageDescription(stage) {
 
 // ========== INICIALIZAÇÃO ==========
 async function initAppAfterAuth() {
-    console.log('Inicializando app após autenticação');
     
     try {
         await loadCompleteState();
@@ -1237,11 +1221,7 @@ async function initAppAfterAuth() {
         }
         
         refreshInterval = setInterval(autoRefreshData, REFRESH_INTERVAL);
-        
-        console.log(`✅ App inicializado - Auto-refresh ativo (${REFRESH_INTERVAL/1000}s)`);
-        
     } catch (error) {
-        console.error('Erro na inicialização:', error);
         alert('Erro ao inicializar o monitor. Por favor, recarregue a página.');
     }
 }
@@ -1251,7 +1231,6 @@ window.logout = logout;
 window.refreshData = loadCompleteState;
 
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('App.js carregado. Verificando autenticação...');
     
     const emailInput = document.getElementById('login-email');
     const passwordInput = document.getElementById('login-password');

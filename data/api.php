@@ -246,64 +246,165 @@ function logData($message, $data = null) {
 }
 
 /**
- * Limpa registros antigos - versão simplificada e otimizada
+ * Limpa registros antigos de um config_id específico E órfãos globais
+ * VERSÃO CORRIGIDA - limpa órfãos sempre e faz limpeza global
  */
 function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $timestampColumn = 'created_at') {
     try {
-        // 1. Primeiro verifica se precisa limpar (otimização)
-        $sql = "SELECT COUNT(*) as total FROM {$tableName} WHERE config_id = ?";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([$configId]);
-        $count = $stmt->fetch()['total'];
-        
-        // Só limpa se tiver mais que 20% acima do limite
-        if ($count <= ($keepCount * 1.2)) {
-            return;
-        }
-        
-        // 2. Encontra o ID mais antigo que deve ser mantido
-        $sql = "
-            SELECT id FROM {$tableName} 
-            WHERE config_id = ? 
-            ORDER BY {$timestampColumn} DESC 
-            LIMIT 1 OFFSET ?
-        ";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([$configId, $keepCount - 1]);
-        $result = $stmt->fetch();
-        
-        if ($result && isset($result['id'])) {
-            $oldestIdToKeep = $result['id'];
-            
-            // 3. Deleta tudo mais antigo que esse ID
-            $sql = "
-                DELETE FROM {$tableName} 
-                WHERE config_id = ? 
-                AND {$timestampColumn} < (
-                    SELECT {$timestampColumn} 
-                    FROM {$tableName} 
-                    WHERE id = ?
-                )
-                LIMIT 500
-            ";
-            
+        // ========== 1. LIMPEZA DO CONFIG_ID ESPECÍFICO ==========
+        if ($configId) {
+            $sql = "SELECT COUNT(*) as total FROM {$tableName} WHERE config_id = ?";
             $stmt = $pdo->prepare($sql);
-            $stmt->execute([$configId, $oldestIdToKeep]);
+            $stmt->execute([$configId]);
+            $count = $stmt->fetch()['total'];
             
-            $deleted = $stmt->rowCount();
-            if ($deleted > 0) {
-                error_log("[CLEANUP] {$tableName}: mantidos {$keepCount}, removidos {$deleted}");
+            // Só limpa se tiver mais que 20% acima do limite
+            if ($count > ($keepCount * 1.2)) {
+                // Busca o timestamp de corte
+                $sql = "
+                    SELECT {$timestampColumn} as cutoff_time 
+                    FROM {$tableName} 
+                    WHERE config_id = ? 
+                    ORDER BY {$timestampColumn} DESC 
+                    LIMIT 1 OFFSET ?
+                ";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute([$configId, $keepCount - 1]);
+                $result = $stmt->fetch();
+                
+                if ($result && isset($result['cutoff_time'])) {
+                    $sql = "
+                        DELETE FROM {$tableName} 
+                        WHERE config_id = ? 
+                        AND {$timestampColumn} < ?
+                    ";
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute([$configId, $result['cutoff_time']]);
+                    
+                    $deleted = $stmt->rowCount();
+                    if ($deleted > 0) {
+                        error_log("[CLEANUP] {$tableName}: config_id={$configId}, removidos {$deleted}");
+                    }
+                }
             }
         }
         
-        // 4. Limpa órfãos ocasionalmente (apenas 10% das vezes)
-        if (rand(1, 10) === 1) {
-            $pdo->prepare("DELETE FROM {$tableName} WHERE config_id IS NULL LIMIT 50")->execute();
+        // ========== 2. LIMPEZA DE ÓRFÃOS (SEMPRE, AGRESSIVA) ==========
+        // Deleta até 1000 órfãos por chamada
+        $stmt = $pdo->prepare("DELETE FROM {$tableName} WHERE config_id IS NULL LIMIT 1000");
+        $stmt->execute();
+        $orphansDeleted = $stmt->rowCount();
+        
+        if ($orphansDeleted > 0) {
+            error_log("[CLEANUP] {$tableName}: removidos {$orphansDeleted} órfãos");
+        }
+        
+        // ========== 3. LIMPEZA GLOBAL (mantém apenas últimos X registros TOTAIS) ==========
+        // Isso garante que a tabela nunca cresça demais, independente do config_id
+        $globalLimit = $keepCount * 2; // Ex: se keepCount=200, mantém 2000 no total
+        
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM {$tableName}");
+        $stmt->execute();
+        $totalCount = $stmt->fetch()['total'];
+        
+        if ($totalCount > $globalLimit * 1.2) {
+            // Busca timestamp de corte global
+            $sql = "
+                SELECT {$timestampColumn} as cutoff_time 
+                FROM {$tableName} 
+                ORDER BY {$timestampColumn} DESC 
+                LIMIT 1 OFFSET ?
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$globalLimit - 1]);
+            $result = $stmt->fetch();
+            
+            if ($result && isset($result['cutoff_time'])) {
+                $sql = "DELETE FROM {$tableName} WHERE {$timestampColumn} < ? LIMIT 5000";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute([$result['cutoff_time']]);
+                
+                $deleted = $stmt->rowCount();
+                if ($deleted > 0) {
+                    error_log("[CLEANUP GLOBAL] {$tableName}: removidos {$deleted} registros antigos");
+                }
+            }
         }
         
     } catch (Exception $e) {
         error_log("[CLEANUP ERROR] {$tableName}: " . $e->getMessage());
     }
+}
+
+/**
+ * Limpeza emergencial - para limpar o acumulado de uma vez
+ */
+function emergencyCleanup($pdo) {
+    $tables = [
+        'controller_states' => ['keep' => 500, 'ts' => 'state_timestamp'],
+        'esp_heartbeat' => ['keep' => 200, 'ts' => 'heartbeat_timestamp'],
+        'fermentation_states' => ['keep' => 300, 'ts' => 'state_timestamp'],
+        'readings' => ['keep' => 1000, 'ts' => 'reading_timestamp'],
+        'ispindel_readings' => ['keep' => 500, 'ts' => 'reading_timestamp'],
+    ];
+    
+    $results = [];
+    
+    foreach ($tables as $table => $config) {
+        $keepCount = $config['keep'];
+        $tsColumn = $config['ts'];
+        
+        try {
+            // 1. Remove TODOS os órfãos
+            $stmt = $pdo->prepare("DELETE FROM {$table} WHERE config_id IS NULL");
+            $stmt->execute();
+            $orphansDeleted = $stmt->rowCount();
+            
+            // 2. Para cada config_id, mantém apenas os últimos X
+            $stmt = $pdo->prepare("SELECT DISTINCT config_id FROM {$table} WHERE config_id IS NOT NULL");
+            $stmt->execute();
+            $configIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            
+            $totalDeleted = $orphansDeleted;
+            
+            foreach ($configIds as $cid) {
+                // Conta registros deste config
+                $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM {$table} WHERE config_id = ?");
+                $stmt->execute([$cid]);
+                $count = $stmt->fetch()['total'];
+                
+                if ($count > $keepCount) {
+                    // Busca timestamp de corte
+                    $sql = "
+                        SELECT {$tsColumn} as cutoff 
+                        FROM {$table} 
+                        WHERE config_id = ? 
+                        ORDER BY {$tsColumn} DESC 
+                        LIMIT 1 OFFSET ?
+                    ";
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute([$cid, $keepCount - 1]);
+                    $result = $stmt->fetch();
+                    
+                    if ($result && $result['cutoff']) {
+                        $stmt = $pdo->prepare("DELETE FROM {$table} WHERE config_id = ? AND {$tsColumn} < ?");
+                        $stmt->execute([$cid, $result['cutoff']]);
+                        $totalDeleted += $stmt->rowCount();
+                    }
+                }
+            }
+            
+            $results[$table] = [
+                'orphans_deleted' => $orphansDeleted,
+                'total_deleted' => $totalDeleted
+            ];
+            
+        } catch (Exception $e) {
+            $results[$table] = ['error' => $e->getMessage()];
+        }
+    }
+    
+    return $results;
 }
 
 function requireAuth() {
@@ -374,8 +475,7 @@ if ($path === 'auth/login' && $method === 'POST') {
         
         sendResponse([
             'success' => true,
-            'input' => $originalData,
-            'output' => $testData
+            'user_id' => (int)$user['id']
         ], 200, JSON_FORCE_OBJECT);
     } else {
         sendResponse(['error' => 'Credenciais inválidas'], 401);
@@ -789,7 +889,7 @@ if ($path === 'readings' && $method === 'POST') {
     $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget, $gravity]);
     
     // ✅ Limpa registros antigos E órfãos
-    cleanupOldRecords($pdo, 'readings', $configId, 200, 'reading_timestamp'); //Mantém últimos 200
+    cleanupOldRecords($pdo, 'readings', $configId, 200, 'reading_timestamp');
     
     sendResponse(['success' => true, 'reading_id' => $pdo->lastInsertId()], 201);
 }
@@ -934,7 +1034,7 @@ if ($path === 'heartbeat' && $method === 'POST') {
         }
         
         $stmt = $pdo->prepare("
-            INSERT INTO esp_heartbeat (config_id, uptime, free_heap, control_status)
+            INSERT INTO esp_heartbeat (config_id, uptime_seconds, free_heap, control_status)
             VALUES (?, ?, ?, ?)
         ");
         $stmt->execute([
@@ -985,6 +1085,27 @@ if ($path === 'cleanup' && $method === 'POST') {
         
     } catch (Exception $e) {
         sendResponse(['error' => 'Erro na limpeza: ' . $e->getMessage()], 500);
+    }
+}
+
+// ==================== LIMPEZA EMERGENCIAL (SEM AUTENTICAÇÃO) ====================
+
+if ($path === 'emergency-cleanup' && $method === 'POST') {
+    // Chave secreta para evitar uso indevido (mude para algo único)
+    $secretKey = $input['secret'] ?? '';
+    
+    if ($secretKey !== 'ferment2024cleanup') {
+        sendResponse(['error' => 'Chave inválida'], 403);
+    }
+    
+    try {
+        $results = emergencyCleanup($pdo);
+        sendResponse([
+            'success' => true,
+            'results' => $results
+        ]);
+    } catch (Exception $e) {
+        sendResponse(['error' => 'Erro na limpeza emergencial: ' . $e->getMessage()], 500);
     }
 }
 
