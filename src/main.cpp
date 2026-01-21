@@ -1,7 +1,7 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "3.3.0"
-#define IMPLEMENTACAO "Alteração de dias na etapa para permitir decimais"
+#define FIRMWARE_VERSION "3.3.1"
+#define IMPLEMENTACAO "Alteração de dias na etapa para permitir decimais e Telnet"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -40,6 +40,7 @@
 #include "network_manager.h"
 #include "eeprom_utils.h"
 #include "http_commands.h"
+#include "telnet.h"
 #include "debug_config.h"
 
 // Declaração da função do controle_fermentacao.cpp
@@ -360,6 +361,12 @@ void setup() {
 
     networkSetup(server);
     
+    #if DEBUG_TELNET
+        telnetSetup();
+        Serial.println("📡 Telnet debug ativo");
+    #endif
+
+
     if (WiFi.status() == WL_CONNECTED) {
         #if DEBUG_MAIN
         Serial.println("\n⏰ Configurando NTP...");
@@ -691,7 +698,8 @@ void loop() {
     // WebServer
     server.handleClient();
     handleOTA();
-    
+    telnetLoop();
+
     // NTP
     checkNTPSync();
     
@@ -701,6 +709,8 @@ void loop() {
     // Executa a cada 5 segundos (conforme BrewPi original)
     if (now - lastTemperatureControl >= 5000) {
         lastTemperatureControl = now;
+
+        LOG_MAIN("Leitura enviada");
         
         // Se há fermentação ativa, executa controle BrewPi
         if (fermentacaoState.active) {
@@ -713,7 +723,6 @@ void loop() {
         
         // Envia dados ao MySQL (se online)
         if (isHTTPOnline()) {
-            enviarLeiturasSensores();
             verificarTargetAtingido();
             
             httpClient.updateControlState(
@@ -760,6 +769,7 @@ void loop() {
     if (now - lastTempUpdate >= TEMP_UPDATE_INTERVAL) {
         float tempFermenter, tempFridge;
         
+        enviarLeiturasSensores();
         if (readConfiguredTemperatures(tempFermenter, tempFridge)) {
             if (isHTTPOnline()) {
                 if (!httpClient.updateCurrentTemperatures(tempFermenter, tempFridge)) {
