@@ -1192,18 +1192,60 @@ const stageTemplate = (stage, index, isCurrent, isCompleted) => {
 };
 
 function getStageDescription(stage) {
+    // Função auxiliar para formatar duração em dias para exibição amigável
+    const formatDurationDisplay = (days) => {
+        if (days >= 1) {
+            // Para 1 dia ou mais, mostra dias com 1 casa decimal se necessário
+            return days % 1 === 0 ? `${days} dias` : `${days.toFixed(1)} dias`;
+        } else {
+            // Para menos de 1 dia, converte para horas e minutos
+            const totalHours = days * 24;
+            const hours = Math.floor(totalHours);
+            const minutes = Math.round((totalHours - hours) * 60);
+            
+            if (hours === 0 && minutes === 0) {
+                return "menos de 1 minuto";
+            } else if (hours === 0) {
+                return `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+            } else if (minutes === 0) {
+                return `${hours} hora${hours !== 1 ? 's' : ''}`;
+            } else {
+                return `${hours} hora${hours !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+            }
+        }
+    };
+
     switch(stage.type) {
         case 'temperature':
-            return `${stage.target_temp}°C por ${stage.duration} dias`;
+            return `${stage.target_temp}°C por ${formatDurationDisplay(stage.duration)}`;
         case 'gravity':
             return `${stage.target_temp}°C até ${stage.target_gravity} SG`;
         case 'gravity_time':
-            return `${stage.target_temp}°C até ${stage.target_gravity} SG (máx ${stage.max_duration} dias)`;
+            return `${stage.target_temp}°C até ${stage.target_gravity} SG (máx ${formatDurationDisplay(stage.max_duration)})`;
         case 'ramp':
             const direction = stage.direction === 'up' ? '▲' : '▼';
-            const rampTimeDisplay = stage.ramp_time < 24 
-                ? `${stage.ramp_time} horas` 
-                : `${(stage.ramp_time / 24).toFixed(1)} dias`;
+            
+            // Formatar tempo da rampa (que está em horas, não dias)
+            let rampTimeDisplay;
+            const rampDays = stage.ramp_time / 24;
+            
+            if (rampDays >= 1) {
+                rampTimeDisplay = rampDays % 1 === 0 ? `${rampDays} dias` : `${rampDays.toFixed(1)} dias`;
+            } else {
+                const hours = stage.ramp_time;
+                const minutes = Math.round((hours - Math.floor(hours)) * 60);
+                
+                if (hours === 0 && minutes === 0) {
+                    rampTimeDisplay = "menos de 1 minuto";
+                } else if (Math.floor(hours) === 0) {
+                    rampTimeDisplay = `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+                } else if (minutes === 0) {
+                    rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''}`;
+                } else {
+                    rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+                }
+            }
+            
             return `${direction} ${stage.start_temp}°C → ${stage.target_temp}°C em ${rampTimeDisplay}`;
         default:
             return '';
