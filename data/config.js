@@ -236,9 +236,9 @@ function addStage() {
         id: Date.now(),
         type: 'temperature',
         targetTemp: 18,
-        duration: 7,
+        duration: 7.0,
         targetGravity: 1.015,
-        maxDuration: 14,
+        maxDuration: 14.0,
         rampTime: 0
     };
     stages.push(newStage);
@@ -324,13 +324,13 @@ function validateConfiguration() {
         } else if (stage.type === 'temperature') {
             hasTemperatureStage = true;
             if (!stage.duration || stage.duration <= 0) {
-                alert(`Etapa ${i + 1}: Duração deve ser maior que 0 dias`);
+                alert(`Etapa ${i + 1}: Duração deve ser maior que 0`);
                 return false;
             }
         } else if (stage.type === 'gravity_time') {
             hasTemperatureStage = true;
             if (!stage.maxDuration || stage.maxDuration <= 0) {
-                alert(`Etapa ${i + 1}: Duração máxima deve ser maior que 0 dias`);
+                alert(`Etapa ${i + 1}: Duração máxima deve ser maior que 0`);
                 return false;
             }
         }
@@ -653,11 +653,11 @@ function getStageSummary(stage) {
         },
         maxDuration: () => {
             const val = stage.maxDuration || stage.max_duration || 14;
-            return typeof val === 'number' ? val : parseInt(val) || 14;
+            return typeof val === 'number' ? val : parseFloat(val) || 14;  // ← Alterado para parseFloat
         },
         duration: () => {
             const val = stage.duration || 7;
-            return typeof val === 'number' ? val : parseInt(val) || 7;
+            return typeof val === 'number' ? val : parseFloat(val) || 7;   // ← Alterado para parseFloat
         },
         startTemp: () => {
             const val = stage.startTemp || stage.start_temp || (stage.targetTemp || stage.target_temp || 18);
@@ -687,37 +687,69 @@ function getStageSummary(stage) {
         actualRate: normalize.actualRate()
     };
     
+    // Função auxiliar para formatar duração
+    const formatDuration = (days) => {
+        if (days >= 1) {
+            return days % 1 === 0 ? `${days} dias` : `${days.toFixed(1)} dias`;
+        } else {
+            const totalHours = days * 24;
+            const hours = Math.floor(totalHours);
+            const minutes = Math.round((totalHours - hours) * 60);
+            
+            if (hours === 0 && minutes === 0) {
+                return "menos de 1 minuto";
+            } else if (hours === 0) {
+                return `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+            } else if (minutes === 0) {
+                return `${hours} hora${hours !== 1 ? 's' : ''}`;
+            } else {
+                return `${hours} hora${hours !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+            }
+        }
+    };    
     switch(stage.type) {
         case 'temperature':
-            return `Manter ${data.targetTemp}°C por ${data.duration} dias`;
+            return `Manter ${data.targetTemp}°C por ${formatDuration(data.duration)}`;
             
         case 'gravity':
             return `Manter ${data.targetTemp}°C até ${data.targetGravity} SG`;
             
         case 'gravity_time':
-            return `Manter ${data.targetTemp}°C até ${data.targetGravity} SG (máx. ${data.maxDuration} dias)`;
+            return `Manter ${data.targetTemp}°C até ${data.targetGravity} SG (máx. ${formatDuration(data.maxDuration)})`;
             
         case 'ramp':
-            // Formata tempo da rampa
-            let timeDisplay;
-            if (data.rampTime < 24) {
-                timeDisplay = `${data.rampTime} horas`;
-            } else if (data.rampTime === 24) {
-                timeDisplay = '1 dia';
+        // Formata tempo da rampa
+        let timeDisplay;
+        const rampDays = data.rampTime / 24;
+        
+        if (rampDays >= 1) {
+            timeDisplay = rampDays % 1 === 0 ? `${rampDays} dias` : `${rampDays.toFixed(1)} dias`;
+        } else {
+            const totalHours = data.rampTime;
+            const hours = Math.floor(totalHours);
+            const minutes = Math.round((totalHours - hours) * 60);
+            
+            if (hours === 0 && minutes === 0) {
+                timeDisplay = "menos de 1 minuto";
+            } else if (hours === 0) {
+                timeDisplay = `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+            } else if (minutes === 0) {
+                timeDisplay = `${hours} hora${hours !== 1 ? 's' : ''}`;
             } else {
-                timeDisplay = `${(data.rampTime / 24).toFixed(1)} dias`;
+                timeDisplay = `${hours} hora${hours !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
             }
-            
-            // Determina direção
-            const isHeating = data.direction === 'up' || data.targetTemp > data.startTemp;
-            const directionText = isHeating ? 'aquecer' : 'resfriar';
-            const arrow = isHeating ? '↑' : '↓';
-            
-            // Usar toFixed apenas se actualRate for um número
-            const rateDisplay = typeof data.actualRate === 'number' ? 
-                data.actualRate.toFixed(1) : '0.0';
-            
-            return `${arrow} Rampa: ${directionText} de ${data.startTemp}°C para ${data.targetTemp}°C em ${timeDisplay} (${rateDisplay}°C/dia)`;
+        }
+        
+        // Determina direção
+        const isHeating = data.direction === 'up' || data.targetTemp > data.startTemp;
+        const directionText = isHeating ? 'aquecer' : 'resfriar';
+        const arrow = isHeating ? '↑' : '↓';
+        
+        // Usar toFixed apenas se actualRate for um número
+        const rateDisplay = typeof data.actualRate === 'number' ? 
+            data.actualRate.toFixed(1) : '0.0';
+        
+        return `${arrow} Rampa: ${directionText} de ${data.startTemp}°C para ${data.targetTemp}°C em ${timeDisplay} (${rateDisplay}°C/dia)`;
             
         default:
             return 'Etapa desconhecida';
@@ -825,9 +857,10 @@ const stageTemplate = (stage, index) => {
                     ${stage.type === 'temperature' ? `
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">Duração (dias)</label>
-                                <input type="number" min="1" value="${stage.duration}"
-                                    onchange="updateStage(${stage.id}, 'duration', parseInt(this.value))"
+                                <input type="number" min="0.1" step="0.1" value="${stage.duration}"
+                                    onchange="updateStage(${stage.id}, 'duration', parseFloat(this.value))"
                                     class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                                <p class="text-xs text-gray-500 mt-1">${(stage.duration * 24).toFixed(1)} horas</p>
                         </div>
                     ` : ''}
 
@@ -843,9 +876,10 @@ const stageTemplate = (stage, index) => {
                     ${stage.type === 'gravity_time' ? `
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">Duração Máxima (dias)</label>
-                            <input type="number" min="1" value="${stage.maxDuration}"
-                                   onchange="updateStage(${stage.id}, 'maxDuration', parseInt(this.value))"
-                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                            <input type="number" min="0.1" step="0.1" value="${stage.maxDuration}"
+                                onchange="updateStage(${stage.id}, 'maxDuration', parseFloat(this.value))"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                            <p class="text-xs text-gray-500 mt-1">${(stage.maxDuration * 24).toFixed(1)} horas</p>
                         </div>
                     ` : ''}
                 </div>

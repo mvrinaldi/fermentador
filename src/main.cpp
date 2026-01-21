@@ -1,7 +1,7 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "3.2.4"
-#define IMPLEMENTACAO "Correção envio de timeremaining para servidor"
+#define FIRMWARE_VERSION "3.3.0"
+#define IMPLEMENTACAO "Alteração de dias na etapa para permitir decimais"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -57,7 +57,7 @@ unsigned long lastPhaseCheck = 0;
 unsigned long lastTempUpdate = 0;
 unsigned long lastSensorCheck = 0;
 
-const unsigned long TEMP_UPDATE_INTERVAL = 5000;     // 5 segundos
+const unsigned long TEMP_UPDATE_INTERVAL = 60000;     // 60 segundos
 const unsigned long SENSOR_CHECK_INTERVAL = 30000;   // 30 segundos
 
 unsigned long lastHeartbeat = 0;

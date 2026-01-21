@@ -69,7 +69,7 @@ try {
     // Resposta compacta
     $response = [
         'name' => $config['name'],
-        'status' => $config['status'], // Para detectar pause/complete
+        'status' => $config['status'],
         'currentStageIndex' => (int)$config['current_stage_index'],
         'currentTargetTemp' => (float)$config['current_target_temp'],
         'stages' => []
@@ -80,10 +80,10 @@ try {
             'type' => $stage['type'],
             'targetTemp' => (float)$stage['target_temp'],
             'startTemp' => (float)$stage['start_temp'],
-            'duration' => (int)$stage['duration'],
+            'duration' => (float)$stage['duration'],
             'rampTime' => (int)$stage['ramp_time'],
             'targetGravity' => (float)$stage['target_gravity'],
-            'timeoutDays' => (int)$stage['timeout_days'],
+            'timeoutDays' => (float)$stage['timeout_days'],
             'status' => $stage['status']
         ];
     }

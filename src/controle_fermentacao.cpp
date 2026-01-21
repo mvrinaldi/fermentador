@@ -794,18 +794,24 @@ void loadConfigParameters(const char* configId) {
             s.type = STAGE_TEMPERATURE;
         }
 
-        s.targetTemp = stage["targetTemp"] | 20.0;
-        s.startTemp = stage["startTemp"] | 20.0;
+        s.targetTemp = stage["targetTemp"] | 20.0f;
+        s.startTemp = stage["startTemp"] | 20.0f;
         s.rampTimeHours = stage["rampTime"] | 0;
-        s.durationDays = stage["duration"] | 0;
-        s.targetGravity = stage["targetGravity"] | 0.0;
-        s.timeoutDays = stage["timeoutDays"] | 0;
+        s.durationDays = stage["duration"] | 0.0f;
+        s.targetGravity = stage["targetGravity"] | 0.0f;
+        s.timeoutDays = stage["timeoutDays"] | 0.0f;
         
-        s.holdTimeHours = s.durationDays * 24;
-        s.maxTimeHours = s.timeoutDays * 24;
+        // Campos calculados
+        s.holdTimeHours = s.durationDays * 24.0f;
+        s.maxTimeHours = s.timeoutDays * 24.0f;
         
         s.startTime = 0;
         s.completed = false;
+
+        #if DEBUG_FERMENTATION
+        Serial.printf("[MySQL] Etapa %d: tipo=%s, temp=%.1f, duração=%.2f dias (%.1f horas)\n",
+                     count, type, s.targetTemp, s.durationDays, s.holdTimeHours);
+        #endif
 
         count++;
     }
@@ -833,7 +839,6 @@ void verificarTrocaDeFase() {
     if (!fermentacaoState.active) return;
     
     #if DEBUG_FERMENTATION
-    // Debug periódico
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > 30000) {
         lastDebug = millis();
@@ -886,21 +891,19 @@ void verificarTrocaDeFase() {
     }
     
     // =====================================================
-    // ✅ INÍCIO DE NOVA ETAPA
+    // INÍCIO DE NOVA ETAPA
     // =====================================================
     if (!stageStarted) {
         stageStarted = true;
         fermentacaoState.targetReachedSent = false;
         fermentacaoState.stageStartEpoch = 0;
         
-        // Reset do BrewPi para nova etapa
         brewPiControl.reset();
 
         #if DEBUG_FERMENTATION
         Serial.println(F("[BrewPi] ✅ Sistema resetado para nova etapa"));
         #endif
         
-        // Determina temperatura alvo
         float newTargetTemp;
         if (stage.type == STAGE_RAMP) {
             newTargetTemp = stage.startTemp;
@@ -908,9 +911,7 @@ void verificarTrocaDeFase() {
             newTargetTemp = stage.targetTemp;
         }
         
-        // Define temperatura no BrewPi
         updateTargetTemperature(newTargetTemp);
-        
         saveStateToEEPROM();
         
         #if DEBUG_FERMENTATION
@@ -921,23 +922,25 @@ void verificarTrocaDeFase() {
                     
         switch (stage.type) {
             case STAGE_TEMPERATURE:
-                Serial.println("TEMPERATURE)");
+                Serial.printf("TEMPERATURE, duração: %.2f dias / %.1f horas)\n", 
+                             stage.durationDays, stage.holdTimeHours);
                 break;
             case STAGE_RAMP:
-                Serial.println("RAMP)");
+                Serial.printf("RAMP, tempo: %d horas)\n", stage.rampTimeHours);
                 break;
             case STAGE_GRAVITY:
-                Serial.println("GRAVITY)");
+                Serial.printf("GRAVITY, alvo: %.3f)\n", stage.targetGravity);
                 break;
             case STAGE_GRAVITY_TIME:
-                Serial.println("GRAVITY_TIME)");
+                Serial.printf("GRAVITY_TIME, timeout: %.2f dias / %.1f horas)\n", 
+                             stage.timeoutDays, stage.maxTimeHours);
                 break;
         }
         #endif
     }
 
     // =====================================================
-    // ✅ VERIFICAÇÃO DE TEMPERATURA ALVO ATINGIDA
+    // VERIFICAÇÃO DE TEMPERATURA ALVO ATINGIDA
     // =====================================================
     bool targetReached = false;
     bool needsTemperature = (stage.type == STAGE_TEMPERATURE || 
@@ -945,17 +948,11 @@ void verificarTrocaDeFase() {
                             stage.type == STAGE_GRAVITY_TIME);
 
     if (needsTemperature) {
-        #if DEBUG_FERMENTATION
-        state.lastTempUpdate = millis();
-        #endif
-        
-        // Usa temperatura lida do BrewPi
         float currentTemp = getCurrentBeerTemp();
         float stageTargetTemp = stage.targetTemp;
         float diff = abs(currentTemp - stageTargetTemp);
         targetReached = (diff <= TEMPERATURE_TOLERANCE);
         
-        // Debug periódico
         static unsigned long lastDebug2 = 0;
         unsigned long now = millis();
         if (now - lastDebug2 > 60000 && !fermentacaoState.targetReachedSent) {
@@ -986,17 +983,16 @@ void verificarTrocaDeFase() {
     }
 
     // =====================================================
-    // ✅ CÁLCULO DO TEMPO DECORRIDO
+    // CÁLCULO DO TEMPO DECORRIDO
     // =====================================================
     float elapsedH = 0;
     
     if (fermentacaoState.stageStartEpoch > 0) {
-        elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
+        elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0f;
         if (elapsedH < 0) elapsedH = 0;
     }
     
     #if DEBUG_FERMENTATION
-    // Debug periódico
     static unsigned long lastDebug3 = 0;
     if (millis() - lastDebug3 > 300000) {
         lastDebug3 = millis();
@@ -1006,16 +1002,20 @@ void verificarTrocaDeFase() {
                      fermentacaoState.totalStages);
         
         if (fermentacaoState.stageStartEpoch > 0) {
-            Serial.printf("%.1fh/", elapsedH);
+            Serial.printf("%.1fh decorridas / ", elapsedH);
             
             switch (stage.type) {
                 case STAGE_TEMPERATURE:
+                    Serial.printf("%.1fh total (%.2f dias)", 
+                                 stage.holdTimeHours, stage.durationDays);
+                    break;
                 case STAGE_GRAVITY:
                 case STAGE_GRAVITY_TIME:
-                    Serial.printf("%.1fh decorridas", (float)stage.holdTimeHours);
+                    Serial.printf("%.1fh max (%.2f dias)", 
+                                 stage.maxTimeHours, stage.timeoutDays);
                     break;
                 case STAGE_RAMP:
-                    Serial.printf("%.1fh decorridas", (float)stage.rampTimeHours);
+                    Serial.printf("%dh total", stage.rampTimeHours);
                     break;
             }
         } else {
@@ -1030,7 +1030,7 @@ void verificarTrocaDeFase() {
     // CONTROLE DE RAMPA
     // =====================================================
     if (stage.type == STAGE_RAMP) {
-        float progress = elapsedH / stage.rampTimeHours;
+        float progress = elapsedH / (float)stage.rampTimeHours;
         if (progress < 0) progress = 0;
         if (progress > 1) progress = 1;
 
@@ -1055,15 +1055,20 @@ void verificarTrocaDeFase() {
     switch (stage.type) {
         case STAGE_TEMPERATURE:
             if (targetReached && fermentacaoState.stageStartEpoch > 0) {
+                // Usa holdTimeHours do struct (já calculado)
                 if (elapsedH >= stage.holdTimeHours) {
                     stageCompleted = true;
+                    #if DEBUG_FERMENTATION
+                    Serial.printf("[Fase] ✅ Tempo atingido: %.1fh >= %.1fh (%.2f dias)\n",
+                                 elapsedH, stage.holdTimeHours, stage.durationDays);
+                    #endif
                 }
             }
             break;
 
         case STAGE_RAMP:
             if (fermentacaoState.stageStartEpoch > 0 && 
-                elapsedH >= stage.rampTimeHours) {
+                elapsedH >= (float)stage.rampTimeHours) {
                 stageCompleted = true;
             }
             break;
@@ -1076,6 +1081,7 @@ void verificarTrocaDeFase() {
 
         case STAGE_GRAVITY_TIME:
             if (targetReached) {
+                // Usa maxTimeHours do struct (já calculado)
                 bool timeoutReached = (fermentacaoState.stageStartEpoch > 0 && 
                                       elapsedH >= stage.maxTimeHours);
                 if (mySpindel.gravity <= stage.targetGravity || timeoutReached) {
@@ -1090,10 +1096,11 @@ void verificarTrocaDeFase() {
     // =====================================================
     if (stageCompleted) {
         #if DEBUG_FERMENTATION
-        Serial.printf("[Fase] ✅ Etapa %d/%d concluída após %.1fh\n", 
+        Serial.printf("[Fase] ✅ Etapa %d/%d concluída após %.1fh (%.2f dias)\n", 
                     fermentacaoState.currentStageIndex + 1,
                     fermentacaoState.totalStages,
-                    elapsedH);
+                    elapsedH,
+                    elapsedH / 24.0f);
         #endif
       
         fermentacaoState.currentStageIndex++;
@@ -1117,14 +1124,6 @@ void verificarTrocaDeFase() {
             concluirFermentacaoMantendoTemperatura();
         }
     }
-}
-
-// =====================================================
-// STATUS DETALHADO - USANDO BREWPI
-// =====================================================
-
-DetailedControlStatus getDetailedStatus() {
-    return brewPiControl.getDetailedStatus();
 }
 
 void verificarTargetAtingido() {
@@ -1151,11 +1150,8 @@ void verificarTargetAtingido() {
 // =====================================================
 // ✅ ENVIAR ESTADO COMPLETO
 // =====================================================
-// =====================================================
-// ✅ ENVIAR ESTADO COMPLETO - CORRIGIDO
-// =====================================================
 void enviarEstadoCompleto() {
-    // ========== VERIFICAÇÕES INICIAIS RÁPIDAS ==========
+    // ========== VERIFICAÇÕES INICIAIS ==========
     if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
         #if DEBUG_ENVIODADOS
         Serial.println(F("[Envio] ❌ Não enviando: fermentação não ativa"));
@@ -1187,7 +1183,7 @@ void enviarEstadoCompleto() {
     // ========== PREPARAÇÃO DOS DADOS ==========
     JsonDocument doc;
     
-    // 1. Dados essenciais (mais críticos primeiro)
+    // 1. Dados essenciais
     doc["config_id"] = fermentacaoState.activeId;
     doc["config_name"] = fermentacaoState.configName;
     doc["currentStageIndex"] = fermentacaoState.currentStageIndex;
@@ -1210,8 +1206,7 @@ void enviarEstadoCompleto() {
     doc["currentTargetTemp"] = fermentacaoState.tempTarget;
     doc["targetReached"] = fermentacaoState.targetReachedSent;
     
-    // ========== 3. CÁLCULO DO TEMPO RESTANTE (CORRIGIDO) ==========
-    // SEMPRE criar timeRemaining quando há etapas válidas
+    // ========== 3. CÁLCULO DO TEMPO RESTANTE ==========
     if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
         FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
         JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
@@ -1221,70 +1216,76 @@ void enviarEstadoCompleto() {
             time_t nowEpoch = getCurrentEpoch();
             
             if (nowEpoch > 0) {
-                float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
+                float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0f;
                 
                 if (stage.type == STAGE_TEMPERATURE) {
                     if (fermentacaoState.targetReachedSent) {
-                        float stageTotalHours = stage.durationDays * 24.0;
-                        float remainingH = stageTotalHours - elapsedH;
-                        
+                        // Usa holdTimeHours do struct
+                        float remainingH = stage.holdTimeHours - elapsedH;
                         if (remainingH < 0) remainingH = 0;
                         
                         #if DEBUG_ENVIODADOS
-                        Serial.printf("[DEBUG] stage.durationDays: %d\n", stage.durationDays);
-                        Serial.printf("[DEBUG] stageTotalHours: %.1f\n", stageTotalHours);
+                        Serial.printf("[DEBUG] stage.durationDays: %.2f\n", stage.durationDays);
+                        Serial.printf("[DEBUG] stage.holdTimeHours: %.1f\n", stage.holdTimeHours);
                         Serial.printf("[DEBUG] elapsedH: %.1f\n", elapsedH);
                         Serial.printf("[DEBUG] remainingH: %.1f\n", remainingH);
                         #endif
                         
-                        // Calcular dias, horas, minutos
                         formatTimeRemaining(timeRemaining, remainingH, "running");
                     } else {
                         // Aguardando temperatura alvo
-                        timeRemaining["value"] = stage.durationDays;
-                        timeRemaining["unit"] = "days";
+                        if (stage.durationDays >= 1.0f) {
+                            timeRemaining["value"] = stage.durationDays;
+                            timeRemaining["unit"] = "days";
+                        } else {
+                            timeRemaining["value"] = stage.holdTimeHours;
+                            timeRemaining["unit"] = "hours";
+                        }
                         timeRemaining["status"] = "waiting";
                     }
                 }
                 else if (stage.type == STAGE_RAMP) {
-                    float remainingH = stage.rampTimeHours - elapsedH;
+                    float remainingH = (float)stage.rampTimeHours - elapsedH;
                     if (remainingH < 0) remainingH = 0;
                     
                     formatTimeRemaining(timeRemaining, remainingH, "running");
                     
                     // Progresso da rampa
-                    float progress = constrain(elapsedH / stage.rampTimeHours, 0.0, 1.0);
-                    doc["rampProgress"] = progress * 100.0;
+                    float progress = constrain(elapsedH / (float)stage.rampTimeHours, 0.0f, 1.0f);
+                    doc["rampProgress"] = progress * 100.0f;
                 }
                 else if (stage.type == STAGE_GRAVITY_TIME) {
                     if (fermentacaoState.targetReachedSent) {
-                        float maxTimeHours = stage.timeoutDays * 24.0;
-                        float remainingH = maxTimeHours - elapsedH;
+                        // Usa maxTimeHours do struct
+                        float remainingH = stage.maxTimeHours - elapsedH;
                         if (remainingH < 0) remainingH = 0;
                         
                         formatTimeRemaining(timeRemaining, remainingH, "running");
                     } else {
-                        // Aguardando temperatura para gravidade+tempo
-                        timeRemaining["value"] = stage.timeoutDays;
-                        timeRemaining["unit"] = "days";
+                        if (stage.timeoutDays >= 1.0f) {
+                            timeRemaining["value"] = stage.timeoutDays;
+                            timeRemaining["unit"] = "days";
+                        } else {
+                            timeRemaining["value"] = stage.maxTimeHours;
+                            timeRemaining["unit"] = "hours";
+                        }
                         timeRemaining["status"] = "waiting";
                     }
                 }
                 else if (stage.type == STAGE_GRAVITY) {
-                    // Para gravidade pura, não há contagem de tempo
                     timeRemaining["value"] = 0;
                     timeRemaining["unit"] = "indefinite";
                     timeRemaining["status"] = "waiting_gravity";
                 }
             } else {
-                // NTP não sincronizado - mostrar valores iniciais
+                // NTP não sincronizado
                 setInitialTimeRemaining(timeRemaining, stage, fermentacaoState.targetReachedSent);
             }
         } 
-        // Caso 2: stageStartEpoch == 0 - ainda aguardando temperatura alvo
+        // Caso 2: stageStartEpoch == 0
         else {
             #if DEBUG_ENVIODADOS
-            Serial.println(F("[DEBUG] stageStartEpoch == 0, criando timeRemaining com status waiting"));
+            Serial.println(F("[DEBUG] stageStartEpoch == 0, criando timeRemaining inicial"));
             #endif
             
             setInitialTimeRemaining(timeRemaining, stage, fermentacaoState.targetReachedSent);
@@ -1335,7 +1336,7 @@ void enviarEstadoCompleto() {
     
     doc["uptime_ms"] = millis();
     
-    // 6. Adicionar stageType para debug
+    // 6. stageType para debug
     if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
         FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
         const char* stageTypeStr = "";
@@ -1351,70 +1352,17 @@ void enviarEstadoCompleto() {
     // ========== COMPRESSÃO DOS DADOS ==========
     compressStateData(doc);
     
-    // ========== ENVIO IMEDIATO PARA SERVIDOR ==========
+    // ========== ENVIO ==========
     #if DEBUG_ENVIODADOS
     bool sendSuccess = httpClient.updateFermentationState(fermentacaoState.activeId, doc);
     Serial.printf("[Envio] Resultado: %s\n", sendSuccess ? "✅ Sucesso" : "❌ Falha");
-    #else
-    httpClient.updateFermentationState(fermentacaoState.activeId, doc);
-    #endif
-    
-    // ========== DEBUG APÓS ENVIO (se habilitado) ==========
-    #if DEBUG_ENVIODADOS
-    Serial.println(F("\n[DEBUG] ==========================================="));
-    Serial.println(F("[DEBUG] DETALHES DO CÁLCULO DE TEMPO RESTANTE"));
-    Serial.println(F("[DEBUG] ==========================================="));
-    
-    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
-        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-        time_t debugNowEpoch = getCurrentEpoch();
-        
-        Serial.printf("[DEBUG] stageStartEpoch: %llu\n", (unsigned long long)fermentacaoState.stageStartEpoch);
-        Serial.printf("[DEBUG] targetReachedSent: %s\n", fermentacaoState.targetReachedSent ? "true" : "false");
-        Serial.printf("[DEBUG] nowEpoch: %llu\n", (unsigned long long)debugNowEpoch);
-        
-        Serial.printf("[DEBUG] Tipo de etapa: ");
-        switch(stage.type) {
-            case STAGE_TEMPERATURE: 
-                Serial.println(F("TEMPERATURA"));
-                Serial.printf("  durationDays: %d\n", stage.durationDays);
-                Serial.printf("  targetTemp: %.1f\n", stage.targetTemp);
-                break;
-            case STAGE_RAMP: 
-                Serial.println(F("RAMPA"));
-                Serial.printf("  rampTimeHours: %d\n", stage.rampTimeHours);
-                Serial.printf("  targetTemp: %.1f\n", stage.targetTemp);
-                break;
-            case STAGE_GRAVITY: 
-                Serial.println(F("GRAVIDADE"));
-                Serial.printf("  targetGravity: %.3f\n", stage.targetGravity);
-                break;
-            case STAGE_GRAVITY_TIME: 
-                Serial.println(F("GRAVIDADE+TEMPO"));
-                Serial.printf("  timeoutDays: %d\n", stage.timeoutDays);
-                Serial.printf("  targetGravity: %.3f\n", stage.targetGravity);
-                break;
-        }
-        
-        if (debugNowEpoch > 0 && fermentacaoState.stageStartEpoch > 0) {
-            float elapsedH = difftime(debugNowEpoch, fermentacaoState.stageStartEpoch) / 3600.0;
-            Serial.printf("[DEBUG] Tempo decorrido: %.2f horas\n", elapsedH);
-            
-            if (stage.type == STAGE_TEMPERATURE && fermentacaoState.targetReachedSent) {
-                float stageTotalHours = stage.durationDays * 24.0;
-                float remainingH = stageTotalHours - elapsedH;
-                Serial.printf("[DEBUG] Total horas da etapa: %.1f\n", stageTotalHours);
-                Serial.printf("[DEBUG] Horas restantes: %.1f\n", remainingH);
-            }
-        }
-    }
     
     Serial.println(F("\n[DEBUG] DADOS ENVIADOS:"));
     serializeJsonPretty(doc, Serial);
     Serial.println();
-    
     Serial.printf("[DEBUG] Heap livre: %d bytes\n", ESP.getFreeHeap());
-    Serial.println(F("[DEBUG] ===========================================\n"));
+    #else
+    httpClient.updateFermentationState(fermentacaoState.activeId, doc);
     #endif
 }
 
@@ -1474,30 +1422,52 @@ void setInitialTimeRemaining(JsonObject& timeRemaining, FermentationStage& stage
     switch (stage.type) {
         case STAGE_TEMPERATURE:
             if (targetReached) {
-                // Temperatura já atingida mas stageStartEpoch ainda é 0
-                // Usa formato detailed para consistência
-                int totalHours = stage.durationDays * 24;
-                timeRemaining["days"] = stage.durationDays;
-                timeRemaining["hours"] = 0;
-                timeRemaining["minutes"] = 0;
-                timeRemaining["total_hours"] = (float)totalHours;
-                timeRemaining["unit"] = "detailed";
+                // Temperatura já atingida - usa holdTimeHours do struct
+                if (stage.holdTimeHours >= 24.0f) {
+                    int days = (int)(stage.holdTimeHours / 24.0f);
+                    int hours = (int)(stage.holdTimeHours - (days * 24.0f));
+                    
+                    timeRemaining["days"] = days;
+                    timeRemaining["hours"] = hours;
+                    timeRemaining["minutes"] = 0;
+                    timeRemaining["total_hours"] = stage.holdTimeHours;
+                    timeRemaining["unit"] = "detailed";
+                } else if (stage.holdTimeHours >= 1.0f) {
+                    int hours = (int)stage.holdTimeHours;
+                    int minutes = (int)((stage.holdTimeHours - hours) * 60.0f);
+                    
+                    timeRemaining["hours"] = hours;
+                    timeRemaining["minutes"] = minutes;
+                    timeRemaining["total_hours"] = stage.holdTimeHours;
+                    timeRemaining["unit"] = "detailed";
+                } else {
+                    int minutes = (int)(stage.holdTimeHours * 60.0f);
+                    if (minutes < 1) minutes = 1;
+                    timeRemaining["value"] = minutes;
+                    timeRemaining["unit"] = "minutes";
+                }
                 timeRemaining["status"] = "running";
             } else {
-                timeRemaining["value"] = stage.durationDays;
-                timeRemaining["unit"] = "days";
+                // Aguardando temperatura
+                if (stage.durationDays >= 1.0f) {
+                    timeRemaining["value"] = stage.durationDays;
+                    timeRemaining["unit"] = "days";
+                } else {
+                    timeRemaining["value"] = stage.holdTimeHours;
+                    timeRemaining["unit"] = "hours";
+                }
                 timeRemaining["status"] = "waiting";
             }
             break;
             
         case STAGE_RAMP:
             if (targetReached) {
-                // Rampa já iniciou - usar formato detailed
                 int hours = stage.rampTimeHours;
-                int days = hours / 24;
-                int remainingHours = hours % 24;
                 
-                if (days > 0) {
+                if (hours >= 24) {
+                    int days = hours / 24;
+                    int remainingHours = hours % 24;
+                    
                     timeRemaining["days"] = days;
                     timeRemaining["hours"] = remainingHours;
                     timeRemaining["minutes"] = 0;
@@ -1525,23 +1495,46 @@ void setInitialTimeRemaining(JsonObject& timeRemaining, FermentationStage& stage
             
         case STAGE_GRAVITY_TIME:
             if (targetReached) {
-                int totalHours = stage.timeoutDays * 24;
-                timeRemaining["days"] = stage.timeoutDays;
-                timeRemaining["hours"] = 0;
-                timeRemaining["minutes"] = 0;
-                timeRemaining["total_hours"] = (float)totalHours;
-                timeRemaining["unit"] = "detailed";
+                // Usa maxTimeHours do struct
+                if (stage.maxTimeHours >= 24.0f) {
+                    int days = (int)(stage.maxTimeHours / 24.0f);
+                    int hours = (int)(stage.maxTimeHours - (days * 24.0f));
+                    
+                    timeRemaining["days"] = days;
+                    timeRemaining["hours"] = hours;
+                    timeRemaining["minutes"] = 0;
+                    timeRemaining["total_hours"] = stage.maxTimeHours;
+                    timeRemaining["unit"] = "detailed";
+                } else if (stage.maxTimeHours >= 1.0f) {
+                    int hours = (int)stage.maxTimeHours;
+                    int minutes = (int)((stage.maxTimeHours - hours) * 60.0f);
+                    
+                    timeRemaining["hours"] = hours;
+                    timeRemaining["minutes"] = minutes;
+                    timeRemaining["total_hours"] = stage.maxTimeHours;
+                    timeRemaining["unit"] = "detailed";
+                } else {
+                    int minutes = (int)(stage.maxTimeHours * 60.0f);
+                    if (minutes < 1) minutes = 1;
+                    timeRemaining["value"] = minutes;
+                    timeRemaining["unit"] = "minutes";
+                }
                 timeRemaining["status"] = "running";
             } else {
-                timeRemaining["value"] = stage.timeoutDays;
-                timeRemaining["unit"] = "days";
+                if (stage.timeoutDays >= 1.0f) {
+                    timeRemaining["value"] = stage.timeoutDays;
+                    timeRemaining["unit"] = "days";
+                } else {
+                    timeRemaining["value"] = stage.maxTimeHours;
+                    timeRemaining["unit"] = "hours";
+                }
                 timeRemaining["status"] = "waiting";
             }
             break;
     }
     
     #if DEBUG_ENVIODADOS
-    Serial.printf("[DEBUG] timeRemaining inicial: targetReached=%s, status=%s\n",
+    Serial.printf("[DEBUG] setInitialTimeRemaining: targetReached=%s, status=%s\n",
                  targetReached ? "true" : "false",
                  timeRemaining["status"].as<const char*>());
     #endif

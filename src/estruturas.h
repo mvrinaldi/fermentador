@@ -67,32 +67,35 @@ enum StageType {
     STAGE_GRAVITY_TIME
 };
 
-// === Etapa de Fermentação === //
 struct FermentationStage {
-  StageType type;
-  float targetTemp;
-  float startTemp;
-  int durationDays;
-  int rampTimeHours;
-  int holdTimeHours;
-  int maxTimeHours;
-  float targetGravity;
-  int timeoutDays;
-  unsigned long startTime;
-  bool completed;
-  
-  FermentationStage() : 
-      type(STAGE_TEMPERATURE), 
-      targetTemp(20.0),
-      startTemp(0.0),
-      durationDays(0),
-      rampTimeHours(0),
-      holdTimeHours(0),
-      maxTimeHours(0),
-      targetGravity(0.0),
-      timeoutDays(0),
-      startTime(0),
-      completed(false) {}
+    StageType type;
+    float targetTemp;
+    float startTemp;
+    float durationDays;
+    int rampTimeHours;
+    float targetGravity;
+    float timeoutDays;
+    
+    // Campos calculados (preenchidos em loadConfigParameters)
+    float holdTimeHours;    // = durationDays * 24
+    float maxTimeHours;     // = timeoutDays * 24
+    
+    time_t startTime;
+    bool completed;
+    
+    // Construtor padrão
+    FermentationStage() : 
+        type(STAGE_TEMPERATURE),
+        targetTemp(20.0f),
+        startTemp(20.0f),
+        durationDays(0.0f),
+        rampTimeHours(0),
+        targetGravity(0.0f),
+        timeoutDays(0.0f),
+        holdTimeHours(0.0f),
+        maxTimeHours(0.0f),
+        startTime(0),
+        completed(false) {}
 };
 
 // === Estado da Fermentação === //
