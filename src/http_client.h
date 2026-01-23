@@ -32,7 +32,8 @@ public:
     bool getConfiguration(const char* configId, JsonDocument& doc);
     bool updateFermentationState(const char* configId, const JsonDocument& doc);
     bool notifyTargetReached(const char* configId);
-    
+    bool updateStageIndex(const char* configId, int newStageIndex);
+
     // ==================== LEITURAS ====================
     bool sendReading(const char* configId, float tempFridge, 
                      float tempFermenter, float tempTarget, float gravity);

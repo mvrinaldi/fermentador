@@ -1,7 +1,7 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "3.3.1"
-#define IMPLEMENTACAO "Alteração de dias na etapa para permitir decimais e Telnet"
+#define FIRMWARE_VERSION "1.3.7"
+#define IMPLEMENTACAO "Correção descompasso aguardando proteção versus cooler/heater ON"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -48,8 +48,6 @@ DetailedControlStatus getDetailedStatus();
 
 ESP8266WebServer server(80);
 
-WiFiClient wifiClient;
-
 // === Variáveis de Controle de Tempo === //
 unsigned long lastTemperatureControl = 0;
 unsigned long lastPhaseCheck = 0;
@@ -57,6 +55,7 @@ unsigned long lastPhaseCheck = 0;
 // ==================== TIMERS ====================
 unsigned long lastTempUpdate = 0;
 unsigned long lastSensorCheck = 0;
+unsigned long lastControlUpdate = 0;
 
 const unsigned long TEMP_UPDATE_INTERVAL = 60000;     // 60 segundos
 const unsigned long SENSOR_CHECK_INTERVAL = 30000;   // 30 segundos
@@ -199,39 +198,18 @@ void sendHeartbeat() {
 // ==================== CARREGA CONFIG ATIVA ====================
 
 void loadActiveConfiguration() {
-    HTTPClient http;
-    // ✅ CORRETO: passa WiFiClient como primeiro parâmetro
-    http.begin(wifiClient, String(SERVER_URL) + "/api.php?path=active");
-    http.addHeader("Content-Type", "application/json");
+    JsonDocument doc;
     
-    int httpCode = http.GET();
-    
-    if (httpCode == HTTP_CODE_OK) {
-        String response = http.getString();
-        
-        JsonDocument doc;
-        DeserializationError error = deserializeJson(doc, response);
-        
-        if (!error && doc["active"] == true) {
+    if (httpClient.getActiveFermentation(doc)) {
+        if (doc["active"] == true) {
             activeConfigId = doc["id"];
-            
             #if DEBUG_MAIN
             Serial.printf("[CONFIG] Fermentação ativa: ID %d\n", activeConfigId);
             #endif
         } else {
             activeConfigId = 0;
-
-            #if DEBUG_MAIN
-            Serial.println("[CONFIG] Nenhuma fermentação ativa");
-            #endif
         }
-    } else {
-        #if DEBUG_MAIN
-        Serial.printf("[CONFIG] Erro HTTP: %d\n", httpCode);
-        #endif
     }
-    
-    http.end();
 }
 
 // ============================================
@@ -703,39 +681,61 @@ void loop() {
     // NTP
     checkNTPSync();
     
-    // ═══════════════════════════════════════════════════════════════
-    // ✅ CONTROLE DE TEMPERATURA BREWPI (NÚCLEO DO SISTEMA)
-    // ═══════════════════════════════════════════════════════════════
-    // Executa a cada 5 segundos (conforme BrewPi original)
-    if (now - lastTemperatureControl >= 5000) {
-        lastTemperatureControl = now;
-
-        LOG_MAIN("Leitura enviada");
+// ═══════════════════════════════════════════════════════════════
+// ✅ CONTROLE DE TEMPERATURA BREWPI (NÚCLEO DO SISTEMA)
+// ═══════════════════════════════════════════════════════════════
+// Executa a cada 5 segundos (conforme BrewPi original)
+if (now - lastTemperatureControl >= 5000) {
+    lastTemperatureControl = now;
+    
+    // Se há fermentação ativa, executa controle BrewPi
+    if (fermentacaoState.active) {
+        brewPiControl.update();
         
-        // Se há fermentação ativa, executa controle BrewPi
-        if (fermentacaoState.active) {
-            brewPiControl.update();
-            
-            // Atualiza estado global para compatibilidade
-            state.currentTemp = tempToFloat(brewPiControl.getBeerTemp());
-            state.targetTemp = fermentacaoState.tempTarget;
-        }
-        
-        // Envia dados ao MySQL (se online)
-        if (isHTTPOnline()) {
-            verificarTargetAtingido();
-            
-            httpClient.updateControlState(
-                fermentacaoState.activeId,
-                state.targetTemp,
-                cooler.estado,
-                heater.estado
-            );
-
-            enviarEstadoCompleto();
-        }
+        // Atualiza estado global para compatibilidade
+        state.currentTemp = tempToFloat(brewPiControl.getBeerTemp());
+        state.targetTemp = fermentacaoState.tempTarget;
     }
     
+    // Envia dados ao MySQL (se online)
+    if (isHTTPOnline()) {
+        verificarTargetAtingido();
+        
+        // ✅ Estado completo (controla 30s internamente)
+        enviarEstadoCompleto();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ✅ ENVIO DO ESTADO DE CONTROLE A CADA 30 SEGUNDOS
+// ═══════════════════════════════════════════════════════════════
+if (now - lastControlUpdate >= 30000) {
+    lastControlUpdate = now;
+    
+    if (isHTTPOnline() && fermentacaoState.active) {
+        DetailedControlStatus status = brewPiControl.getDetailedStatus();
+               
+        // Envia estado dos relés
+        httpClient.updateControlState(
+            fermentacaoState.activeId,
+            state.targetTemp,
+            status.coolerActive,
+            status.heaterActive
+        );
+        
+        LOG_MAIN("[HTTP] ✅ Estado de controle enviado (30s interval)");
+        LOG_MAIN("[DEBUG] State: " + String(status.stateName) + 
+            ", Cooler: " + (status.coolerActive ? "ON" : "OFF") +
+            ", Heater: " + (status.heaterActive ? "ON" : "OFF"));
+        
+        // Se estiver em estado de espera, log também o motivo
+        if (status.isWaiting && status.waitReason) {
+            LOG_MAIN("[DEBUG] Wait: " + String(status.waitReason) + 
+                     " (" + String(status.waitTimeRemaining) + "s)");
+        }
+    }
+}
+
     // ═══════════════════════════════════════════════════════════════
     // VERIFICAÇÃO DE FERMENTAÇÃO ATIVA
     // ═══════════════════════════════════════════════════════════════

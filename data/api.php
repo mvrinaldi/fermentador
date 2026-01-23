@@ -301,7 +301,7 @@ function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $times
         
         // ========== 3. LIMPEZA GLOBAL (mantém apenas últimos X registros TOTAIS) ==========
         // Isso garante que a tabela nunca cresça demais, independente do config_id
-        $globalLimit = $keepCount * 2; // Ex: se keepCount=200, mantém 2000 no total
+        $globalLimit = $keepCount * 2; // Ex: se keepCount=100, mantém 200 no total
         
         $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM {$tableName}");
         $stmt->execute();

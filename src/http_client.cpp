@@ -1,6 +1,8 @@
 // http_client.cpp - Implementação centralizada e otimizada
+// IMPORTANTE: Se trocar o site de hospedagem, lembre-se de marcar opção, no serviço de hospedagem, para "NÃO FORÇAR HTTPS"
+// Isso porque o esp tá configurado para enviar para http e não https
 #include "http_client.h"
-#include "debug_config.h"  // Adicionado para ter DEBUG_HTTP
+#include "debug_config.h"
 
 // Instância global
 FermentadorHTTPClient httpClient;
@@ -17,21 +19,13 @@ FermentadorHTTPClient::~FermentadorHTTPClient() {
 bool FermentadorHTTPClient::makeRequest(const String& endpoint, const String& method, 
                                         const JsonDocument* payloadDoc, String& response) {
     if (!isConnected()) {
-        #if DEBUG_HTTP
-        Serial.println(F("[HTTP] ❌ Cliente não conectado"));
-        #endif
         return false;
     }
 
-    HTTPClient http;
     String url = String(SERVER_URL) + endpoint;
     
-    #if DEBUG_HTTP
-    Serial.printf("[HTTP] 🌐 %s %s\n", method.c_str(), url.c_str());
-    #endif
-    
-    yield();
-    http.begin(wifiClient, url);
+    http.end();  // Garante que está limpo antes de usar
+    http.begin(wifiClient, url);  // Usa o membro wifiClient
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(HTTP_TIMEOUT);
 
@@ -215,6 +209,29 @@ bool FermentadorHTTPClient::notifyTargetReached(const char* configId) {
     return result;
 }
 
+bool FermentadorHTTPClient::updateStageIndex(const char* configId, int newStageIndex) {
+    JsonDocument doc;
+    doc["config_id"] = configId;
+    doc["currentStageIndex"] = newStageIndex;
+    doc["stage_advanced"] = true;
+    doc["timestamp"] = millis() / 1000;
+
+    String response;
+    yield();
+    
+    bool result = makeRequest("api/esp/stage.php", "POST", &doc, response);
+    
+    #if DEBUG_HTTP
+    if (result) {
+        Serial.printf("[HTTP] ✅ Etapa atualizada para %d\n", newStageIndex);
+    } else {
+        Serial.printf("[HTTP] ❌ Falha ao atualizar etapa para %d\n", newStageIndex);
+    }
+    #endif
+    
+    return result;
+}
+
 // =====================================================
 // SENSORES E ISPINDEL
 // =====================================================
@@ -238,6 +255,21 @@ bool FermentadorHTTPClient::updateCurrentTemperatures(float tempFermenter, float
     #endif
     
     return result;
+}
+
+bool FermentadorHTTPClient::sendSpindelData(const String& spindelJson) {
+    // Se não vai usar, remova do .h
+    // Ou implemente:
+    JsonDocument doc;
+    deserializeJson(doc, spindelJson);
+    String response;
+    return makeRequest("api/esp/ispindel.php", "POST", &doc, response);
+}
+
+void FermentadorHTTPClient::printError(const char* context) {
+    #if DEBUG_HTTP
+    Serial.printf("[HTTP] ❌ Erro em: %s\n", context);
+    #endif
 }
 
 bool FermentadorHTTPClient::sendSensors(const JsonDocument& sensorsDoc) {

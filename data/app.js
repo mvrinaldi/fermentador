@@ -707,51 +707,61 @@ function renderUI() {
         stageElement.textContent = `Etapa ${currentStage} de ${totalStages}`;
     }
     
+    // ========== BLOCO DO TIME-REMAINING (ATUALIZADO) ==========
     const timeElement = document.getElementById('time-remaining');
-    if (timeElement && appState.espState && appState.espState.timeRemaining) {
+    if (timeElement && appState.espState) {
         const tr = appState.espState.timeRemaining;
+        const targetReached = appState.espState.targetReached === true;
         
-        // Log mais informativo e único
-        console.log('⏱️ TimeRemaining:', {
-            status: tr.status,
-            valor: tr.value,
-            formatado: formatTimeRemaining(tr),
-            statusText: getStatusText(tr)
+        // Log para debug
+        console.log('⏱️ Time Element Debug:', {
+            hasTimeRemaining: !!tr,
+            targetReached: targetReached,
+            timeRemaining: tr
         });
         
-        let icon = 'fas fa-clock';
-        let statusClass = '';
-        
-        if (tr.status === 'waiting') {
-            icon = 'fas fa-hourglass-start';
-            statusClass = 'text-yellow-600';
-        } else if (tr.status === 'running') {
-            icon = 'fas fa-hourglass-half';
-            statusClass = 'text-green-600';
-        } else if (tr.status === 'waiting_gravity') {
-            icon = 'fas fa-hourglass-start';
-            statusClass = 'text-blue-600';
+        if (tr && targetReached) {
+            // Tempo restante válido (atingiu o alvo e está contando)
+            let icon = 'fas fa-hourglass-half';
+            let statusClass = 'text-green-600';
+            
+            // Mantém a lógica de status se ainda for relevante
+            if (tr.status === 'waiting_gravity') {
+                icon = 'fas fa-hourglass-start';
+                statusClass = 'text-blue-600';
+            }
+            
+            const timeDisplay = formatTimeRemaining(tr);
+            const statusText = tr.status === 'waiting_gravity' ? 'aguardando gravidade' : 'restantes';
+            
+            timeElement.innerHTML = `
+                <i class="${icon} ${statusClass}"></i> 
+                <span class="${statusClass}">
+                    ${timeDisplay} ${statusText}
+                </span>
+            `;
+            timeElement.style.display = 'flex';
+            
+            console.log(`🎨 Time element (targetReached=true): ${timeDisplay} ${statusText}`);
+        } else if (targetReached === false) {
+            // Quando NÃO atingiu o alvo
+            timeElement.innerHTML = `
+                <i class="fas fa-hourglass-start text-yellow-600"></i>
+                <span class="text-yellow-600">
+                    Aguardando temperatura alvo
+                </span>
+            `;
+            timeElement.style.display = 'flex';
+            console.log('🎨 Time element (targetReached=false): Aguardando temperatura alvo');
+        } else {
+            // Casos especiais ou sem dados
+            timeElement.style.display = 'none';
+            console.log('⚠️ Time element escondido - estado incompleto');
         }
-        
-        const timeDisplay = formatTimeRemaining(tr);
-        const statusText = getStatusText(tr);
-        
-        timeElement.innerHTML = `
-            <i class="${icon} ${statusClass}"></i> 
-            <span class="${statusClass}">
-                ${timeDisplay} ${statusText}
-            </span>
-        `;
-        timeElement.style.display = 'flex';
-        
-        console.log(`🎨 Time element atualizado: ${timeDisplay} (${tr.status})`);
-    } else if (timeElement) {
-        timeElement.style.display = 'none';
-        console.log('⚠️ Time element escondido - sem timeRemaining disponível');
     }
+    // ========== FIM DO BLOCO ATUALIZADO ==========
     
-    // Logs para outras funções de renderização
-
+    // ESTAS LINHAS PERMANECEM EXATAMENTE COMO ESTAVAM
     checkESPStatus();
     renderInfoCards();
     renderChart();

@@ -13,7 +13,7 @@ bool isTelnetConnected();
 // Digite: telnet 192.168.68.108
 // MELHOR: Instale https://www.putty.org 
 // Abra o PuTTY
-// HostName (or IP Adress): O do esp que neste é 192.168.68.108
+// HostName (or IP Adress): O do esp que neste é    
 // Clique em "Other" e na caixa "Telnet"
 // Clique em "Open" e vai abrir o programa e mostrar os logs
 

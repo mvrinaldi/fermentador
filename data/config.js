@@ -485,7 +485,7 @@ async function startFermentation(configId, isReusing = false) {
     try {
         const activeData = await apiRequest('active');
         if (activeData.active) {
-            alert('Já existe uma fermentação ativa! Para iniciar uma nova, primeiro pause ou conclua a fermentação atual.');
+            alert('Já existe uma fermentação ativa! Para iniciar uma nova, primeiro conclua a fermentação atual.');
             return;
         }
         
@@ -548,7 +548,7 @@ async function resumeFermentation(configId) {
     try {
         const activeData = await apiRequest('active');
         if (activeData.active) {
-            alert('Já existe uma fermentação ativa! Para retomar esta, primeiro pause a fermentação atual.');
+            alert('Já existe uma fermentação ativa! Para retomar esta, primeiro conclua a fermentação atual.');
             return;
         }
         
@@ -611,7 +611,7 @@ async function deleteConfig(configId) {
     if (!config) return;
     
     if (config.status === 'active') {
-        alert('Não é possível excluir uma fermentação ativa. Primeiro pause ou conclua a fermentação.');
+        alert('Não é possível excluir uma fermentação ativa. Primeiro conclua a fermentação.');
         return;
     }
     
@@ -692,21 +692,11 @@ function getStageSummary(stage) {
         if (days >= 1) {
             return days % 1 === 0 ? `${days} dias` : `${days.toFixed(1)} dias`;
         } else {
-            const totalHours = days * 24;
-            const hours = Math.floor(totalHours);
-            const minutes = Math.round((totalHours - hours) * 60);
-            
-            if (hours === 0 && minutes === 0) {
-                return "menos de 1 minuto";
-            } else if (hours === 0) {
-                return `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-            } else if (minutes === 0) {
-                return `${hours} hora${hours !== 1 ? 's' : ''}`;
-            } else {
-                return `${hours} hora${hours !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-            }
+            const hours = days * 24;
+            return `${hours.toFixed(1)} horas`;
         }
-    };    
+    };
+    
     switch(stage.type) {
         case 'temperature':
             return `Manter ${data.targetTemp}°C por ${formatDuration(data.duration)}`;
@@ -718,38 +708,26 @@ function getStageSummary(stage) {
             return `Manter ${data.targetTemp}°C até ${data.targetGravity} SG (máx. ${formatDuration(data.maxDuration)})`;
             
         case 'ramp':
-        // Formata tempo da rampa
-        let timeDisplay;
-        const rampDays = data.rampTime / 24;
-        
-        if (rampDays >= 1) {
-            timeDisplay = rampDays % 1 === 0 ? `${rampDays} dias` : `${rampDays.toFixed(1)} dias`;
-        } else {
-            const totalHours = data.rampTime;
-            const hours = Math.floor(totalHours);
-            const minutes = Math.round((totalHours - hours) * 60);
-            
-            if (hours === 0 && minutes === 0) {
-                timeDisplay = "menos de 1 minuto";
-            } else if (hours === 0) {
-                timeDisplay = `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-            } else if (minutes === 0) {
-                timeDisplay = `${hours} hora${hours !== 1 ? 's' : ''}`;
+            // Formata tempo da rampa
+            let timeDisplay;
+            if (data.rampTime < 24) {
+                timeDisplay = `${data.rampTime} horas`;
+            } else if (data.rampTime === 24) {
+                timeDisplay = '1 dia';
             } else {
-                timeDisplay = `${hours} hora${hours !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+                timeDisplay = `${(data.rampTime / 24).toFixed(1)} dias`;
             }
-        }
-        
-        // Determina direção
-        const isHeating = data.direction === 'up' || data.targetTemp > data.startTemp;
-        const directionText = isHeating ? 'aquecer' : 'resfriar';
-        const arrow = isHeating ? '↑' : '↓';
-        
-        // Usar toFixed apenas se actualRate for um número
-        const rateDisplay = typeof data.actualRate === 'number' ? 
-            data.actualRate.toFixed(1) : '0.0';
-        
-        return `${arrow} Rampa: ${directionText} de ${data.startTemp}°C para ${data.targetTemp}°C em ${timeDisplay} (${rateDisplay}°C/dia)`;
+            
+            // Determina direção
+            const isHeating = data.direction === 'up' || data.targetTemp > data.startTemp;
+            const directionText = isHeating ? 'aquecer' : 'resfriar';
+            const arrow = isHeating ? '↑' : '↓';
+            
+            // Usar toFixed apenas se actualRate for um número
+            const rateDisplay = typeof data.actualRate === 'number' ? 
+                data.actualRate.toFixed(1) : '0.0';
+            
+            return `${arrow} Rampa: ${directionText} de ${data.startTemp}°C para ${data.targetTemp}°C em ${timeDisplay} (${rateDisplay}°C/dia)`;
             
         default:
             return 'Etapa desconhecida';
@@ -935,12 +913,6 @@ const savedConfigTemplate = (config) => {
                 ${(!isActive && !isPaused) ? `
                     <button onclick="startFermentation('${config.id}', ${isCompleted})" class="btn-compact btn-primary">
                         <i class="fas fa-play mr-1"></i> ${isCompleted ? 'Reutilizar' : 'Iniciar'}
-                    </button>
-                ` : ''}
-                
-                ${isActive ? `
-                    <button onclick="pauseFermentation('${config.id}')" class="btn-compact btn-warning">
-                        <i class="fas fa-pause mr-1"></i> Pausar
                     </button>
                 ` : ''}
                 

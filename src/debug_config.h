@@ -12,15 +12,15 @@
 #define DEBUG_MODE 1  // 0=Produção, 1=Desenvolvimento
 
 // FLAGS POR MÓDULO
-#define DEBUG_HTTP          0
+#define DEBUG_HTTP          1
 #define DEBUG_FERMENTATION  0
 #define DEBUG_SENSORES      0
 #define DEBUG_BREWPI        0
 #define DEBUG_EEPROM        0
-#define DEBUG_MAIN          0
+#define DEBUG_MAIN          1
 #define DEBUG_HEARTBEAT     0
 #define DEBUG_ENVIODADOS    0
-#define DEBUG_TELNET        0
+#define DEBUG_TELNET        1 //TELNET SÓ FUNCIONA COM ESSE HABILITADO
 
 // ============================================
 // MACROS DE LOG POR MÓDULO
