@@ -1497,9 +1497,8 @@ void formatTimeRemaining(JsonObject& timeRemaining, float remainingH, const char
         timeRemaining["value"] = minutes;
         timeRemaining["unit"] = "minutes";
     }
-    
-    timeRemaining["status"] = status;
 }
+
 
 // =====================================================
 // ENVIAR LEITURAS DOS SENSORES
