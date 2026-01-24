@@ -225,6 +225,11 @@ function formatTimeRemaining(tr) {
         return '--';
     }
     
+    // ✅ NOVO: Formato de fermentação concluída
+    if (tr.status === 'completed' || tr.unit === 'completed' || tr.display === 'Fermentação concluída') {
+        return 'Fermentação concluída';
+    }
+    
     // ✅ NOVO FORMATO: {days, hours, minutes, unit: 'detailed', status}
     if (tr.unit === 'detailed' && tr.days !== undefined) {
         const parts = [];
@@ -293,17 +298,24 @@ function decompressData(data) {
     }
     
     const messageMap = {
+        'fc': 'Fermentação concluída automaticamente - mantendo temperatura',
         'fconc': 'Fermentação concluída automaticamente - mantendo temperatura',
-        'fcomp': 'Fermentação concluída',
+        'tc': 'Fermentação concluída',
+        'ch': 'completed_holding_temp',
         'chold': 'completed_holding_temp',
         'fpaus': 'Fermentação pausada',
         'targ': 'Temperatura alvo atingida',
         'strt': 'Etapa iniciada',
         'ramp': 'Em rampa',
+        'w': 'Aguardando alvo',
         'wait': 'Aguardando alvo',
+        'r': 'Executando',
         'run': 'Executando',
+        'c': 'Resfriando',
         'cool': 'Resfriando',
+        'h': 'Aquecendo',
         'heat': 'Aquecendo',
+        'i': 'Ocioso',
         'idle': 'Ocioso',
         'peak': 'Detectando pico',
         'err': 'Erro',
@@ -315,13 +327,17 @@ function decompressData(data) {
         'h': 'hours',
         'd': 'days',
         'm': 'minutes',
-        'ind': 'indefinite'
+        'ind': 'indefinite',
+        'tc': 'completed'
     };
     
     const statusMap = {
+        'r': 'running',
         'run': 'running',
+        'w': 'waiting',
         'wait': 'waiting',
-        'wg': 'waiting_gravity'
+        'wg': 'waiting_gravity',
+        'tc': 'completed'
     };
     
     const stageTypeMap = {
@@ -367,8 +383,20 @@ function decompressData(data) {
     if (result.tr !== undefined) {
         
         if (Array.isArray(result.tr)) {
+            // ✅ NOVO: Formato de fermentação concluída: ["tc"]
+            if (result.tr.length === 1 && result.tr[0] === 'tc') {
+                result.timeRemaining = {
+                    value: 0,
+                    unit: 'completed',
+                    status: 'completed',
+                    display: 'Fermentação concluída'
+                };
+                result.targetReached = true;
+                result.fermentationCompleted = true;
+                console.log('✅ tr é ["tc"] - Fermentação concluída');
+            }
             // Formato novo: [dias, horas, minutos, status]
-            if (result.tr.length === 4 && 
+            else if (result.tr.length === 4 && 
                 typeof result.tr[0] === 'number' && 
                 typeof result.tr[1] === 'number' && 
                 typeof result.tr[2] === 'number') {
@@ -400,23 +428,31 @@ function decompressData(data) {
         else if (typeof result.tr === 'boolean') {
             result.targetReached = result.tr;
         }
+        // ✅ NOVO: Se tr é string "tc"
+        else if (typeof result.tr === 'string' && result.tr === 'tc') {
+            result.timeRemaining = {
+                value: 0,
+                unit: 'completed',
+                status: 'completed',
+                display: 'Fermentação concluída'
+            };
+            result.targetReached = true;
+            result.fermentationCompleted = true;
+            console.log('✅ tr é "tc" (string) - Fermentação concluída');
+        }
         
         delete result.tr;
     }
     
     // ========== 3. Inferir targetReached se necessário ==========
-    // Se targetReached ainda não foi definido e temos timeRemaining
     if (result.targetReached === undefined) {
         if (result.timeRemaining) {
-            // Se tem timeRemaining, targetReached é true
             result.targetReached = true;
             console.log('✅ Inferido targetReached = true (tem timeRemaining)');
         } else if (result.status === 'running' || result.status === 'Executando') {
-            // Se status é running e não tem timeRemaining, targetReached é false
             result.targetReached = false;
             console.log('✅ Inferido targetReached = false (status running, sem timeRemaining)');
         } else if (result.status === 'waiting' || result.status === 'Aguardando') {
-            // Se status é waiting, targetReached é false
             result.targetReached = false;
             console.log('✅ Inferido targetReached = false (status waiting)');
         }
@@ -489,7 +525,8 @@ async function loadCompleteState() {
                 targetReached: completeState.state.targetReached,
                 timeRemaining: completeState.state.timeRemaining,
                 status: completeState.state.status,
-                config_name: completeState.state.config_name
+                config_name: completeState.state.config_name,
+                fermentationCompleted: completeState.state.fermentationCompleted
             });
         }
         
@@ -510,7 +547,6 @@ async function loadCompleteState() {
     }
 }
 
-// Adicione esta função para obter o texto do status
 function getStatusText(tr) {
     if (!tr || !tr.status) return '';
     
@@ -518,14 +554,13 @@ function getStatusText(tr) {
         'running': 'restantes',
         'waiting': 'aguardando temperatura',
         'waiting_gravity': 'aguardando gravidade',
-        'waiting_gravity': 'aguardando gravidade'
+        'completed': ''
     };
     
     return statusMap[tr.status] || tr.status;
 }
 
 async function autoRefreshData() {
-    
     try {
         await loadCompleteState();
     } catch (error) {
@@ -609,12 +644,10 @@ function updateRelayStatus() {
     let heaterActive = false;
     let waitingStatus = null;
     
-    // ✅ PRIORIDADE 1: heartbeat (tempo real, enviado a cada 30s)
     if (appState.heartbeat) {
         coolerActive = appState.heartbeat.cooler_active === 1 || appState.heartbeat.cooler_active === true;
         heaterActive = appState.heartbeat.heater_active === 1 || appState.heartbeat.heater_active === true;
         
-        // Verifica control_status no heartbeat
         if (appState.heartbeat.control_status) {
             const cs = appState.heartbeat.control_status;
             
@@ -626,13 +659,11 @@ function updateRelayStatus() {
             }
         }
     } 
-    // ✅ FALLBACK: controller_states (enviado a cada 5s, mais frequente)
     else if (appState.controller) {
         coolerActive = appState.controller.cooling === 1 || appState.controller.cooling === true;
         heaterActive = appState.controller.heating === 1 || appState.controller.heating === true;
     }
     
-    // ✅ NOVO: Busca control_status no espState (fermentation_states)
     if (!waitingStatus && appState.espState && appState.espState.control_status) {
         const cs = appState.espState.control_status;
         
@@ -644,7 +675,6 @@ function updateRelayStatus() {
         }
     }
     
-    // Atualiza visual dos relés
     if (coolerActive) {
         coolerStatusDiv.classList.remove('hidden');
     } else {
@@ -657,7 +687,6 @@ function updateRelayStatus() {
         heaterStatusDiv.classList.add('hidden');
     }
     
-    // Gerencia status de espera
     let existingWaitDiv = document.getElementById('waiting-status');
     
     if (waitingStatus) {
@@ -688,7 +717,8 @@ function renderUI() {
         temConfig: !!appState.config,
         temStages: appState.config?.stages?.length || 0,
         temEspState: !!appState.espState,
-        timeRemaining: appState.espState?.timeRemaining
+        timeRemaining: appState.espState?.timeRemaining,
+        fermentationCompleted: appState.espState?.fermentationCompleted
     });
     
     if (!appState.config || !appState.config.stages || appState.config.stages.length === 0) {
@@ -704,28 +734,45 @@ function renderUI() {
     if (stageElement) {
         const currentStage = (appState.config.current_stage_index || 0) + 1;
         const totalStages = appState.config.stages.length;
-        stageElement.textContent = `Etapa ${currentStage} de ${totalStages}`;
+        
+        // ✅ NOVO: Verifica se fermentação está concluída
+        if (appState.espState?.fermentationCompleted || 
+            appState.espState?.timeRemaining?.status === 'completed') {
+            stageElement.textContent = `Todas as ${totalStages} etapas concluídas`;
+        } else {
+            stageElement.textContent = `Etapa ${currentStage} de ${totalStages}`;
+        }
     }
     
-    // ========== BLOCO DO TIME-REMAINING (ATUALIZADO) ==========
+    // ========== BLOCO DO TIME-REMAINING ==========
     const timeElement = document.getElementById('time-remaining');
     if (timeElement && appState.espState) {
         const tr = appState.espState.timeRemaining;
         const targetReached = appState.espState.targetReached === true;
+        const fermentationCompleted = appState.espState.fermentationCompleted === true;
         
-        // Log para debug
         console.log('⏱️ Time Element Debug:', {
             hasTimeRemaining: !!tr,
             targetReached: targetReached,
+            fermentationCompleted: fermentationCompleted,
             timeRemaining: tr
         });
         
-        if (tr && targetReached) {
-            // Tempo restante válido (atingiu o alvo e está contando)
+        // ✅ NOVO: Fermentação concluída
+        if (fermentationCompleted || tr?.status === 'completed' || tr?.unit === 'completed') {
+            timeElement.innerHTML = `
+                <i class="fas fa-check-circle text-green-600"></i> 
+                <span class="text-green-600 font-semibold">
+                    Fermentação concluída
+                </span>
+            `;
+            timeElement.style.display = 'flex';
+            console.log('🎨 Time element: Fermentação concluída');
+        }
+        else if (tr && targetReached) {
             let icon = 'fas fa-hourglass-half';
             let statusClass = 'text-green-600';
             
-            // Mantém a lógica de status se ainda for relevante
             if (tr.status === 'waiting_gravity') {
                 icon = 'fas fa-hourglass-start';
                 statusClass = 'text-blue-600';
@@ -744,7 +791,6 @@ function renderUI() {
             
             console.log(`🎨 Time element (targetReached=true): ${timeDisplay} ${statusText}`);
         } else if (targetReached === false) {
-            // Quando NÃO atingiu o alvo
             timeElement.innerHTML = `
                 <i class="fas fa-hourglass-start text-yellow-600"></i>
                 <span class="text-yellow-600">
@@ -754,14 +800,11 @@ function renderUI() {
             timeElement.style.display = 'flex';
             console.log('🎨 Time element (targetReached=false): Aguardando temperatura alvo');
         } else {
-            // Casos especiais ou sem dados
             timeElement.style.display = 'none';
             console.log('⚠️ Time element escondido - estado incompleto');
         }
     }
-    // ========== FIM DO BLOCO ATUALIZADO ==========
     
-    // ESTAS LINHAS PERMANECEM EXATAMENTE COMO ESTAVAM
     checkESPStatus();
     renderInfoCards();
     renderChart();
@@ -798,9 +841,18 @@ function renderInfoCards() {
         }
     }
 
-    const gravityValue = parseFloat(appState.ispindel?.gravity) || 0;
-    const batteryInfo = appState.ispindel?.battery ? 
-        `Bateria: ${parseFloat(appState.ispindel.battery).toFixed(1)}V` : '';
+    // Dados do iSpindel - prioriza readings, fallback para ispindel_readings
+    const gravityValue = parseFloat(lastReading.gravity) || parseFloat(appState.ispindel?.gravity) || 0;
+    const spindelTemp = parseFloat(lastReading.spindel_temp) || parseFloat(appState.ispindel?.temperature) || 0;
+    const spindelBattery = parseFloat(lastReading.spindel_battery) || parseFloat(appState.ispindel?.battery) || 0;
+
+    let spindelSubtitle = '';
+    if (spindelTemp > 0 || spindelBattery > 0) {
+        const parts = [];
+        if (spindelTemp > 0) parts.push(`${spindelTemp.toFixed(1)}°C`);
+        if (spindelBattery > 0) parts.push(`${spindelBattery.toFixed(2)}V`);
+        spindelSubtitle = parts.join(' • ');
+    }
 
     const targetGravity = (currentStage.type === 'gravity' || currentStage.type === 'gravity_time') 
         ? parseFloat(currentStage.target_gravity) || 0 
@@ -822,14 +874,22 @@ function renderInfoCards() {
         gravityTargetSubtitle = 'Sem alvo definido';
     }
 
-    // ✅ CORREÇÃO: Usa apenas targetReached (sem verificar timeRemaining.status)
+    const fermentationCompleted = appState.espState?.fermentationCompleted === true ||
+                                   appState.espState?.timeRemaining?.status === 'completed';
     const isReallyRunning = appState.espState?.targetReached === true;
     
-    const countingStatus = isReallyRunning 
-        ? '✅ Contagem iniciada' 
-        : '⏳ Aguardando alvo';
+    let countingStatus, countingColor;
     
-    const countingColor = isReallyRunning ? '#10b981' : '#f59e0b';
+    if (fermentationCompleted) {
+        countingStatus = '✅ Fermentação concluída';
+        countingColor = '#10b981';
+    } else if (isReallyRunning) {
+        countingStatus = '✅ Contagem iniciada';
+        countingColor = '#10b981';
+    } else {
+        countingStatus = '⏳ Aguardando alvo';
+        countingColor = '#f59e0b';
+    }
 
     infoCards.innerHTML = `
         ${cardTemplate({
@@ -857,7 +917,7 @@ function renderInfoCards() {
             title: 'Gravidade Atual',
             icon: 'fas fa-tint',
             value: gravityValue > 0 ? gravityValue.toFixed(3) : '--',
-            subtitle: batteryInfo,
+            subtitle: spindelSubtitle,
             color: '#10b981'
         })}
         ${cardTemplate({
@@ -912,18 +972,20 @@ function renderStagesList() {
     if (!stagesList || !appState.config) return;
     
     const currentIndex = appState.config.current_stage_index;
+    const fermentationCompleted = appState.espState?.fermentationCompleted === true ||
+                                   appState.espState?.timeRemaining?.status === 'completed';
     
     stagesList.innerHTML = appState.config.stages
         .map((stage, index) => {
-            const isCurrent = index === currentIndex;
-            const isCompleted = stage.status === 'completed';
+            const isCurrent = !fermentationCompleted && index === currentIndex;
+            const isCompleted = fermentationCompleted || stage.status === 'completed' || index < currentIndex;
             
             return stageTemplate(stage, index, isCurrent, isCompleted);
         })
         .join('');
 }
 
-// ========== GRÁFICO COM VISUALIZAÇÃO DE COOLER/HEATER ==========
+// ========== GRÁFICO ==========
 function renderChart() {
     const canvas = document.getElementById('fermentation-chart');
     const ctx = canvas ? canvas.getContext('2d') : null;
@@ -951,7 +1013,6 @@ function renderChart() {
         return `${day}/${month} ${hour}:${minute}`;
     });
 
-    // ✅ Processa histórico de controller_states
     const coolerData = [];
     const heaterData = [];
     
@@ -959,18 +1020,16 @@ function renderChart() {
         appState.readings.forEach((reading, idx) => {
             const readingTime = new Date(reading.reading_timestamp).getTime();
             
-            // Busca estado do controlador mais próximo (dentro de 5 minutos)
             const controllerState = appState.controllerHistory.find(cs => {
                 const stateTime = new Date(cs.state_timestamp).getTime();
                 const diff = Math.abs(stateTime - readingTime);
-                return diff < 300000; // 5 minutos
+                return diff < 300000;
             });
             
             if (controllerState) {
                 const coolerActive = controllerState.cooling === 1 || controllerState.cooling === true;
                 const heaterActive = controllerState.heating === 1 || controllerState.heating === true;
                 
-                // Mostra temperatura da geladeira quando relé ativo
                 coolerData.push(coolerActive ? parseFloat(reading.temp_fridge) : null);
                 heaterData.push(heaterActive ? parseFloat(reading.temp_fridge) : null);
             } else {
@@ -978,8 +1037,6 @@ function renderChart() {
                 heaterData.push(null);
             }
         });
-    } else {
-        console.warn('⚠️ Nenhum histórico de controller disponível!');
     }
 
     const datasets = [
@@ -1024,7 +1081,6 @@ function renderChart() {
         }
     ];
 
-    // ✅ Adiciona datasets de cooler/heater
     if (coolerData.some(v => v !== null)) {
         datasets.push({
             label: '❄️ Cooler Ativo',
@@ -1037,8 +1093,6 @@ function renderChart() {
             tension: 0,
             order: 1
         });
-    } else {
-        console.warn('⚠️ Nenhum ponto ativo do Cooler');
     }
 
     if (heaterData.some(v => v !== null)) {
@@ -1053,8 +1107,6 @@ function renderChart() {
             tension: 0,
             order: 1
         });
-    } else {
-        console.warn('⚠️ Nenhum ponto ativo do Heater');
     }
 
     chart = new Chart(ctx, {
@@ -1077,9 +1129,7 @@ function renderChart() {
                     labels: {
                         usePointStyle: true,
                         padding: 15,
-                        font: {
-                            size: 11
-                        }
+                        font: { size: 11 }
                     }
                 },
                 tooltip: {
@@ -1091,9 +1141,7 @@ function renderChart() {
                                 return context.parsed.y !== null ? label : null;
                             }
                             
-                            if (label) {
-                                label += ': ';
-                            }
+                            if (label) label += ': ';
                             if (context.parsed.y !== null) {
                                 if (context.dataset.yAxisID === 'y1') {
                                     label += (context.parsed.y / 1000).toFixed(3);
@@ -1111,22 +1159,14 @@ function renderChart() {
                     type: 'linear',
                     display: true,
                     position: 'left',
-                    title: {
-                        display: true,
-                        text: 'Temperatura (°C)'
-                    }
+                    title: { display: true, text: 'Temperatura (°C)' }
                 },
                 y1: {
                     type: 'linear',
                     display: true,
                     position: 'right',
-                    title: {
-                        display: true,
-                        text: 'Gravidade (x1000)'
-                    },
-                    grid: {
-                        drawOnChartArea: false
-                    }
+                    title: { display: true, text: 'Gravidade (x1000)' },
+                    grid: { drawOnChartArea: false }
                 }
             }
         }
@@ -1202,13 +1242,10 @@ const stageTemplate = (stage, index, isCurrent, isCompleted) => {
 };
 
 function getStageDescription(stage) {
-    // Função auxiliar para formatar duração em dias para exibição amigável
     const formatDurationDisplay = (days) => {
         if (days >= 1) {
-            // Para 1 dia ou mais, mostra dias com 1 casa decimal se necessário
             return days % 1 === 0 ? `${days} dias` : `${days.toFixed(1)} dias`;
         } else {
-            // Para menos de 1 dia, converte para horas e minutos
             const totalHours = days * 24;
             const hours = Math.floor(totalHours);
             const minutes = Math.round((totalHours - hours) * 60);
@@ -1235,7 +1272,6 @@ function getStageDescription(stage) {
         case 'ramp':
             const direction = stage.direction === 'up' ? '▲' : '▼';
             
-            // Formatar tempo da rampa (que está em horas, não dias)
             let rampTimeDisplay;
             const rampDays = stage.ramp_time / 24;
             
@@ -1264,7 +1300,6 @@ function getStageDescription(stage) {
 
 // ========== INICIALIZAÇÃO ==========
 async function initAppAfterAuth() {
-    
     try {
         await loadCompleteState();
         
@@ -1283,7 +1318,6 @@ window.logout = logout;
 window.refreshData = loadCompleteState;
 
 document.addEventListener('DOMContentLoaded', async () => {
-    
     const emailInput = document.getElementById('login-email');
     const passwordInput = document.getElementById('login-password');
     

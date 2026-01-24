@@ -49,16 +49,23 @@ function decompressStateData(&$data) {
     // ========== MAPEAMENTOS COMPATÍVEIS COM ESP32 ==========
     $messageMap = [
         // Mensagens gerais
+        'fc'    => 'Fermentação concluída automaticamente - mantendo temperatura',
         'fconc' => 'Fermentação concluída automaticamente - mantendo temperatura',
-        'fcomp' => 'Fermentação concluída',
+        'tc'    => 'Fermentação concluída',
         'fpaus' => 'Fermentação pausada',
+        'ch'    => 'completed_holding_temp',
         'chold' => 'completed_holding_temp',
         
         // Estados do controle
+        'c'     => 'Resfriando',
         'cool'  => 'Resfriando',
+        'h'     => 'Aquecendo',
         'heat'  => 'Aquecendo',
+        'w'     => 'Aguardando',
         'wait'  => 'Aguardando',
+        'i'     => 'Ocioso',
         'idle'  => 'Ocioso',
+        'r'     => 'Executando',
         'run'   => 'Executando',
         'wg'    => 'waiting_gravity',
         
@@ -82,13 +89,17 @@ function decompressStateData(&$data) {
         'h' => 'hours',
         'd' => 'days',
         'm' => 'minutes',
-        'ind' => 'indefinite'
+        'ind' => 'indefinite',
+        'tc' => 'completed'
     ];
     
     $statusMap = [
+        'r'   => 'running',
         'run' => 'running',
+        'w'   => 'waiting',
         'wait' => 'waiting',
-        'wg' => 'waiting_gravity'
+        'wg' => 'waiting_gravity',
+        'tc' => 'completed'
     ];
     
     error_log("DEBUG decompressStateData INPUT: " . json_encode($data));
@@ -130,8 +141,20 @@ function decompressStateData(&$data) {
         if (is_array($data['tr'])) {
             $tr = $data['tr'];
             
+            // ✅ NOVO: Formato de fermentação concluída: ["tc"]
+            if (count($tr) == 1 && $tr[0] === 'tc') {
+                $data['timeRemaining'] = [
+                    'value' => 0,
+                    'unit' => 'completed',
+                    'status' => 'completed',
+                    'display' => 'Fermentação concluída'
+                ];
+                $data['targetReached'] = true;
+                $data['fermentationCompleted'] = true;
+                error_log("DEBUG: tr é ['tc'] - Fermentação concluída");
+            }
             // Formato novo: [dias, horas, minutos, status]
-            if (count($tr) == 4 && is_numeric($tr[0]) && is_numeric($tr[1]) && is_numeric($tr[2])) {
+            elseif (count($tr) == 4 && is_numeric($tr[0]) && is_numeric($tr[1]) && is_numeric($tr[2])) {
                 $data['timeRemaining'] = [
                     'days' => (int)$tr[0],
                     'hours' => (int)$tr[1],
@@ -162,6 +185,18 @@ function decompressStateData(&$data) {
             
             $data['targetReached'] = $data['tr'];
             unset($data['tr']);
+        } elseif (is_string($data['tr']) && $data['tr'] === 'tc') {
+            // ✅ NOVO: Formato string simples "tc"
+            $data['timeRemaining'] = [
+                'value' => 0,
+                'unit' => 'completed',
+                'status' => 'completed',
+                'display' => 'Fermentação concluída'
+            ];
+            $data['targetReached'] = true;
+            $data['fermentationCompleted'] = true;
+            unset($data['tr']);
+            error_log("DEBUG: tr é 'tc' (string) - Fermentação concluída");
         }
     }
     // Se não tem 'tr' mas tem 'targetReached' (caso direto do ESP)
@@ -999,6 +1034,10 @@ if ($path === 'fermentation-state' && $method === 'POST') {
     
     if (isset($input['status'])) {
         $debugInfo['status'] = $input['status'];
+    }
+    
+    if (isset($input['fermentationCompleted'])) {
+        $debugInfo['fermentationCompleted'] = $input['fermentationCompleted'] ? 'true' : 'false';
     }
     
     error_log("DEBUG ESPECÍFICO: " . json_encode($debugInfo));

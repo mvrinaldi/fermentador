@@ -2,7 +2,7 @@
 #pragma once
 // Códigos de mensagens compactadas
 #define MSG_FCONC    "fconc"  // Fermentação concluída automaticamente - mantendo temperatura
-#define MSG_FCOMP    "fcomp"  // Fermentação concluída
+#define MSG_TC       "tc"     // Time Completed (fermentação concluída - para timeRemaining)
 #define MSG_CHOLD    "chold"  // completed_holding_temp
 #define MSG_FPAUS    "fpaus"  // Fermentação pausada
 #define MSG_TARG     "targ"   // Temperatura alvo atingida

@@ -139,25 +139,28 @@ bool FermentadorHTTPClient::updateFermentationState(const char* configId, const 
 // =====================================================
 
 bool FermentadorHTTPClient::sendReading(const char* configId, float tempFridge, 
-                                        float tempFermenter, float tempTarget, float gravity) {
+                                        float tempFermenter, float tempTarget, float gravity,
+                                        float spindelTemp, float spindelBat) {
     JsonDocument doc;
     if (configId != nullptr && strlen(configId) > 0) {
-        doc["config_id"] = configId;
+        doc["cid"] = configId;
     }
-    doc["temp_fridge"] = tempFridge;
-    doc["temp_fermenter"] = tempFermenter;
-    doc["temp_target"] = tempTarget;
-    if (gravity > 0.01) doc["gravity"] = gravity;
+    doc["tf"] = tempFridge;
+    doc["tb"] = tempFermenter;
+    doc["tt"] = tempTarget;
+    
+    if (gravity > 0.01) {
+        doc["g"] = gravity;
+        if (spindelTemp > 0) doc["st"] = spindelTemp;
+        if (spindelBat > 0) doc["sb"] = spindelBat;
+    }
 
     String response;
-    // Otimizado: envia o endereço do doc [5]
     bool result = makeRequest("api/esp/reading.php", "POST", &doc, response);
     
     #if DEBUG_HTTP
     if (result) {
-        Serial.println(F("[HTTP] ✅ Leitura enviada"));
-    } else {
-        Serial.println(F("[HTTP] ❌ Falha ao enviar leitura"));
+        Serial.println(F("[HTTP] Leitura enviada"));
     }
     #endif
     

@@ -36,7 +36,8 @@ public:
 
     // ==================== LEITURAS ====================
     bool sendReading(const char* configId, float tempFridge, 
-                     float tempFermenter, float tempTarget, float gravity);
+                    float tempFermenter, float tempTarget, float gravity,
+                    float spindelTemp = 0, float spindelBat = 0);
     
     // ==================== CONTROLE ====================
     bool updateControlState(const char* configId, float setpoint, 

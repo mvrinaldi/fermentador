@@ -1,8 +1,8 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 // ✅ CONSOLIDADO: Envios MySQL centralizados, duplicações removidas
 
-#define FIRMWARE_VERSION "1.3.9"
-#define IMPLEMENTACAO "Consolidação: envios MySQL unificados, duplicações removidas"
+#define FIRMWARE_VERSION "1.4.0"
+#define IMPLEMENTACAO "Fermentação concluída no servidor"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 

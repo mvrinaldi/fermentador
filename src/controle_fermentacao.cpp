@@ -284,6 +284,13 @@ void concluirFermentacaoMantendoTemperatura() {
     Serial.println(F("[Fase] ✅ Fermentação concluída - mantendo temperatura atual"));
     #endif
     
+    // ✅ NOVO: Notifica servidor que a última etapa foi concluída (como nas demais)
+    if (httpClient.isConnected()) {
+        // Envia atualização de índice para totalStages (indica conclusão)
+        httpClient.updateStageIndex(fermentacaoState.activeId, fermentacaoState.totalStages);
+    }
+    
+    // Envia estado de conclusão
     JsonDocument doc;
     doc["s"] = MSG_CHOLD;
     time_t completionEpoch = getCurrentEpoch();
@@ -292,6 +299,10 @@ void concluirFermentacaoMantendoTemperatura() {
     }
     doc["msg"] = MSG_FCONC;
     doc["cid"] = fermentacaoState.activeId;
+    
+    // ✅ NOVO: Envia timeRemaining com código "tc" (time completed)
+    JsonArray trArray = doc["tr"].to<JsonArray>();
+    trArray.add(MSG_TC);  // "tc" = fermentação concluída
     
     if (httpClient.isConnected()) {
         httpClient.updateFermentationState(fermentacaoState.activeId, doc);

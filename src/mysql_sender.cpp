@@ -147,6 +147,8 @@ void compressStateData(JsonDocument &doc) {
                 compactTR.add(MSG_WAIT);
             } else if (strcmp(status, "waiting_gravity") == 0) {
                 compactTR.add(WG);
+            } else if (strcmp(status, MSG_TC) == 0) {
+                compactTR.add(MSG_TC);  // "tc" = time completed
             } else {
                 compactTR.add(status);
             }
@@ -174,6 +176,8 @@ void compressStateData(JsonDocument &doc) {
                 compactTR.add(UNIT_M);
             } else if (strcmp(unit, "indefinite") == 0) {
                 compactTR.add("ind");
+            } else if (strcmp(unit, "completed") == 0) {
+                compactTR.add(MSG_TC);  // "tc" para fermentação concluída
             } else {
                 compactTR.add(unit);
             }
@@ -184,6 +188,8 @@ void compressStateData(JsonDocument &doc) {
                 compactTR.add(MSG_WAIT);
             } else if (strcmp(status, "waiting_gravity") == 0) {
                 compactTR.add(WG);
+            } else if (strcmp(status, MSG_TC) == 0) {
+                compactTR.add(MSG_TC);  // "tc" = time completed
             } else {
                 compactTR.add(status);
             }
@@ -293,6 +299,12 @@ void enviarEstadoCompletoMySQL() {
     if (fermentacaoState.concluidaMantendoTemp) {
         doc["status"] = "completed_holding_temp";
         doc["message"] = "Fermentação concluída - mantendo temperatura";
+        
+        // ✅ NOVO: Envia timeRemaining com "tc" para indicar fermentação concluída
+        JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+        timeRemaining["value"] = 0;
+        timeRemaining["unit"] = "completed";
+        timeRemaining["status"] = MSG_TC;  // "tc" = time completed
     } else {
         doc["status"] = "running";
     }
@@ -430,13 +442,13 @@ void enviarEstadoCompletoMySQL() {
     #endif
     
     // ✅ Log de estado de controle (antes era no main.cpp a cada 30s)
-    LOG_ESTADO("[HTTP] ✅ Estado completo enviado (30s interval)");
-    LOG_ESTADO("[DEBUG] State: " + String(detailedStatus.stateName) + 
+    LOG_MAIN("[HTTP] ✅ Estado completo enviado (30s interval)");
+    LOG_MAIN("[DEBUG] State: " + String(detailedStatus.stateName) + 
         ", Cooler: " + (detailedStatus.coolerActive ? "ON" : "OFF") +
         ", Heater: " + (detailedStatus.heaterActive ? "ON" : "OFF"));
     
     if (detailedStatus.isWaiting && detailedStatus.waitReason) {
-        LOG_ESTADO("[DEBUG] Wait: " + String(detailedStatus.waitReason) + 
+        LOG_MAIN("[DEBUG] Wait: " + String(detailedStatus.waitReason) + 
                  " (" + String(detailedStatus.waitTimeRemaining) + "s)");
     }
 }
@@ -463,14 +475,23 @@ void enviarLeiturasSensoresMySQL() {
         return;
     }
 
-    float gravity = mySpindel.gravity;
-
-    httpClient.sendReading(fermentacaoState.activeId, tempFridge, 
-                           tempFermenter, fermentacaoState.tempTarget, gravity);
+    httpClient.sendReading(
+        fermentacaoState.activeId, 
+        tempFridge, 
+        tempFermenter, 
+        fermentacaoState.tempTarget, 
+        mySpindel.gravity,
+        mySpindel.temperature,
+        mySpindel.battery
+    );
     
     #if DEBUG_ENVIODADOS
-    Serial.printf("[Envio] 📊 Leituras: F=%.1f°C, G=%.1f°C, Grav=%.3f\n", 
-                 tempFermenter, tempFridge, gravity);
+    char logBuf[128];
+    snprintf(logBuf, sizeof(logBuf), 
+        "[Envio] F=%.1f G=%.1f Grav=%.3f ST=%.1f SB=%.2f", 
+        tempFermenter, tempFridge, mySpindel.gravity, 
+        mySpindel.temperature, mySpindel.battery);
+    Serial.println(logBuf);
     #endif
 }
 
