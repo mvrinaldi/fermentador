@@ -1,5 +1,6 @@
 // controle_fermentacao.cpp - Reescrito para integração BrewPi
 // ✅ CORRIGIDO: Lógica de timeRemaining - só envia quando targetReached = true
+// ✅ REFATORADO: Lógica de envio MySQL movida para mysql_sender.cpp
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
@@ -18,6 +19,7 @@
 #include "gerenciador_sensores.h"
 #include "debug_config.h"
 #include "message_codes.h"
+#include "mysql_sender.h"  // ✅ NOVO: Módulo de envio MySQL
 
 extern FermentadorHTTPClient httpClient;
 
@@ -274,185 +276,6 @@ void resetPIDState() {
 }
 
 // =====================================================
-// Função para comprimir dados de estado
-// =====================================================
-
-void compressStateData(JsonDocument &doc) {
-    #if DEBUG_ENVIODADOS
-    Serial.println(F("[Compress] 🗜️ Iniciando compressão de dados..."));
-    #endif
-    
-    // ========== 1. Comprimir mensagens ==========
-    if (doc["message"].is<const char*>()) {
-        const char* msg = doc["message"].as<const char*>();
-        if (strstr(msg, "Fermentação concluída automaticamente")) {
-            doc["msg"] = MSG_FCONC;
-            doc.remove("message");
-        }
-    }
-    
-    // ========== 2. Comprimir status de controle ==========
-    if (doc["control_status"].is<JsonObject>()) {
-        JsonObject cs = doc["control_status"].as<JsonObject>();
-        if (cs["state"].is<const char*>()) {
-            const char* state = cs["state"].as<const char*>();
-            
-            if (strstr(state, "Cooling")) {
-                cs["s"] = MSG_COOL;
-                cs.remove("state");
-            } else if (strstr(state, "Heating")) {
-                cs["s"] = MSG_HEAT;
-                cs.remove("state");
-            } else if (strstr(state, "Waiting")) {
-                cs["s"] = MSG_WAIT;
-                cs.remove("state");
-            } else if (strstr(state, "Idle")) {
-                cs["s"] = MSG_IDLE;
-                cs.remove("state");
-            }
-        }
-    }
-    
-    // ========== 3. Comprimir tipo de etapa ==========
-    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
-        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-        switch(stage.type) {
-            case STAGE_TEMPERATURE: doc["st"] = ST_TEMP; break;
-            case STAGE_RAMP: doc["st"] = ST_RAMP; break;
-            case STAGE_GRAVITY: doc["st"] = ST_GRAV; break;
-            case STAGE_GRAVITY_TIME: doc["st"] = ST_GRAVT; break;
-        }
-    }
-    
-    // ========== 4. Comprimir timeRemaining PRIMEIRO ==========
-    bool trCreatedFromTimeRemaining = false;
-    
-    if (!doc["timeRemaining"].isNull() && doc["timeRemaining"].is<JsonObject>()) {
-        JsonObject tr = doc["timeRemaining"].as<JsonObject>();
-        const char* unit = tr["unit"] | "";
-        const char* status = tr["status"] | "";
-        
-        // Formato detailed: [dias, horas, minutos, status]
-        if (strcmp(unit, "detailed") == 0) {
-            int days = tr["days"] | 0;
-            int hours = tr["hours"] | 0;
-            int minutes = tr["minutes"] | 0;
-            
-            JsonArray compactTR = doc["tr"].to<JsonArray>();
-            compactTR.add(days);
-            compactTR.add(hours);
-            compactTR.add(minutes);
-            
-            if (strcmp(status, "running") == 0) {
-                compactTR.add(MSG_RUN);
-            } else if (strcmp(status, "waiting") == 0) {
-                compactTR.add(MSG_WAIT);
-            } else if (strcmp(status, "waiting_gravity") == 0) {
-                compactTR.add(WG);
-            } else {
-                compactTR.add(status);
-            }
-            
-            trCreatedFromTimeRemaining = true;
-            doc.remove("timeRemaining");
-            
-            #if DEBUG_ENVIODADOS
-            Serial.printf("[Compress] tr (detailed): [%d, %d, %d, %s]\n", 
-                         days, hours, minutes, status);
-            #endif
-        } 
-        // Formato antigo: [valor, unidade, status]
-        else if (tr["value"].is<float>() || tr["value"].is<int>()) {
-            float value = tr["value"].is<float>() ? tr["value"].as<float>() : (float)tr["value"].as<int>();
-            
-            JsonArray compactTR = doc["tr"].to<JsonArray>();
-            compactTR.add(value);
-            
-            if (strcmp(unit, "hours") == 0) {
-                compactTR.add(UNIT_H);
-            } else if (strcmp(unit, "days") == 0) {
-                compactTR.add(UNIT_D);
-            } else if (strcmp(unit, "minutes") == 0) {
-                compactTR.add(UNIT_M);
-            } else if (strcmp(unit, "indefinite") == 0) {
-                compactTR.add("ind");
-            } else {
-                compactTR.add(unit);
-            }
-            
-            if (strcmp(status, "running") == 0) {
-                compactTR.add(MSG_RUN);
-            } else if (strcmp(status, "waiting") == 0) {
-                compactTR.add(MSG_WAIT);
-            } else if (strcmp(status, "waiting_gravity") == 0) {
-                compactTR.add(WG);
-            } else {
-                compactTR.add(status);
-            }
-            
-            trCreatedFromTimeRemaining = true;
-            doc.remove("timeRemaining");
-            
-            #if DEBUG_ENVIODADOS
-            Serial.printf("[Compress] tr (legacy): [%.1f, %s, %s]\n", 
-                         value, unit, status);
-            #endif
-        }
-    }
-    
-    // ========== 5. Mapeamento de campos ==========
-    struct FieldMapping {
-        const char* longName;
-        const char* shortName;
-    };
-    
-    FieldMapping fieldMappings[] = {
-        {"config_name", "cn"},
-        {"currentStageIndex", "csi"},
-        {"totalStages", "ts"},
-        {"stageTargetTemp", "stt"},
-        {"pidTargetTemp", "ptt"},
-        {"currentTargetTemp", "ctt"},
-        {"cooling", "c"},
-        {"heating", "h"},
-        {"status", "s"},
-        {"config_id", "cid"},
-        {"completedAt", "ca"},
-        {"timestamp", "tms"},
-        {"uptime_ms", "um"},
-        {"rampProgress", "rp"}
-    };
-    
-    for (const auto& mapping : fieldMappings) {
-        if (!doc[mapping.longName].isNull()) {
-            doc[mapping.shortName] = doc[mapping.longName];
-            doc.remove(mapping.longName);
-        }
-    }
-    
-    // ========== 6. Tratar targetReached ==========
-    if (!doc["targetReached"].isNull()) {
-        if (trCreatedFromTimeRemaining) {
-            doc.remove("targetReached");
-            #if DEBUG_ENVIODADOS
-            Serial.println(F("[Compress] targetReached removido (já temos tr array)"));
-            #endif
-        } else {
-            doc["tr"] = doc["targetReached"].as<bool>();
-            doc.remove("targetReached");
-            #if DEBUG_ENVIODADOS
-            Serial.printf("[Compress] tr (fallback bool): %s\n", 
-                         doc["tr"].as<bool>() ? "true" : "false");
-            #endif
-        }
-    }
-    
-    #if DEBUG_ENVIODADOS
-    Serial.println(F("[Compress] ✅ Compressão concluída"));
-    #endif
-}
-
-// =====================================================
 // CONTROLE DE ESTADO
 // =====================================================
 
@@ -598,12 +421,7 @@ void getTargetFermentacao() {
     
     bool requestOk = httpClient.getActiveFermentation(doc);
     
-    {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "[MySQL] getActiveFermentation() retornou: %s", 
-                 requestOk ? "TRUE" : "FALSE");
-        LOG_FERMENTATION(buf);
-    }
+    LOG_FERMENTATION("[MySQL] getActiveFermentation() retornou: " + String(requestOk ? "TRUE" : "FALSE"));
     
     if (!requestOk) {
         LOG_FERMENTATION(F("[MySQL] ❌ Falha na requisição HTTP"));
@@ -627,45 +445,24 @@ void getTargetFermentacao() {
     }
     
     const char* id = idString.c_str();
-    const char* name = doc["name"] | "";
-    const char* status = doc["status"] | "";
     int serverStageIndex = doc["currentStageIndex"] | 0;
     
-    {
-        char buf[96];
-        LOG_FERMENTATION(F("\n[MySQL] 🔍 VALORES EXTRAÍDOS:"));
-        snprintf(buf, sizeof(buf), "  active: %s", active ? "TRUE" : "FALSE");
-        LOG_FERMENTATION(buf);
-        snprintf(buf, sizeof(buf), "  id: '%s' (length: %d)", id, strlen(id));
-        LOG_FERMENTATION(buf);
-        snprintf(buf, sizeof(buf), "  name: '%s'", name);
-        LOG_FERMENTATION(buf);
-        snprintf(buf, sizeof(buf), "  status: '%s'", status);
-        LOG_FERMENTATION(buf);
-        snprintf(buf, sizeof(buf), "  serverStageIndex: %d", serverStageIndex);
-        LOG_FERMENTATION(buf);
-        
-        LOG_FERMENTATION(F("\n[MySQL] 🔍 ESTADO ATUAL DO SISTEMA:"));
-        snprintf(buf, sizeof(buf), "  fermentacaoState.active: %s", 
-                 fermentacaoState.active ? "TRUE" : "FALSE");
-        LOG_FERMENTATION(buf);
-        snprintf(buf, sizeof(buf), "  fermentacaoState.activeId: '%s'", 
-                 fermentacaoState.activeId);
-        LOG_FERMENTATION(buf);
-        snprintf(buf, sizeof(buf), "  fermentacaoState.currentStageIndex: %d",
-                 fermentacaoState.currentStageIndex);
-        LOG_FERMENTATION(buf);
-        snprintf(buf, sizeof(buf), "  lastActiveId: '%s'", lastActiveId);
-        LOG_FERMENTATION(buf);
-    }
+    LOG_FERMENTATION(F("\n[MySQL] 🔍 VALORES EXTRAÍDOS:"));
+    LOG_FERMENTATION("  active: " + String(active ? "TRUE" : "FALSE"));
+    LOG_FERMENTATION("  id: '" + String(id) + "' (length: " + String(strlen(id)) + ")");
+    LOG_FERMENTATION("  serverStageIndex: " + String(serverStageIndex));
+    
+    LOG_FERMENTATION(F("\n[MySQL] 🔍 ESTADO ATUAL DO SISTEMA:"));
+    LOG_FERMENTATION("  fermentacaoState.active: " + String(fermentacaoState.active ? "TRUE" : "FALSE"));
+    LOG_FERMENTATION("  fermentacaoState.activeId: '" + String(fermentacaoState.activeId) + "'");
+    LOG_FERMENTATION("  fermentacaoState.currentStageIndex: " + String(fermentacaoState.currentStageIndex));
+    LOG_FERMENTATION("  lastActiveId: '" + String(lastActiveId) + "'");
 
     if (!isValidString(id)) {
         LOG_FERMENTATION(F("[MySQL] ⚠️ ID é inválido ou vazio!"));
         id = "";
     } else {
-        char buf[48];
-        snprintf(buf, sizeof(buf), "[MySQL] ✅ ID válido: '%s'", id);
-        LOG_FERMENTATION(buf);
+        LOG_FERMENTATION("[MySQL] ✅ ID válido: '" + String(id) + "'");
     }
 
     LOG_FERMENTATION(F("\n[MySQL] 🔍 DECISÃO:"));
@@ -677,15 +474,10 @@ void getTargetFermentacao() {
             // =====================================================
             // NOVA FERMENTAÇÃO DETECTADA
             // =====================================================
-            {
-                char buf[96];
-                LOG_FERMENTATION(F("  → ID DIFERENTE do último conhecido"));
-                snprintf(buf, sizeof(buf), "     Anterior: '%s'", lastActiveId);
-                LOG_FERMENTATION(buf);
-                snprintf(buf, sizeof(buf), "     Novo:     '%s'", id);
-                LOG_FERMENTATION(buf);
-                LOG_FERMENTATION(F("  → INICIANDO NOVA FERMENTAÇÃO"));
-            }
+            LOG_FERMENTATION(F("  → ID DIFERENTE do último conhecido"));
+            LOG_FERMENTATION("     Anterior: '" + String(lastActiveId) + "'");
+            LOG_FERMENTATION("     Novo:     '" + String(id) + "'");
+            LOG_FERMENTATION(F("  → INICIANDO NOVA FERMENTAÇÃO"));
 
             brewPiControl.reset();
             LOG_FERMENTATION(F("[BrewPi] ✅ Sistema resetado para nova fermentação"));
@@ -696,11 +488,7 @@ void getTargetFermentacao() {
             fermentacaoState.currentStageIndex = serverStageIndex;
             safe_strcpy(lastActiveId, id, sizeof(lastActiveId));
 
-            {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "[MySQL] 🔧 Carregando configuração ID: %s", id);
-                LOG_FERMENTATION(buf);
-            }
+            LOG_FERMENTATION("[MySQL] 🔧 Carregando configuração ID: " + String(id));
 
             loadConfigParameters(id);
 
@@ -710,16 +498,10 @@ void getTargetFermentacao() {
 
             saveStateToEEPROM();
             
-            {
-                char buf[64];
-                LOG_FERMENTATION(F("[MySQL] ✅ CONFIGURAÇÃO CONCLUÍDA"));
-                snprintf(buf, sizeof(buf), "  activeId: '%s'", fermentacaoState.activeId);
-                LOG_FERMENTATION(buf);
-                snprintf(buf, sizeof(buf), "  tempTarget: %.1f°C", fermentacaoState.tempTarget);
-                LOG_FERMENTATION(buf);
-                snprintf(buf, sizeof(buf), "  totalStages: %d", fermentacaoState.totalStages);
-                LOG_FERMENTATION(buf);
-            }
+            LOG_FERMENTATION(F("[MySQL] ✅ CONFIGURAÇÃO CONCLUÍDA"));
+            LOG_FERMENTATION("  activeId: '" + String(fermentacaoState.activeId) + "'");
+            LOG_FERMENTATION("  tempTarget: " + String(fermentacaoState.tempTarget, 1) + "°C");
+            LOG_FERMENTATION("  totalStages: " + String(fermentacaoState.totalStages));
         } else {
             // =====================================================
             // MESMA FERMENTAÇÃO - VERIFICAR SINCRONIZAÇÃO DE ETAPA
@@ -728,14 +510,9 @@ void getTargetFermentacao() {
             LOG_FERMENTATION(F("  → Fermentação já configurada"));
             
             if (serverStageIndex != fermentacaoState.currentStageIndex) {
-                {
-                    char buf[64];
-                    LOG_FERMENTATION(F("  → Diferença de etapa detectada!"));
-                    snprintf(buf, sizeof(buf), "     Local:    %d", fermentacaoState.currentStageIndex);
-                    LOG_FERMENTATION(buf);
-                    snprintf(buf, sizeof(buf), "     Servidor: %d", serverStageIndex);
-                    LOG_FERMENTATION(buf);
-                }
+                LOG_FERMENTATION(F("  → Diferença de etapa detectada!"));
+                LOG_FERMENTATION("     Local:    " + String(fermentacaoState.currentStageIndex));
+                LOG_FERMENTATION("     Servidor: " + String(serverStageIndex));
                 
                 // ✅ CORREÇÃO: Só aceita índice do servidor se for MAIOR que o local
                 if (serverStageIndex > fermentacaoState.currentStageIndex) {
@@ -749,11 +526,7 @@ void getTargetFermentacao() {
                     brewPiControl.reset();
                     saveStateToEEPROM();
                     
-                    {
-                        char buf[56];
-                        snprintf(buf, sizeof(buf), "  → Etapa atualizada para %d", serverStageIndex);
-                        LOG_FERMENTATION(buf);
-                    }
+                    LOG_FERMENTATION("  → Etapa atualizada para " + String(serverStageIndex));
                 } else {
                     // Local está à frente do servidor - servidor desatualizado
                     LOG_FERMENTATION(F("  → Local à frente - servidor desatualizado"));
@@ -767,10 +540,7 @@ void getTargetFermentacao() {
                         );
                         
                         if (updated) {
-                            char buf[64];
-                            snprintf(buf, sizeof(buf), "  → Servidor sincronizado para etapa %d", 
-                                     fermentacaoState.currentStageIndex);
-                            LOG_FERMENTATION(buf);
+                            LOG_FERMENTATION("  → Servidor sincronizado para etapa " + String(fermentacaoState.currentStageIndex));
                         } else {
                             LOG_FERMENTATION(F("  → Falha ao sincronizar servidor (tentará novamente)"));
                         }
@@ -827,7 +597,7 @@ void loadConfigParameters(const char* configId) {
         return;
     }
 
-    LOG_FERMENTATION("[MySQL] 🔧 Buscando config: " + configId);
+    LOG_FERMENTATION("[MySQL] 🔧 Buscando config: " + String(configId));
     
     JsonDocument doc;
     
@@ -913,6 +683,19 @@ void loadConfigParameters(const char* configId) {
 void verificarTrocaDeFase() {
     if (!fermentacaoState.active) return;
     
+    // ✅ CORREÇÃO: Se fermentação concluída mantendo temp, não processar mais etapas
+    if (fermentacaoState.concluidaMantendoTemp) {
+        #if DEBUG_FERMENTATION
+        static unsigned long lastHoldDebug = 0;
+        if (millis() - lastHoldDebug > 300000) {  // Log a cada 5 minutos
+            lastHoldDebug = millis();
+            Serial.printf("[Fase] 🔒 Mantendo temperatura %.1f°C (aguardando comando manual)\n",
+                         fermentacaoState.tempTarget);
+        }
+        #endif
+        return;  // Não faz mais nada - apenas mantém temperatura
+    }
+    
     #if DEBUG_FERMENTATION
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > 30000) {
@@ -924,8 +707,10 @@ void verificarTrocaDeFase() {
                      stageStarted ? "TRUE " : "FALSE");
         Serial.printf("║ PID atual:        %6.1f°C          ║\n", 
                      fermentacaoState.tempTarget);
-        Serial.printf("║ Alvo etapa:       %6.1f°C          ║\n", 
-                     fermentacaoState.stages[fermentacaoState.currentStageIndex].targetTemp);
+        if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
+            Serial.printf("║ Alvo etapa:       %6.1f°C          ║\n", 
+                         fermentacaoState.stages[fermentacaoState.currentStageIndex].targetTemp);
+        }
         Serial.println(F("╚════════════════════════════════════╝\n"));
     }
     #endif
@@ -938,18 +723,16 @@ void verificarTrocaDeFase() {
         return;
     }
     
+    // ✅ CORREÇÃO: Se índice >= total, significa que todas as etapas foram concluídas
+    // NÃO deve resetar para 0, deve concluir mantendo temperatura
     if (fermentacaoState.currentStageIndex >= fermentacaoState.totalStages) {
         #if DEBUG_FERMENTATION
-        Serial.println(F("[Fase] ⚠️  Índice inválido"));
+        Serial.println(F("[Fase] ℹ️  Todas as etapas concluídas"));
         #endif
         
-        if (fermentacaoState.totalStages > 0) {
-            fermentacaoState.currentStageIndex = 0;
-            #if DEBUG_FERMENTATION
-            Serial.println(F("[Fase] 🔄 Recomeçando da etapa 0"));
-            #endif
-        } else {
-            deactivateCurrentFermentation();
+        // Se ainda não está no modo de manutenção, ativa
+        if (!fermentacaoState.concluidaMantendoTemp) {
+            concluirFermentacaoMantendoTemperatura();
         }
         return;
     }
@@ -1191,42 +974,37 @@ void verificarTrocaDeFase() {
     // =====================================================
     // TRANSIÇÃO PARA PRÓXIMA ETAPA
     // =====================================================
-if (stageCompleted) {
-    
-    int nextStageIndex = fermentacaoState.currentStageIndex + 1;
-    
-    if (nextStageIndex < fermentacaoState.totalStages) {
-        // Notifica servidor
-        if (httpClient.isConnected()) {
-            httpClient.updateStageIndex(fermentacaoState.activeId, nextStageIndex);
-        }
+    if (stageCompleted) {
         
-        // Atualiza estado local
-        fermentacaoState.currentStageIndex = nextStageIndex;
-        stageStarted = false;
-        fermentacaoState.stageStartEpoch = 0;
-        fermentacaoState.targetReachedSent = false;
+        int nextStageIndex = fermentacaoState.currentStageIndex + 1;
         
-        brewPiControl.reset();
-        saveStateToEEPROM();
+        if (nextStageIndex < fermentacaoState.totalStages) {
+            // Notifica servidor
+            if (httpClient.isConnected()) {
+                httpClient.updateStageIndex(fermentacaoState.activeId, nextStageIndex);
+            }
+            
+            // Atualiza estado local
+            fermentacaoState.currentStageIndex = nextStageIndex;
+            stageStarted = false;
+            fermentacaoState.stageStartEpoch = 0;
+            fermentacaoState.targetReachedSent = false;
+            
+            brewPiControl.reset();
+            saveStateToEEPROM();
 
-        {
-            char buf[48];
-            snprintf(buf, sizeof(buf), "[Fase] ↪️ Indo para etapa %d/%d", 
-                     fermentacaoState.currentStageIndex + 1,
-                     fermentacaoState.totalStages);
-            LOG_FERMENTATION(buf);
+            LOG_FERMENTATION("[Fase] ↪️ Indo para etapa " + String(fermentacaoState.currentStageIndex + 1) + "/" + String(fermentacaoState.totalStages));
+        } else {
+            // ✅ CORREÇÃO: Última etapa concluída - NÃO incrementa o índice
+            // Mantém o índice na última etapa válida para referência
+            // O estado concluidaMantendoTemp controla o comportamento
+            
+            LOG_FERMENTATION(F("[Fase] 🎉 TODAS AS ETAPAS CONCLUÍDAS!"));
+            LOG_FERMENTATION(F("[Fase] 🔒 Mantendo última temperatura até comando manual"));
+            
+            concluirFermentacaoMantendoTemperatura();
         }
-    } else {
-        // Última etapa concluída
-        fermentacaoState.currentStageIndex = nextStageIndex;
-        
-        LOG_FERMENTATION(F("[Fase] 🎉 TODAS AS ETAPAS CONCLUÍDAS!"));
-        
-        concluirFermentacaoMantendoTemperatura();
     }
-}
-
 }
 
 void verificarTargetAtingido() {
@@ -1251,277 +1029,13 @@ void verificarTargetAtingido() {
 }
 
 // =====================================================
-// ✅ ENVIAR ESTADO COMPLETO - CORRIGIDO!
+// ✅ WRAPPERS PARA FUNÇÕES DE ENVIO (mantém compatibilidade)
 // =====================================================
+
 void enviarEstadoCompleto() {
-    // ========== VERIFICAÇÕES INICIAIS ==========
-    if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
-        #if DEBUG_ENVIODADOS
-        Serial.println(F("[Envio] ❌ Não enviando: fermentação não ativa"));
-        #endif
-        return;
-    }
-    
-    if (!isValidString(fermentacaoState.activeId)) {
-        #if DEBUG_ENVIODADOS
-        Serial.println(F("[Envio] ❌ ID inválido"));
-        #endif
-        return;
-    }
-    
-    // ========== CONTROLE DE TEMPO ENTRE ENVIOS ==========
-    static unsigned long lastStateSend = 0;
-    unsigned long now = millis();
-    
-    if (now - lastStateSend < 30000) {
-        #if DEBUG_ENVIODADOS
-        Serial.printf("[Envio] ⏳ Aguardando próximo envio: %lu ms restantes\n", 
-                     30000 - (now - lastStateSend));
-        #endif
-        return;
-    }
-    
-    lastStateSend = now;
-    
-    // ========== PREPARAÇÃO DOS DADOS ==========
-    JsonDocument doc;
-    
-    // 1. Dados essenciais
-    doc["config_id"] = fermentacaoState.activeId;
-    doc["config_name"] = fermentacaoState.configName;
-    doc["currentStageIndex"] = fermentacaoState.currentStageIndex;
-    doc["totalStages"] = fermentacaoState.totalStages;
-    
-    if (fermentacaoState.concluidaMantendoTemp) {
-        doc["status"] = "completed_holding_temp";
-        doc["message"] = "Fermentação concluída - mantendo temperatura";
-    } else {
-        doc["status"] = "running";
-    }
-    
-    // 2. Temperaturas
-    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
-        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-        doc["stageTargetTemp"] = stage.targetTemp;
-    }
-    
-    doc["pidTargetTemp"] = fermentacaoState.tempTarget;
-    doc["currentTargetTemp"] = fermentacaoState.tempTarget;
-    doc["targetReached"] = fermentacaoState.targetReachedSent;
-    
-    // ========== 3. CÁLCULO DO TEMPO RESTANTE ==========
-    // ✅ CORREÇÃO CRÍTICA: Só envia timeRemaining se targetReachedSent = true
-    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages && 
-        fermentacaoState.targetReachedSent) {
-        
-        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-        JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
-        
-        // Caso 1: stageStartEpoch válido - calcular tempo restante real
-        if (fermentacaoState.stageStartEpoch > 0) {
-            time_t nowEpoch = getCurrentEpoch();
-            
-            if (nowEpoch > 0) {
-                float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0f;
-                float totalH = 0.0f;
-                
-                switch (stage.type) {
-                    case STAGE_TEMPERATURE:
-                        totalH = stage.holdTimeHours;
-                        break;
-                    case STAGE_RAMP:
-                        totalH = (float)stage.rampTimeHours;
-                        break;
-                    case STAGE_GRAVITY_TIME:
-                        totalH = stage.maxTimeHours;
-                        break;
-                    default:
-                        totalH = 0.0f;
-                }
-                
-                float remainingH = totalH - elapsedH;
-                if (remainingH < 0) remainingH = 0;
-                
-                formatTimeRemaining(timeRemaining, remainingH, "running");
-            }
-        }
-        // Caso 2: stageStartEpoch == 0 (início imediato após target atingido)
-        else {
-            switch (stage.type) {
-                case STAGE_TEMPERATURE:
-                    formatTimeRemaining(timeRemaining, stage.holdTimeHours, "running");
-                    break;
-                case STAGE_RAMP:
-                    formatTimeRemaining(timeRemaining, (float)stage.rampTimeHours, "running");
-                    break;
-                case STAGE_GRAVITY_TIME:
-                    formatTimeRemaining(timeRemaining, stage.maxTimeHours, "running");
-                    break;
-                case STAGE_GRAVITY:
-                    timeRemaining["value"] = 0;
-                    timeRemaining["unit"] = "indefinite";
-                    timeRemaining["status"] = "waiting_gravity";
-                    break;
-            }
-        }
-        
-        #if DEBUG_ENVIODADOS
-        Serial.printf("[Envio] ✅ timeRemaining enviado (targetReached=true): ");
-        serializeJson(timeRemaining, Serial);
-        Serial.println();
-        #endif
-    } else {
-        // ✅ QUANDO targetReachedSent = false, NÃO envia timeRemaining
-        #if DEBUG_ENVIODADOS
-        if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
-            Serial.printf("[Envio] ⏳ Aguardando alvo (targetReachedSent=%s)\n",
-                         fermentacaoState.targetReachedSent ? "true" : "false");
-        }
-        #endif
-    }
-    
-    // 4. Status do BrewPi
-    DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus();
-    
-    doc["cooling"] = detailedStatus.coolerActive;
-    doc["heating"] = detailedStatus.heaterActive;
-    
-    JsonObject controlStatus = doc["control_status"].to<JsonObject>();
-    controlStatus["state"] = detailedStatus.stateName;
-    controlStatus["is_waiting"] = detailedStatus.isWaiting;
-    
-    if (detailedStatus.isWaiting) {
-        controlStatus["wait_reason"] = detailedStatus.waitReason;
-        
-        if (detailedStatus.waitTimeRemaining > 0) {
-            controlStatus["wait_seconds"] = detailedStatus.waitTimeRemaining;
-            
-            char waitDisplay[16];
-            if (detailedStatus.waitTimeRemaining < 60) {
-                snprintf(waitDisplay, sizeof(waitDisplay), "%us", 
-                        (unsigned int)detailedStatus.waitTimeRemaining);
-            } else if (detailedStatus.waitTimeRemaining < 3600) {
-                snprintf(waitDisplay, sizeof(waitDisplay), "%um", 
-                        (unsigned int)(detailedStatus.waitTimeRemaining / 60));
-            } else {
-                snprintf(waitDisplay, sizeof(waitDisplay), "%uh", 
-                        (unsigned int)(detailedStatus.waitTimeRemaining / 3600));
-            }
-            controlStatus["wait_display"] = waitDisplay;
-        }
-    }
-    
-    if (detailedStatus.peakDetection) {
-        controlStatus["peak_detection"] = true;
-        controlStatus["estimated_peak"] = detailedStatus.estimatedPeak;
-    }
-    
-    // 5. Timestamp e uptime
-    time_t nowEpoch = getCurrentEpoch();
-    if (nowEpoch > 0) {
-        doc["timestamp"] = nowEpoch;
-    }
-    
-    doc["uptime_ms"] = millis();
-    
-    // 6. stageType para debug
-    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
-        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-        const char* stageTypeStr = "";
-        switch(stage.type) {
-            case STAGE_TEMPERATURE: stageTypeStr = "t"; break;
-            case STAGE_RAMP: stageTypeStr = "r"; break;
-            case STAGE_GRAVITY: stageTypeStr = "g"; break;
-            case STAGE_GRAVITY_TIME: stageTypeStr = "gt"; break;
-        }
-        doc["stageType"] = stageTypeStr;
-    }
-    
-    // ========== COMPRESSÃO DOS DADOS ==========
-    compressStateData(doc);
-    
-    // ========== ENVIO ==========
-    #if DEBUG_ENVIODADOS
-    bool sendSuccess = httpClient.updateFermentationState(fermentacaoState.activeId, doc);
-    Serial.printf("[Envio] Resultado: %s\n", sendSuccess ? "✅ Sucesso" : "❌ Falha");
-    
-    Serial.println(F("\n[DEBUG] DADOS ENVIADOS:"));
-    serializeJsonPretty(doc, Serial);
-    Serial.println();
-    Serial.printf("[DEBUG] Heap livre: %d bytes\n", ESP.getFreeHeap());
-    #else
-    httpClient.updateFermentationState(fermentacaoState.activeId, doc);
-    #endif
+    enviarEstadoCompletoMySQL();
 }
 
-// =====================================================
-// ✅ FUNÇÕES AUXILIARES PARA timeRemaining - SIMPLIFICADAS
-// =====================================================
-
-void formatTimeRemaining(JsonObject& timeRemaining, float remainingH, const char* status) {
-    if (remainingH >= 24.0) {
-        int totalMinutes = roundf(remainingH * 60.0);
-        int days = totalMinutes / (24 * 60);
-        int hours = (totalMinutes % (24 * 60)) / 60;
-        int minutes = totalMinutes % 60;
-        
-        timeRemaining["days"] = days;
-        timeRemaining["hours"] = hours;
-        timeRemaining["minutes"] = minutes;
-        timeRemaining["total_hours"] = remainingH;
-        timeRemaining["unit"] = "detailed";
-        
-        #if DEBUG_ENVIODADOS
-        Serial.printf("[DEBUG] Tempo detalhado: %dd %dh %dm\n", days, hours, minutes);
-        #endif
-    } else if (remainingH >= 1.0) {
-        int totalMinutes = roundf(remainingH * 60.0);
-        int hours = totalMinutes / 60;
-        int minutes = totalMinutes % 60;
-        
-        if (hours > 0) {
-            timeRemaining["hours"] = hours;
-            timeRemaining["minutes"] = minutes;
-            timeRemaining["total_hours"] = remainingH;
-            timeRemaining["unit"] = "detailed";
-        } else {
-            timeRemaining["value"] = totalMinutes;
-            timeRemaining["unit"] = "minutes";
-        }
-        
-        #if DEBUG_ENVIODADOS
-        Serial.printf("[DEBUG] Tempo detalhado: %dh %dm\n", hours, minutes);
-        #endif
-    } else {
-        int minutes = roundf(remainingH * 60.0);
-        timeRemaining["value"] = minutes;
-        timeRemaining["unit"] = "minutes";
-    }
-}
-
-
-// =====================================================
-// ENVIAR LEITURAS DOS SENSORES
-// =====================================================
 void enviarLeiturasSensores() {
-    if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
-        return;
-    }
-
-    static unsigned long lastSensorReading = 0;
-    unsigned long now = millis();
-    if (now - lastSensorReading < READINGS_UPDATE_INTERVAL) {
-        return;
-    }
-    lastSensorReading = now;
-
-    float tempFermenter, tempFridge;
-    if (!readConfiguredTemperatures(tempFermenter, tempFridge)) {
-        return;
-    }
-
-    float gravity = mySpindel.gravity;
-
-    httpClient.sendReading(fermentacaoState.activeId, tempFridge, 
-                           tempFermenter, fermentacaoState.tempTarget, gravity);
+    enviarLeiturasSensoresMySQL();
 }

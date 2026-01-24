@@ -1,7 +1,8 @@
 // main.cpp - Fermentador com MySQL e BrewPi
+// ✅ CONSOLIDADO: Envios MySQL centralizados, duplicações removidas
 
-#define FIRMWARE_VERSION "1.3.7"
-#define IMPLEMENTACAO "Correção descompasso aguardando proteção versus cooler/heater ON"
+#define FIRMWARE_VERSION "1.3.9"
+#define IMPLEMENTACAO "Consolidação: envios MySQL unificados, duplicações removidas"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -27,6 +28,7 @@
 #include "globais.h"
 #include "gerenciador_sensores.h"
 #include "http_client.h"
+#include "mysql_sender.h"
 #include "ispindel_struct.h"
 #include "ispindel_handler.h"
 #include "ispindel_envio.h"
@@ -43,9 +45,6 @@
 #include "telnet.h"
 #include "debug_config.h"
 
-// Declaração da função do controle_fermentacao.cpp
-DetailedControlStatus getDetailedStatus();
-
 ESP8266WebServer server(80);
 
 // === Variáveis de Controle de Tempo === //
@@ -53,15 +52,10 @@ unsigned long lastTemperatureControl = 0;
 unsigned long lastPhaseCheck = 0;
 
 // ==================== TIMERS ====================
-unsigned long lastTempUpdate = 0;
 unsigned long lastSensorCheck = 0;
-unsigned long lastControlUpdate = 0;
 
-const unsigned long TEMP_UPDATE_INTERVAL = 60000;     // 60 segundos
 const unsigned long SENSOR_CHECK_INTERVAL = 30000;   // 30 segundos
 
-unsigned long lastHeartbeat = 0;
-const unsigned long HEARTBEAT_INTERVAL = 30000; // 30 segundos
 int activeConfigId = 0; // Atualizado quando inicia fermentação
 
 // Formata a data de Jan 18 2026 para 18/01/2026
@@ -83,18 +77,17 @@ String getBuildDateFormatted() {
     
     int monthIndex = (int)((monthPtr - monthNames) / 3) + 1;
     
-    // Buffer maior para evitar qualquer warning
-    char buffer[32];  // Mais que suficiente para qualquer int
-    
+    char buffer[32];
     snprintf(buffer, sizeof(buffer), "%02d/%02d/%04d", day, monthIndex, year);
     
     return String(buffer);
 }
+
 // Formata a hora de 15:30:21 para 15:30
 String getBuildTimeShort() {
-    char timeBuf[6]; // Espaço para "HH:MM\0"
-    memcpy(timeBuf, __TIME__, 5); // Copia apenas os 5 primeiros caracteres (HH:MM)
-    timeBuf[5] = '\0'; // Adiciona o terminador nulo manualmente
+    char timeBuf[6];
+    memcpy(timeBuf, __TIME__, 5);
+    timeBuf[5] = '\0';
     return String(timeBuf);
 }
 
@@ -107,7 +100,6 @@ void setupNTP() {
     Serial.println(F("[NTP] Configurando sincronização de tempo (UTC)..."));
     #endif
 
-    // ✅ UTC PURO (sem deslocamento de timezone)
     configTime(0, 0, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
 
     #if DEBUG_MAIN
@@ -133,23 +125,12 @@ void setupNTP() {
     if (now > 1577836800L) {
         #if DEBUG_MAIN
         Serial.println(F("[NTP] ✅ Sincronizado com sucesso! (UTC)"));
-        #endif
-
+        
         struct tm timeinfo;
         gmtime_r(&now, &timeinfo);
         char buffer[64];
         strftime(buffer, sizeof(buffer), "%d/%m/%Y %H:%M:%S UTC", &timeinfo);
-
-        #if DEBUG_MAIN
         Serial.printf("[NTP] Data/Hora UTC: %s\n", buffer);
-        #endif
-
-        // Mostra também horário local de Brasília (informativo)
-        localtime_r(&now, &timeinfo);
-        strftime(buffer, sizeof(buffer), "%d/%m/%Y %H:%M:%S", &timeinfo);
-
-        #if DEBUG_MAIN
-        Serial.printf("[NTP] Horário Brasília: %s (UTC-3)\n", buffer);
         #endif
     } else {
         #if DEBUG_MAIN
@@ -178,23 +159,6 @@ void checkNTPSync() {
     }
 }
 
-void sendHeartbeat() {
-    if (!WiFi.isConnected() || activeConfigId <= 0) return;
-
-    // Apenas coleta os dados e delega o envio para o cliente especializado
-    DetailedControlStatus status = brewPiControl.getDetailedStatus();
-    temperature beerTemp = brewPiControl.getBeerTemp();
-    temperature fridgeTemp = brewPiControl.getFridgeTemp();
-
-    #if DEBUG_HEARTBEAT
-    if (httpClient.sendHeartbeat(activeConfigId, status, beerTemp, fridgeTemp)) {
-        Serial.println(F("[HEARTBEAT] ✅ Enviado via v7 otimizado"));
-    }
-    #else
-    httpClient.sendHeartbeat(activeConfigId, status, beerTemp, fridgeTemp);
-    #endif
-}
-
 // ==================== CARREGA CONFIG ATIVA ====================
 
 void loadActiveConfiguration() {
@@ -221,7 +185,6 @@ void setup() {
     delay(1000);
     
     #if DEBUG_MAIN
-    // ✅ INFORMAÇÕES DO FIRMWARE
     Serial.println("\n\n");
     Serial.println("╔════════════════════════════════════════════════╗");
     Serial.println("║                                                ║");
@@ -236,7 +199,6 @@ void setup() {
     Serial.printf("🆓 Espaço OTA: %u bytes\n", ESP.getFreeSketchSpace());
     Serial.println("");
     
-    // VERIFICAR MOTIVO DO ÚLTIMO RESET
     rst_info *resetInfo = ESP.getResetInfoPtr();
     
     Serial.print("🔄 Último reset: ");
@@ -273,10 +235,8 @@ void setup() {
 
     // ==================== INICIALIZAÇÃO DO SISTEMA ====================
     
-    // EEPROM
     EEPROM.begin(512);
     
-    // Relés
     pinMode(cooler.pino, OUTPUT);
     pinMode(heater.pino, OUTPUT);
     cooler.atualizar();
@@ -288,8 +248,6 @@ void setup() {
                   cooler.pino, cooler.invertido ? "invertido" : "normal");
     Serial.printf("   • Heater: Pino %d (%s)\n",
                   heater.pino, heater.invertido ? "invertido" : "normal");
-    
-    // ✅ 1. INICIALIZAÇÃO DOS SENSORES DALLAS
     Serial.println("\n🌡️  Inicializando sensores de temperatura...");
     #endif
 
@@ -297,22 +255,14 @@ void setup() {
     
     #if DEBUG_MAIN
     Serial.println("✅ Sensores Dallas inicializados");
-    
-    // ✅ 2. INICIALIZAR BREWPI COM SENSORES
     Serial.println("\n🍺 Inicializando sistema BrewPi...");
     #endif
 
-    // Obter referência aos sensores Dallas
     DallasTemperature* dallasPtr = getSensorsPointer();
     
     if (dallasPtr) {
-        // Configurar sensores no BrewPi (índices 0 e 1)
         brewPiControl.setSensors(dallasPtr, 1, 0);
-        
-        // Configurar atuadores (relés)
         brewPiControl.setActuators(&cooler, &heater);
-        
-        // Inicializar controle
         brewPiControl.init();
         
         #if DEBUG_MAIN
@@ -321,18 +271,15 @@ void setup() {
     } else {
         #if DEBUG_MAIN
         Serial.println("❌ ERRO: Não foi possível obter ponteiro dos sensores Dallas!");
-        Serial.println("⚠️  Sistema continuará mas controle pode não funcionar corretamente");
         #endif
     }
     
-    // ✅ 3. CARREGAR ESTADO SALVO (ANTES de qualquer conexão de rede)
     #if DEBUG_MAIN
     Serial.println("\n💾 Carregando estado salvo...");
     #endif
 
     setupActiveListener();
     
-    // ✅ 4. CONFIGURAÇÃO DE REDE
     #if DEBUG_MAIN
     Serial.println("\n📡 Conectando à rede...");
     #endif
@@ -340,20 +287,17 @@ void setup() {
     networkSetup(server);
     
     #if DEBUG_TELNET
-        telnetSetup();
-        Serial.println("📡 Telnet debug ativo");
+    telnetSetup();
+    Serial.println("📡 Telnet debug ativo");
     #endif
-
 
     if (WiFi.status() == WL_CONNECTED) {
         #if DEBUG_MAIN
         Serial.println("\n⏰ Configurando NTP...");
         #endif
-        
         setupNTP();
     }
     
-    // ✅ 5. SINCRONIZAR COM SERVIDOR (se online)
     if (isHTTPOnline()) {
         #if DEBUG_MAIN
         Serial.println(F("\n📡 Enviando sensores detectados ao servidor..."));
@@ -395,7 +339,6 @@ void setup() {
 
                 setupSensorManager();
                 
-                // Reconfigura BrewPi com novos sensores
                 DallasTemperature* dallasPtr = getSensorsPointer();
                 if (dallasPtr) {
                     brewPiControl.setSensors(dallasPtr, 1, 0);
@@ -410,7 +353,6 @@ void setup() {
             #endif
         }
         
-        // ✅ 6. VERIFICAR FERMENTAÇÃO ATIVA NO SERVIDOR
         if (fermentacaoState.active) {
             #if DEBUG_MAIN
             Serial.println(F("\n🔍 Verificando se fermentação ainda está ativa no servidor..."));
@@ -420,7 +362,6 @@ void setup() {
     }
     
     #if DEBUG_MAIN
-    // ✅ 7. LISTAR SENSORES CONFIGURADOS
     auto lista = listSensors();
     if (lista.empty()) {
         Serial.println(F("\n⚠️ Nenhum sensor configurado"));
@@ -433,10 +374,7 @@ void setup() {
     }
     #endif
 
-    // ✅ 8. WEBSERVER / ISPINDEL / OTA
     setupSpindelRoutes(server);
-    
-    // ✅ ENDPOINTS WEB
     
     // Endpoint: /version
     server.on("/version", HTTP_GET, []() {
@@ -585,7 +523,6 @@ void setup() {
     Serial.println("🌐 Servidor Web ativo");
     #endif
     
-    // ✅ 9. VALIDAÇÃO FINAL DO ESTADO
     if (!fermentacaoState.active) {
         if (state.targetTemp != DEFAULT_TEMPERATURE) {
             #if DEBUG_MAIN
@@ -605,7 +542,6 @@ void setup() {
     }
    
     #if DEBUG_MAIN
-    // ✅ 10. LOG INICIAL
     Serial.println("\n==============================================");
     Serial.println("✅ Sistema BrewPi pronto");
     Serial.printf("Fermentação ativa: %s\n",
@@ -669,9 +605,6 @@ void loop() {
     
     // Network Manager
     networkLoop();
-    
-    // Heartbeat
-    sendHeartbeat();
 
     // WebServer
     server.handleClient();
@@ -681,60 +614,37 @@ void loop() {
     // NTP
     checkNTPSync();
     
-// ═══════════════════════════════════════════════════════════════
-// ✅ CONTROLE DE TEMPERATURA BREWPI (NÚCLEO DO SISTEMA)
-// ═══════════════════════════════════════════════════════════════
-// Executa a cada 5 segundos (conforme BrewPi original)
-if (now - lastTemperatureControl >= 5000) {
-    lastTemperatureControl = now;
-    
-    // Se há fermentação ativa, executa controle BrewPi
-    if (fermentacaoState.active) {
-        brewPiControl.update();
+    // ═══════════════════════════════════════════════════════════════
+    // ✅ CONTROLE DE TEMPERATURA BREWPI (NÚCLEO DO SISTEMA)
+    // Executa a cada 5 segundos (conforme BrewPi original)
+    // ═══════════════════════════════════════════════════════════════
+    if (now - lastTemperatureControl >= 5000) {
+        lastTemperatureControl = now;
         
-        // Atualiza estado global para compatibilidade
-        state.currentTemp = tempToFloat(brewPiControl.getBeerTemp());
-        state.targetTemp = fermentacaoState.tempTarget;
-    }
-    
-    // Envia dados ao MySQL (se online)
-    if (isHTTPOnline()) {
-        verificarTargetAtingido();
+        // Se há fermentação ativa, executa controle BrewPi
+        if (fermentacaoState.active) {
+            brewPiControl.update();
+            
+            // Atualiza estado global para compatibilidade
+            state.currentTemp = tempToFloat(brewPiControl.getBeerTemp());
+            state.targetTemp = fermentacaoState.tempTarget;
+        }
         
-        // ✅ Estado completo (controla 30s internamente)
-        enviarEstadoCompleto();
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// ✅ ENVIO DO ESTADO DE CONTROLE A CADA 30 SEGUNDOS
-// ═══════════════════════════════════════════════════════════════
-if (now - lastControlUpdate >= 30000) {
-    lastControlUpdate = now;
-    
-    if (isHTTPOnline() && fermentacaoState.active) {
-        DetailedControlStatus status = brewPiControl.getDetailedStatus();
-               
-        // Envia estado dos relés
-        httpClient.updateControlState(
-            fermentacaoState.activeId,
-            state.targetTemp,
-            status.coolerActive,
-            status.heaterActive
-        );
-        
-        LOG_MAIN("[HTTP] ✅ Estado de controle enviado (30s interval)");
-        LOG_MAIN("[DEBUG] State: " + String(status.stateName) + 
-            ", Cooler: " + (status.coolerActive ? "ON" : "OFF") +
-            ", Heater: " + (status.heaterActive ? "ON" : "OFF"));
-        
-        // Se estiver em estado de espera, log também o motivo
-        if (status.isWaiting && status.waitReason) {
-            LOG_MAIN("[DEBUG] Wait: " + String(status.waitReason) + 
-                     " (" + String(status.waitTimeRemaining) + "s)");
+        // ✅ ENVIO UNIFICADO: Estado completo + controle (30s interno)
+        // Substitui: enviarEstadoCompleto + sendControlStateMySQL + parte do heartbeat
+        if (isHTTPOnline()) {
+            verificarTargetAtingido();
+            enviarEstadoCompletoMySQL();
         }
     }
-}
+
+    // ═══════════════════════════════════════════════════════════════
+    // ✅ HEARTBEAT SIMPLIFICADO (saúde do sistema)
+    // Apenas uptime e free_heap - dados de controle já em enviarEstadoCompleto
+    // ═══════════════════════════════════════════════════════════════
+    if (isHTTPOnline() && activeConfigId > 0) {
+        sendHeartbeatMySQL(activeConfigId);  // Controle de tempo interno (30s)
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // VERIFICAÇÃO DE FERMENTAÇÃO ATIVA
@@ -764,27 +674,11 @@ if (now - lastControlUpdate >= 30000) {
     }
     
     // ═══════════════════════════════════════════════════════════════
-    // ATUALIZAÇÃO DE TEMPERATURAS (PÁGINA SENSORES)
+    // ✅ ENVIO DE LEITURAS PARA HISTÓRICO (60s)
+    // Substitui: enviarLeiturasSensores + sendCurrentTemperaturesMySQL
     // ═══════════════════════════════════════════════════════════════
-    if (now - lastTempUpdate >= TEMP_UPDATE_INTERVAL) {
-        float tempFermenter, tempFridge;
-        
-        enviarLeiturasSensores();
-        if (readConfiguredTemperatures(tempFermenter, tempFridge)) {
-            if (isHTTPOnline()) {
-                if (!httpClient.updateCurrentTemperatures(tempFermenter, tempFridge)) {
-                    static unsigned long lastWarning = 0;
-                    if (now - lastWarning >= 300000) {
-                        #if DEBUG_MAIN
-                        Serial.println(F("⚠️ Erro ao atualizar temperaturas"));
-                        #endif
-                        lastWarning = now;
-                    }
-                }
-            }
-        }
-        
-        lastTempUpdate = now;
+    if (isHTTPOnline()) {
+        enviarLeiturasSensoresMySQL();  // Controle de tempo interno (60s)
     }
     
     // ═══════════════════════════════════════════════════════════════
@@ -811,7 +705,6 @@ if (now - lastControlUpdate >= 30000) {
                         saveSensorToEEPROM(SENSOR2_NOME, fridgeAddr);
                     }
                     
-                    // Reconfigura BrewPi
                     setupSensorManager();
                     DallasTemperature* dallasPtr = getSensorsPointer();
                     if (dallasPtr) {

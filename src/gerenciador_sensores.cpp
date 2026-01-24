@@ -1,10 +1,12 @@
 //gerenciador_sensores.cpp
+// ✅ REFATORADO: Envio MySQL movido para mysql_sender.cpp
 #include "gerenciador_sensores.h"
 #include "eeprom_layout.h"
 #include <ArduinoJson.h>
 #include "network_manager.h"
 #include "http_client.h"
-#include "debug_config.h"  // Adicionado para ter DEBUG_SENSORES
+#include "mysql_sender.h"  // ✅ NOVO: Módulo de envio MySQL
+#include "debug_config.h"
 
 // Cliente HTTP
 extern FermentadorHTTPClient httpClient;
@@ -168,15 +170,8 @@ void scanAndSendSensors() {
     #endif
     #endif
     
-    #if DEBUG_SENSORES
-    bool success = httpClient.sendSensorsData(doc);
-
-    if (success) {
-        Serial.println(F("✅ Sensores enviados"));
-    } else {
-        Serial.println(F("❌ Erro ao enviar sensores"));
-    }
-    #endif
+    // ✅ REFATORADO: Usa mysql_sender para envio
+    sendSensorsDataMySQL(doc);
 }
 
 // =================================================

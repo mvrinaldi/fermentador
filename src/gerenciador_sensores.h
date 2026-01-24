@@ -1,4 +1,5 @@
 //gerenciador_sensores.h
+// ✅ REFATORADO: Envio MySQL movido para mysql_sender.cpp
 #pragma once
 
 #include <Arduino.h>

@@ -1,9 +1,10 @@
 // controle_fermentacao.h
+// ✅ CONSOLIDADO: Envios MySQL centralizados em mysql_sender.cpp
 #pragma once
 
 #include <Arduino.h>
 #include "estruturas.h"
-#include "definitions.h"  // Importa todas as definições
+#include "definitions.h"
 
 // Variáveis globais
 extern unsigned long lastActiveCheck;
@@ -11,10 +12,6 @@ extern char lastActiveId[64];
 extern bool isFirstCheck;
 extern unsigned long stageStartTime;
 extern bool stageStarted;
-
-// Funções auxiliares para timeRemaining
-void formatTimeRemaining(JsonObject& timeRemaining, float remainingH, const char* status);
-void setInitialTimeRemaining(JsonObject& timeRemaining, FermentationStage& stage, bool targetReached);
 
 // FUNÇÕES DE TEMPO
 time_t getCurrentEpoch();
@@ -44,7 +41,9 @@ void loadConfigParameters(const char* configId);
 void verificarTrocaDeFase();
 void verificarTargetAtingido();
 
-// FUNÇÕES DE ENVIO DE DADOS
+// FUNÇÕES DE ENVIO DE DADOS (wrappers para mysql_sender)
 void enviarEstadoCompleto();
 void enviarLeiturasSensores();
-bool readConfiguredTemperatures(float &tempFermenter, float &tempFridge); // Declaração da função (já implementada em gerenciador_sensores.cpp)
+
+// Declaração da função de leitura de temperatura (implementada em gerenciador_sensores.cpp)
+bool readConfiguredTemperatures(float &tempFermenter, float &tempFridge);

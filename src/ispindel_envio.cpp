@@ -1,3 +1,5 @@
+// ispindel_envio.cpp - Processamento e envio de dados iSpindel
+// ✅ REFATORADO: Envio MySQL movido para mysql_sender.cpp
 #define ENABLE_DATABASE
 
 #include <Arduino.h>
@@ -7,8 +9,8 @@
 #include <ArduinoJson.h>
 
 #include "ispindel_envio.h"
+#include "mysql_sender.h"  // ✅ NOVO: Módulo de envio MySQL
 #include "http_client.h"
-#include "network_manager.h"
 #include "network_manager.h"
 #include "globais.h"
 #include "controle_fermentacao.h"
@@ -81,72 +83,55 @@ void processCloudUpdatesiSpindel() {
         http.end();
     }
 
-// ==================================================
-// ENVIO 2: MYSQL (banco de dados)
-// ==================================================
-bool mysqlOk = false;
+    // ==================================================
+    // ENVIO 2: MYSQL (banco de dados)
+    // ✅ REFATORADO: Usa mysql_sender
+    // ==================================================
+    bool mysqlOk = false;
 
-bool shouldSendToMySQL = isHTTPOnline() && 
-                        fermentacaoState.active && 
-                        isValidString(fermentacaoState.activeId);
+    bool shouldSendToMySQL = isHTTPOnline() && 
+                            fermentacaoState.active && 
+                            isValidString(fermentacaoState.activeId);
 
-if (shouldSendToMySQL) {
-    JsonDocument mysqlDoc;
-    mysqlDoc["name"] = mySpindel.name;
-    mysqlDoc["temperature"] = mySpindel.temperature;
-    mysqlDoc["gravity"] = mySpindel.gravity;
-    mysqlDoc["battery"] = mySpindel.battery;
-    mysqlDoc["angle"] = mySpindel.angle;
-    mysqlDoc["config_id"] = fermentacaoState.activeId;
-    
-    String mysqlPayload;
-    serializeJson(mysqlDoc, mysqlPayload);
-    
-    HTTPClient httpMySQL;
-    WiFiClient wifiClient;
-    
-    String mysqlUrl = String(SERVER_URL) + "ispindel/data";
-    
-    if (httpMySQL.begin(wifiClient, mysqlUrl)) {
-        httpMySQL.setTimeout(HTTP_TIMEOUT);
-        httpMySQL.addHeader("Content-Type", "application/json");
+    if (shouldSendToMySQL) {
+        JsonDocument mysqlDoc;
+        mysqlDoc["name"] = mySpindel.name;
+        mysqlDoc["temperature"] = mySpindel.temperature;
+        mysqlDoc["gravity"] = mySpindel.gravity;
+        mysqlDoc["battery"] = mySpindel.battery;
+        mysqlDoc["angle"] = mySpindel.angle;
+        mysqlDoc["config_id"] = fermentacaoState.activeId;
         
-        int code = httpMySQL.POST(mysqlPayload);
+        // ✅ REFATORADO: Usa mysql_sender para envio
+        mysqlOk = sendISpindelDataMySQL(mysqlDoc);
         
-        if (code == HTTP_CODE_OK || code == HTTP_CODE_CREATED) {
-            mysqlOk = true;
+        if (mysqlOk) {
             Serial.println(F("[MySQL] ✅ Dados iSpindel enviados (vinculados ao config_id)"));
-        } else {
-            Serial.printf("[MySQL] ❌ Erro %d\n", code);
         }
-        
-        httpMySQL.end();
+    } else if (!fermentacaoState.active && isHTTPOnline()) {
+        // Opcional: log para indicar por que não está enviando
+        static unsigned long lastLog = 0;
+        if (millis() - lastLog > 600000) { // A cada 10 minutos
+            Serial.println(F("[MySQL] ⏸️  Sem fermentação ativa - dados não enviados"));
+            lastLog = millis();
+        }
     }
-} else if (!fermentacaoState.active && isHTTPOnline()) {
-    // Opcional: log para indicar por que não está enviando
-    static unsigned long lastLog = 0;
-    if (millis() - lastLog > 600000) { // A cada 10 minutos
-        Serial.println(F("[MySQL] ⏸️  Sem fermentação ativa - dados não enviados"));
-        lastLog = millis();
-    }
-} else if (!isHTTPOnline()) {
-    // Já tratado no Brewfather/outros logs
-}
+    // Se !isHTTPOnline(), já tratado no Brewfather/outros logs
 
-sucesso = brewfatherOk || mysqlOk;
+    sucesso = brewfatherOk || mysqlOk;
 
-if (sucesso) {
-    mySpindel.newDataAvailable = false;
-    tentativasAtuais = 0;
-    Serial.println(F("[iSpindel] ✅ Envio concluído"));
-} else {
-    tentativasAtuais++;
-    últimaTentativaMillis = millis();
-
-    if (tentativasAtuais >= MAX_TENTATIVAS) {
-        Serial.println(F("[iSpindel] ❌ Máximo de tentativas atingido"));
-        mySpindel.newDataAvailable = false; 
+    if (sucesso) {
+        mySpindel.newDataAvailable = false;
         tentativasAtuais = 0;
+        Serial.println(F("[iSpindel] ✅ Envio concluído"));
+    } else {
+        tentativasAtuais++;
+        últimaTentativaMillis = millis();
+
+        if (tentativasAtuais >= MAX_TENTATIVAS) {
+            Serial.println(F("[iSpindel] ❌ Máximo de tentativas atingido"));
+            mySpindel.newDataAvailable = false; 
+            tentativasAtuais = 0;
+        }
     }
-}
 }
