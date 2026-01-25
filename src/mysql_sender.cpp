@@ -319,58 +319,74 @@ void enviarEstadoCompletoMySQL() {
     doc["currentTargetTemp"] = fermentacaoState.tempTarget;
     doc["targetReached"] = fermentacaoState.targetReachedSent;
     
-    // ========== 3. CÁLCULO DO TEMPO RESTANTE ==========
-    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages && 
-        fermentacaoState.targetReachedSent) {
-        
-        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-        JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
-        
+// ========== 3. CÁLCULO DO TEMPO RESTANTE ==========
+if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages && 
+    fermentacaoState.targetReachedSent) {
+    
+    FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
+    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+    
+    // ✅ NOVO: Etapas de gravidade - sempre "aguardando gravidade alvo"
+    if (stage.type == STAGE_GRAVITY) {
+        // Gravidade pura: tempo indefinido, aguardando gravidade
+        timeRemaining["value"] = 0;
+        timeRemaining["unit"] = "indefinite";
+        timeRemaining["status"] = "waiting_gravity";
+    }
+    else if (stage.type == STAGE_GRAVITY_TIME) {
+        // Gravidade com timeout: mostra tempo restante mas indica que aguarda gravidade
         if (fermentacaoState.stageStartEpoch > 0) {
             time_t nowEpoch = getCurrentEpoch();
             
             if (nowEpoch > 0) {
                 float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0f;
-                float totalH = 0.0f;
-                
-                switch (stage.type) {
-                    case STAGE_TEMPERATURE:
-                        totalH = stage.holdTimeHours;
-                        break;
-                    case STAGE_RAMP:
-                        totalH = (float)stage.rampTimeHours;
-                        break;
-                    case STAGE_GRAVITY_TIME:
-                        totalH = stage.maxTimeHours;
-                        break;
-                    default:
-                        totalH = 0.0f;
-                }
-                
-                float remainingH = totalH - elapsedH;
+                float remainingH = stage.maxTimeHours - elapsedH;
                 if (remainingH < 0) remainingH = 0;
                 
-                formatTimeRemaining(timeRemaining, remainingH, "running");
+                formatTimeRemaining(timeRemaining, remainingH, "waiting_gravity");
             }
         } else {
-            switch (stage.type) {
-                case STAGE_TEMPERATURE:
-                    formatTimeRemaining(timeRemaining, stage.holdTimeHours, "running");
-                    break;
-                case STAGE_RAMP:
-                    formatTimeRemaining(timeRemaining, (float)stage.rampTimeHours, "running");
-                    break;
-                case STAGE_GRAVITY_TIME:
-                    formatTimeRemaining(timeRemaining, stage.maxTimeHours, "running");
-                    break;
-                case STAGE_GRAVITY:
-                    timeRemaining["value"] = 0;
-                    timeRemaining["unit"] = "indefinite";
-                    timeRemaining["status"] = "waiting_gravity";
-                    break;
-            }
+            formatTimeRemaining(timeRemaining, stage.maxTimeHours, "waiting_gravity");
         }
     }
+    else if (fermentacaoState.stageStartEpoch > 0) {
+        // Etapas normais (temperature, ramp)
+        time_t nowEpoch = getCurrentEpoch();
+        
+        if (nowEpoch > 0) {
+            float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0f;
+            float totalH = 0.0f;
+            
+            switch (stage.type) {
+                case STAGE_TEMPERATURE:
+                    totalH = stage.holdTimeHours;
+                    break;
+                case STAGE_RAMP:
+                    totalH = (float)stage.rampTimeHours;
+                    break;
+                default:
+                    totalH = 0.0f;
+            }
+            
+            float remainingH = totalH - elapsedH;
+            if (remainingH < 0) remainingH = 0;
+            
+            formatTimeRemaining(timeRemaining, remainingH, "running");
+        }
+    } else {
+        // Sem stageStartEpoch ainda
+        switch (stage.type) {
+            case STAGE_TEMPERATURE:
+                formatTimeRemaining(timeRemaining, stage.holdTimeHours, "running");
+                break;
+            case STAGE_RAMP:
+                formatTimeRemaining(timeRemaining, (float)stage.rampTimeHours, "running");
+                break;
+            default:
+                break;
+        }
+    }
+}
     
     // ========== 4. STATUS DO BREWPI (CONTROLE) ==========
     DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus();

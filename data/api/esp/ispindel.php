@@ -39,20 +39,6 @@ try {
                DB_USER, DB_PASS);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
-    // Cria tabela se não existir
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS ispindel_readings (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(50),
-            temperature FLOAT,
-            gravity FLOAT,
-            battery FLOAT,
-            angle FLOAT,
-            reading_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            INDEX idx_timestamp (reading_timestamp)
-        )
-    ");
-    
     // Insere leitura
     $stmt = $pdo->prepare("
         INSERT INTO ispindel_readings (name, temperature, gravity, battery, angle)

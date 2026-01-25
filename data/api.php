@@ -46,17 +46,13 @@ function decompressStateData(&$data) {
         return;
     }
     
-    // ========== MAPEAMENTOS COMPATÍVEIS COM ESP32 ==========
     $messageMap = [
-        // Mensagens gerais
         'fc'    => 'Fermentação concluída automaticamente - mantendo temperatura',
         'fconc' => 'Fermentação concluída automaticamente - mantendo temperatura',
         'tc'    => 'Fermentação concluída',
         'fpaus' => 'Fermentação pausada',
         'ch'    => 'completed_holding_temp',
         'chold' => 'completed_holding_temp',
-        
-        // Estados do controle
         'c'     => 'Resfriando',
         'cool'  => 'Resfriando',
         'h'     => 'Aquecendo',
@@ -68,8 +64,6 @@ function decompressStateData(&$data) {
         'r'     => 'Executando',
         'run'   => 'Executando',
         'wg'    => 'waiting_gravity',
-        
-        // Adicionais para compatibilidade
         'targ'  => 'Temperatura alvo atingida',
         'strt'  => 'Etapa iniciada',
         'ramp'  => 'Em rampa',
@@ -102,11 +96,7 @@ function decompressStateData(&$data) {
         'tc' => 'completed'
     ];
     
-    error_log("DEBUG decompressStateData INPUT: " . json_encode($data));
-    
-    // ========== 1. PRIMEIRO: Expandir TODOS os campos abreviados ==========
     $fieldMap = [
-        // Campos principais
         'cn'  => 'config_name',
         'csi' => 'currentStageIndex',
         'ts'  => 'totalStages',
@@ -123,7 +113,6 @@ function decompressStateData(&$data) {
         'um'  => 'uptime_ms',
         'rp'  => 'rampProgress',
         'st'  => 'stageType'
-        // NOTA: 'tr' NÃO está aqui porque precisa de processamento especial
     ];
     
     foreach ($fieldMap as $short => $long) {
@@ -133,15 +122,10 @@ function decompressStateData(&$data) {
         }
     }
     
-    // ========== 2. Processar campo "tr" ==========
     if (isset($data['tr'])) {
-        error_log("DEBUG: Campo 'tr' encontrado. Tipo: " . gettype($data['tr']) . 
-                 ", Valor: " . json_encode($data['tr']));
-        
         if (is_array($data['tr'])) {
             $tr = $data['tr'];
             
-            // ✅ NOVO: Formato de fermentação concluída: ["tc"]
             if (count($tr) == 1 && $tr[0] === 'tc') {
                 $data['timeRemaining'] = [
                     'value' => 0,
@@ -151,9 +135,7 @@ function decompressStateData(&$data) {
                 ];
                 $data['targetReached'] = true;
                 $data['fermentationCompleted'] = true;
-                error_log("DEBUG: tr é ['tc'] - Fermentação concluída");
             }
-            // Formato novo: [dias, horas, minutos, status]
             elseif (count($tr) == 4 && is_numeric($tr[0]) && is_numeric($tr[1]) && is_numeric($tr[2])) {
                 $data['timeRemaining'] = [
                     'days' => (int)$tr[0],
@@ -165,7 +147,6 @@ function decompressStateData(&$data) {
                 ];
                 $data['targetReached'] = true;
             }
-            // Formato antigo: [valor, unidade, status]
             elseif (count($tr) == 3) {
                 $data['timeRemaining'] = [
                     'value' => $tr[0],
@@ -179,14 +160,9 @@ function decompressStateData(&$data) {
             unset($data['tr']);
             
         } elseif (is_bool($data['tr'])) {
-            // É targetReached (booleano)
-            error_log("DEBUG: 'tr' é booleano (targetReached): " . 
-                     ($data['tr'] ? 'true' : 'false'));
-            
             $data['targetReached'] = $data['tr'];
             unset($data['tr']);
         } elseif (is_string($data['tr']) && $data['tr'] === 'tc') {
-            // ✅ NOVO: Formato string simples "tc"
             $data['timeRemaining'] = [
                 'value' => 0,
                 'unit' => 'completed',
@@ -196,17 +172,9 @@ function decompressStateData(&$data) {
             $data['targetReached'] = true;
             $data['fermentationCompleted'] = true;
             unset($data['tr']);
-            error_log("DEBUG: tr é 'tc' (string) - Fermentação concluída");
         }
     }
-    // Se não tem 'tr' mas tem 'targetReached' (caso direto do ESP)
-    elseif (isset($data['targetReached'])) {
-        error_log("DEBUG: Campo 'targetReached' encontrado: " . 
-                 ($data['targetReached'] ? 'true' : 'false'));
-        // Mantém como está, já é booleano
-    }
     
-    // ========== 3. Expandir mensagens ==========
     if (isset($data['message']) && is_string($data['message'])) {
         $msg = $data['message'];
         if (isset($messageMap[$msg])) {
@@ -214,7 +182,6 @@ function decompressStateData(&$data) {
         }
     }
     
-    // ========== 4. Expandir status ==========
     if (isset($data['status']) && is_string($data['status'])) {
         $status = $data['status'];
         if (isset($messageMap[$status])) {
@@ -224,16 +191,13 @@ function decompressStateData(&$data) {
         }
     }
     
-    // ========== 5. Expandir stageType ==========
     if (isset($data['stageType']) && is_string($data['stageType']) && isset($stageTypeMap[$data['stageType']])) {
         $data['stageType'] = $stageTypeMap[$data['stageType']];
     }
     
-    // ========== 6. Expandir control_status ==========
     if (isset($data['control_status']) && is_array($data['control_status'])) {
         $cs = &$data['control_status'];
         
-        // Mapear campos abreviados
         $csMap = [
             's'  => 'state',
             'iw' => 'is_waiting',
@@ -251,51 +215,21 @@ function decompressStateData(&$data) {
             }
         }
         
-        // Expandir estado do controle
         if (isset($cs['state']) && is_string($cs['state']) && isset($messageMap[$cs['state']])) {
             $cs['state'] = $messageMap[$cs['state']];
         }
     }
-    
-    error_log("DEBUG decompressStateData OUTPUT: " . json_encode($data));
 }
 
-// ==================== ADICIONE ESTA FUNÇÃO LOG ====================
-function logData($message, $data = null) {
-    $logFile = __DIR__ . '/fermentation_api.log';
-    
-    $logMessage = date('Y-m-d H:i:s') . " - " . $message . PHP_EOL;
-    
-    if ($data !== null) {
-        if (is_array($data) || is_object($data)) {
-            $logMessage .= json_encode($data, JSON_PRETTY_PRINT) . PHP_EOL;
-        } else {
-            $logMessage .= $data . PHP_EOL;
-        }
-    }
-    
-    $logMessage .= "----------------------------------------" . PHP_EOL;
-    
-    // Escreve no arquivo
-    file_put_contents($logFile, $logMessage, FILE_APPEND);
-}
-
-/**
- * Limpa registros antigos de um config_id específico E órfãos globais
- * VERSÃO CORRIGIDA - limpa órfãos sempre e faz limpeza global
- */
 function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $timestampColumn = 'created_at') {
     try {
-        // ========== 1. LIMPEZA DO CONFIG_ID ESPECÍFICO ==========
         if ($configId) {
             $sql = "SELECT COUNT(*) as total FROM {$tableName} WHERE config_id = ?";
             $stmt = $pdo->prepare($sql);
             $stmt->execute([$configId]);
             $count = $stmt->fetch()['total'];
             
-            // Só limpa se tiver mais que 20% acima do limite
             if ($count > ($keepCount * 1.2)) {
-                // Busca o timestamp de corte
                 $sql = "
                     SELECT {$timestampColumn} as cutoff_time 
                     FROM {$tableName} 
@@ -315,35 +249,20 @@ function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $times
                     ";
                     $stmt = $pdo->prepare($sql);
                     $stmt->execute([$configId, $result['cutoff_time']]);
-                    
-                    $deleted = $stmt->rowCount();
-                    if ($deleted > 0) {
-                        error_log("[CLEANUP] {$tableName}: config_id={$configId}, removidos {$deleted}");
-                    }
                 }
             }
         }
         
-        // ========== 2. LIMPEZA DE ÓRFÃOS (SEMPRE, AGRESSIVA) ==========
-        // Deleta até 1000 órfãos por chamada
         $stmt = $pdo->prepare("DELETE FROM {$tableName} WHERE config_id IS NULL LIMIT 1000");
         $stmt->execute();
-        $orphansDeleted = $stmt->rowCount();
         
-        if ($orphansDeleted > 0) {
-            error_log("[CLEANUP] {$tableName}: removidos {$orphansDeleted} órfãos");
-        }
-        
-        // ========== 3. LIMPEZA GLOBAL (mantém apenas últimos X registros TOTAIS) ==========
-        // Isso garante que a tabela nunca cresça demais, independente do config_id
-        $globalLimit = $keepCount * 2; // Ex: se keepCount=100, mantém 200 no total
+        $globalLimit = $keepCount * 2;
         
         $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM {$tableName}");
         $stmt->execute();
         $totalCount = $stmt->fetch()['total'];
         
         if ($totalCount > $globalLimit * 1.2) {
-            // Busca timestamp de corte global
             $sql = "
                 SELECT {$timestampColumn} as cutoff_time 
                 FROM {$tableName} 
@@ -358,11 +277,6 @@ function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $times
                 $sql = "DELETE FROM {$tableName} WHERE {$timestampColumn} < ? LIMIT 5000";
                 $stmt = $pdo->prepare($sql);
                 $stmt->execute([$result['cutoff_time']]);
-                
-                $deleted = $stmt->rowCount();
-                if ($deleted > 0) {
-                    error_log("[CLEANUP GLOBAL] {$tableName}: removidos {$deleted} registros antigos");
-                }
             }
         }
         
@@ -371,9 +285,6 @@ function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $times
     }
 }
 
-/**
- * Limpeza emergencial - para limpar o acumulado de uma vez
- */
 function emergencyCleanup($pdo) {
     $tables = [
         'controller_states' => ['keep' => 500, 'ts' => 'state_timestamp'],
@@ -390,12 +301,10 @@ function emergencyCleanup($pdo) {
         $tsColumn = $config['ts'];
         
         try {
-            // 1. Remove TODOS os órfãos
             $stmt = $pdo->prepare("DELETE FROM {$table} WHERE config_id IS NULL");
             $stmt->execute();
             $orphansDeleted = $stmt->rowCount();
             
-            // 2. Para cada config_id, mantém apenas os últimos X
             $stmt = $pdo->prepare("SELECT DISTINCT config_id FROM {$table} WHERE config_id IS NOT NULL");
             $stmt->execute();
             $configIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -403,13 +312,11 @@ function emergencyCleanup($pdo) {
             $totalDeleted = $orphansDeleted;
             
             foreach ($configIds as $cid) {
-                // Conta registros deste config
                 $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM {$table} WHERE config_id = ?");
                 $stmt->execute([$cid]);
                 $count = $stmt->fetch()['total'];
                 
                 if ($count > $keepCount) {
-                    // Busca timestamp de corte
                     $sql = "
                         SELECT {$tsColumn} as cutoff 
                         FROM {$table} 
@@ -633,14 +540,11 @@ if ($path === 'configurations/status' && $method === 'PUT') {
         $updateData = ['status' => $status];
         
         if ($status === 'active') {
-            // RESET COMPLETO AO REINICIAR FERMENTAÇÃO
-            
             $updateData['started_at'] = date('Y-m-d H:i:s');
             $updateData['paused_at'] = null;
             $updateData['completed_at'] = null;
             $updateData['current_stage_index'] = 0;
             
-            // Reseta todas as etapas
             $stmt = $pdo->prepare("
                 UPDATE stages 
                 SET status = 'pending',
@@ -650,7 +554,6 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             ");
             $stmt->execute([$configId]);
             
-            // Ativa primeira etapa
             $stmt = $pdo->prepare("
                 UPDATE stages 
                 SET status = 'running', start_time = NOW() 
@@ -658,11 +561,9 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             ");
             $stmt->execute([$configId]);
             
-            // Incrementa contador de uso
             $stmt = $pdo->prepare("UPDATE configurations SET times_used = times_used + 1 WHERE id = ?");
             $stmt->execute([$configId]);
             
-            // LIMPEZA COMPLETA - Remove TUDO da fermentação anterior
             $stmt = $pdo->prepare("DELETE FROM readings WHERE config_id = ?");
             $stmt->execute([$configId]);
             
@@ -785,6 +686,46 @@ if ($path === 'active/deactivate' && $method === 'POST') {
     sendResponse(['success' => true]);
 }
 
+// ==================== ÚLTIMAS LEITURAS (SEM FERMENTAÇÃO ATIVA) ====================
+
+if ($path === 'latest-readings' && $method === 'GET') {
+    requireAuth();
+    
+    // Busca última leitura de temperatura (de qualquer config)
+    $stmt = $pdo->prepare("
+        SELECT temp_fridge, temp_fermenter, temp_target, reading_timestamp
+        FROM readings 
+        ORDER BY reading_timestamp DESC 
+        LIMIT 1
+    ");
+    $stmt->execute();
+    $reading = $stmt->fetch();
+    
+    // Busca última leitura do iSpindel (de qualquer config)
+    $stmt = $pdo->prepare("
+        SELECT * FROM ispindel_readings 
+        ORDER BY reading_timestamp DESC 
+        LIMIT 1
+    ");
+    $stmt->execute();
+    $ispindel = $stmt->fetch();
+    
+    // Calcula se dados do iSpindel estão desatualizados (> 1 hora)
+    if ($ispindel && isset($ispindel['reading_timestamp'])) {
+        $lastReading = new DateTime($ispindel['reading_timestamp']);
+        $now = new DateTime();
+        $diffSeconds = $now->getTimestamp() - $lastReading->getTimestamp();
+        $ispindel['is_stale'] = $diffSeconds > 3600;
+        $ispindel['seconds_since_update'] = $diffSeconds;
+    }
+    
+    sendResponse([
+        'reading' => $reading ?: null,
+        'ispindel' => $ispindel ?: null,
+        'timestamp' => date('Y-m-d H:i:s')
+    ]);
+}
+
 // ==================== ESTADO COMPLETO (ESP → FRONTEND) ====================
 
 if ($path === 'state/complete' && $method === 'GET') {
@@ -824,9 +765,10 @@ if ($path === 'state/complete' && $method === 'GET') {
         $stateData = json_decode($state['state_data'], true) ?? [];
     }
     
-    // Busca leituras recentes (últimas 24h)
+    // Busca leituras recentes (últimas 24h) - SEM dados do iSpindel
     $stmt = $pdo->prepare("
-        SELECT * FROM readings 
+        SELECT id, config_id, temp_fridge, temp_fermenter, temp_target, reading_timestamp
+        FROM readings 
         WHERE config_id = ? 
         AND reading_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
         ORDER BY reading_timestamp ASC
@@ -834,7 +776,7 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $readings = $stmt->fetchAll();
     
-    // Busca última leitura do iSpindel
+    // Busca última leitura do iSpindel (separada)
     $stmt = $pdo->prepare("
         SELECT * FROM ispindel_readings 
         WHERE config_id = ?
@@ -843,6 +785,26 @@ if ($path === 'state/complete' && $method === 'GET') {
     ");
     $stmt->execute([$configId]);
     $ispindel = $stmt->fetch();
+    
+    // Calcula se dados do iSpindel estão desatualizados (> 1 hora)
+    if ($ispindel && isset($ispindel['reading_timestamp'])) {
+        $lastReading = new DateTime($ispindel['reading_timestamp']);
+        $now = new DateTime();
+        $diffSeconds = $now->getTimestamp() - $lastReading->getTimestamp();
+        $ispindel['is_stale'] = $diffSeconds > 3600;
+        $ispindel['seconds_since_update'] = $diffSeconds;
+    }
+    
+    // Busca leituras do iSpindel das últimas 24h (para o gráfico)
+    $stmt = $pdo->prepare("
+        SELECT id, config_id, temperature, gravity, battery, reading_timestamp
+        FROM ispindel_readings 
+        WHERE config_id = ?
+        AND reading_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+        ORDER BY reading_timestamp ASC
+    ");
+    $stmt->execute([$configId]);
+    $ispindelReadings = $stmt->fetchAll();
     
     // Busca histórico de estados do controlador (últimas 24h)
     $stmt = $pdo->prepare("
@@ -896,6 +858,7 @@ if ($path === 'state/complete' && $method === 'GET') {
         'state' => $stateData,
         'readings' => $readings,
         'ispindel' => $ispindel ?: null,
+        'ispindel_readings' => $ispindelReadings ?: [],
         'controller' => $controller ?: null,
         'controller_history' => $controllerHistory ?: [],
         'heartbeat' => $heartbeat ?: null,
@@ -904,32 +867,30 @@ if ($path === 'state/complete' && $method === 'GET') {
     ]);
 }
 
-// ==================== LEITURAS (COM LIMPEZA AUTOMÁTICA) ====================
+// ==================== LEITURAS ====================
 
 if ($path === 'readings' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
     $tempFridge = $input['temp_fridge'] ?? null;
     $tempFermenter = $input['temp_fermenter'] ?? null;
     $tempTarget = $input['temp_target'] ?? null;
-    $gravity = $input['gravity'] ?? null;
     
     if (!$configId || $tempFridge === null || $tempFermenter === null || $tempTarget === null) {
         sendResponse(['error' => 'Dados incompletos'], 400);
     }
     
     $stmt = $pdo->prepare("
-        INSERT INTO readings (config_id, temp_fridge, temp_fermenter, temp_target, gravity)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO readings (config_id, temp_fridge, temp_fermenter, temp_target)
+        VALUES (?, ?, ?, ?)
     ");
-    $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget, $gravity]);
+    $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget]);
     
-    // ✅ Limpa registros antigos E órfãos
     cleanupOldRecords($pdo, 'readings', $configId, 200, 'reading_timestamp');
     
     sendResponse(['success' => true, 'reading_id' => $pdo->lastInsertId()], 201);
 }
 
-// ==================== ISPINDEL (COM LIMPEZA AUTOMÁTICA) ====================
+// ==================== ISPINDEL ====================
 
 if ($path === 'ispindel/data' && $method === 'POST') {
     $name = $input['name'] ?? 'iSpindel';
@@ -943,7 +904,6 @@ if ($path === 'ispindel/data' && $method === 'POST') {
     }
     
     try {
-        // Busca fermentação ativa
         $stmt = $pdo->prepare("
             SELECT c.id FROM configurations c
             WHERE c.status = 'active'
@@ -954,14 +914,12 @@ if ($path === 'ispindel/data' && $method === 'POST') {
         
         $configId = $activeConfig ? $activeConfig['id'] : null;
         
-        // Insere leitura
         $stmt = $pdo->prepare("
             INSERT INTO ispindel_readings (config_id, name, temperature, gravity, battery, angle)
             VALUES (?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([$configId, $name, $temperature, $gravity, $battery, $angle]);
         
-        // ✅ Limpa registros antigos E órfãos
         if ($configId) {
             cleanupOldRecords($pdo, 'ispindel_readings', $configId, 500, 'reading_timestamp');
         }
@@ -973,7 +931,7 @@ if ($path === 'ispindel/data' && $method === 'POST') {
     }
 }
 
-// ==================== CONTROLE (COM LIMPEZA AUTOMÁTICA) ====================
+// ==================== CONTROLE ====================
 
 if ($path === 'control' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
@@ -991,13 +949,13 @@ if ($path === 'control' && $method === 'POST') {
     ");
     $stmt->execute([$configId, $setpoint, $cooling, $heating]);
     
-    // ✅ Limpa registros antigos E órfãos
     cleanupOldRecords($pdo, 'controller_states', $configId, 200, 'state_timestamp');
     
     sendResponse(['success' => true], 201);
 }
 
-// ==================== ESTADO FERMENTAÇÃO (COM LIMPEZA AUTOMÁTICA) ====================
+// ==================== ESTADO FERMENTAÇÃO ====================
+
 if ($path === 'fermentation-state' && $method === 'POST') {
     $configId = $input['config_id'] ?? $input['cid'] ?? null;
     
@@ -1005,43 +963,7 @@ if ($path === 'fermentation-state' && $method === 'POST') {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
     
-    // ✅ LOG 1: Dados recebidos do ESP32
-    error_log("=== FERMENTATION-STATE RECEBIDO ===");
-    error_log("Config ID: " . $configId);
-    error_log("Dados recebidos (CRUS): " . json_encode($input));
-    
-    // Descomprimir dados recebidos
     decompressStateData($input);
-    
-    // ✅ LOG 2: Dados após descompressão
-    error_log("Dados descomprimidos: " . json_encode($input));
-    
-    // ✅ LOG 3: Campos específicos para debug
-    $debugInfo = [];
-    
-    if (isset($input['tr'])) {
-        $debugInfo['tr_type'] = gettype($input['tr']);
-        $debugInfo['tr_value'] = $input['tr'];
-    }
-    
-    if (isset($input['timeRemaining'])) {
-        $debugInfo['timeRemaining'] = $input['timeRemaining'];
-    }
-    
-    if (isset($input['targetReached'])) {
-        $debugInfo['targetReached'] = $input['targetReached'] ? 'true' : 'false';
-    }
-    
-    if (isset($input['status'])) {
-        $debugInfo['status'] = $input['status'];
-    }
-    
-    if (isset($input['fermentationCompleted'])) {
-        $debugInfo['fermentationCompleted'] = $input['fermentationCompleted'] ? 'true' : 'false';
-    }
-    
-    error_log("DEBUG ESPECÍFICO: " . json_encode($debugInfo));
-    error_log("=== FIM DOS DADOS ===");
     
     $stmt = $pdo->prepare("
         INSERT INTO fermentation_states (config_id, state_data)
@@ -1054,7 +976,7 @@ if ($path === 'fermentation-state' && $method === 'POST') {
     sendResponse(['success' => true], 201);
 }
 
-// ==================== HEARTBEAT (COM LIMPEZA AGRESSIVA) ====================
+// ==================== HEARTBEAT ====================
 
 if ($path === 'heartbeat' && $method === 'POST') {
     $configId = $input['config_id'] ?? $input['cid'] ?? null;
@@ -1067,7 +989,6 @@ if ($path === 'heartbeat' && $method === 'POST') {
     }
     
     try {
-        // Descomprimir control_status se necessário
         if ($controlStatus && is_array($controlStatus)) {
             decompressStateData($controlStatus);
         }
@@ -1092,13 +1013,12 @@ if ($path === 'heartbeat' && $method === 'POST') {
     }
 }
 
-// ==================== LIMPEZA MANUAL (ENDPOINT ADICIONAL) ====================
+// ==================== LIMPEZA MANUAL ====================
 
 if ($path === 'cleanup' && $method === 'POST') {
     $userId = requireAuth();
     
     try {
-        // Busca todas as configurações do usuário
         $stmt = $pdo->prepare("SELECT id FROM configurations WHERE user_id = ?");
         $stmt->execute([$userId]);
         $configs = $stmt->fetchAll();
@@ -1107,7 +1027,6 @@ if ($path === 'cleanup' && $method === 'POST') {
         foreach ($configs as $config) {
             $configId = $config['id'];
             
-            // Força limpeza de todas as tabelas (incluindo órfãos)
             cleanupOldRecords($pdo, 'readings', $configId, 500, 'reading_timestamp');
             cleanupOldRecords($pdo, 'controller_states', $configId, 200, 'state_timestamp');
             cleanupOldRecords($pdo, 'fermentation_states', $configId, 100, 'state_timestamp');
@@ -1127,10 +1046,9 @@ if ($path === 'cleanup' && $method === 'POST') {
     }
 }
 
-// ==================== LIMPEZA EMERGENCIAL (SEM AUTENTICAÇÃO) ====================
+// ==================== LIMPEZA EMERGENCIAL ====================
 
 if ($path === 'emergency-cleanup' && $method === 'POST') {
-    // Chave secreta para evitar uso indevido (mude para algo único)
     $secretKey = $input['secret'] ?? '';
     
     if ($secretKey !== 'ferment2024cleanup') {

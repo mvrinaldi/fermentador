@@ -64,20 +64,31 @@ try {
     }
     
     $stmt = $pdo->prepare("
-        INSERT INTO readings (config_id, temp_fridge, temp_fermenter, temp_target, gravity, spindel_temp, spindel_battery)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO readings (config_id, temp_fridge, temp_fermenter, temp_target)
+        VALUES (?, ?, ?, ?)
     ");
     
     $stmt->execute([
         $config_id,
         $temp_fridge,
         $temp_fermenter,
-        $temp_target,
-        $gravity,
-        $spindel_temp,
-        $spindel_battery
+        $temp_target
     ]);
     
+    if ($gravity !== null || $spindel_temp !== null) {
+        $stmt = $pdo->prepare("
+            INSERT INTO ispindel_readings (config_id, temperature, gravity, battery)
+            VALUES (?, ?, ?, ?)
+        ");
+        
+        $stmt->execute([
+            $config_id,
+            $spindel_temp,
+            $gravity,
+            $spindel_battery
+        ]);
+    }
+
     $reading_id = $pdo->lastInsertId();
     
     echo json_encode([

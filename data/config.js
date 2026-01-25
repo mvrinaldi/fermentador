@@ -498,18 +498,14 @@ async function startFermentation(configId, isReusing = false) {
             body: JSON.stringify({ config_id: configId, status: 'active' })
         });
         
-        // CORREÇÃO: Notifica endpoint de ativação
         await apiRequest('active/activate', {
             method: 'POST',
             body: JSON.stringify({ config_id: configId })
         });
         
-        alert('✅ Fermentação iniciada com sucesso!');
-        
-        // CORREÇÃO: Aguarda 500ms e recarrega para garantir atualização
-        setTimeout(async () => {
-            await loadConfigurations();
-        }, 500);
+        if (confirm('✅ Fermentação iniciada com sucesso!')) {
+            window.location.href = 'index.html';
+        }
         
     } catch (error) {
         console.error('Erro ao iniciar fermentação:', error);
@@ -923,7 +919,7 @@ const savedConfigTemplate = (config) => {
                 ` : ''}
                 
                 ${(isActive || isPaused) ? `
-                    <button onclick="completeFermentation('${config.id}')" class="btn-compact btn-secondary">
+                    <button onclick="completeFermentation('${config.id}')" class="btn-compact btn-warning">
                         <i class="fas fa-flag-checkered mr-1"></i> Concluir
                     </button>
                 ` : ''}

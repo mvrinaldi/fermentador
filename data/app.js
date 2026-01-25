@@ -8,6 +8,7 @@ let isAppInitialized = false;
 
 const REFRESH_INTERVAL = 30000;
 const ESP_OFFLINE_THRESHOLD = 120000;
+const ISPINDEL_STALE_THRESHOLD = 3600000; // 1 hora em ms
 const SAO_PAULO_UTC_OFFSET = -3 * 60 * 60 * 1000;
 
 // ========== ESTADO DA APLICAÇÃO ==========
@@ -16,10 +17,12 @@ let appState = {
     espState: null,
     readings: [],
     ispindel: null,
+    ispindelReadings: [],
     controller: null,
     controllerHistory: [],
     heartbeat: null,
-    lastUpdate: null
+    lastUpdate: null,
+    latestReading: null
 };
 
 // ========== FUNÇÕES DE API ==========
@@ -79,10 +82,12 @@ async function logout() {
             espState: null,
             readings: [],
             ispindel: null,
+            ispindelReadings: [],
             controller: null,
             controllerHistory: [],
             heartbeat: null,
-            lastUpdate: null
+            lastUpdate: null,
+            latestReading: null
         };
         
         if (refreshInterval) {
@@ -225,12 +230,10 @@ function formatTimeRemaining(tr) {
         return '--';
     }
     
-    // ✅ NOVO: Formato de fermentação concluída
     if (tr.status === 'completed' || tr.unit === 'completed' || tr.display === 'Fermentação concluída') {
         return 'Fermentação concluída';
     }
     
-    // ✅ NOVO FORMATO: {days, hours, minutes, unit: 'detailed', status}
     if (tr.unit === 'detailed' && tr.days !== undefined) {
         const parts = [];
         
@@ -244,7 +247,6 @@ function formatTimeRemaining(tr) {
             parts.push(`${tr.minutes}m`);
         }
         
-        // Se todos forem zero (menos de 1 minuto)
         if (parts.length === 0) {
             return '< 1m';
         }
@@ -252,7 +254,6 @@ function formatTimeRemaining(tr) {
         return parts.join(' ');
     }
     
-    // ✅ FORMATO ANTIGO: {value, unit, status}
     if (tr.value !== undefined && tr.unit) {
         if (tr.unit === 'indefinite' || tr.unit === 'ind') {
             return 'Aguardando gravidade';
@@ -347,12 +348,10 @@ function decompressData(data) {
         'gt': 'gravity_time'
     };
     
-    // Clonar o objeto para não modificar o original
     const result = { ...data };
     
     console.log('🔍 DEBUG decompressData INPUT:', result);
     
-    // ========== 1. PRIMEIRO: Expandir campos abreviados ==========
     const fieldMap = {
         'cn': 'config_name',
         'csi': 'currentStageIndex',
@@ -379,11 +378,9 @@ function decompressData(data) {
         }
     });
     
-    // ========== 2. Processar campo "tr" ==========
     if (result.tr !== undefined) {
         
         if (Array.isArray(result.tr)) {
-            // ✅ NOVO: Formato de fermentação concluída: ["tc"]
             if (result.tr.length === 1 && result.tr[0] === 'tc') {
                 result.timeRemaining = {
                     value: 0,
@@ -395,7 +392,6 @@ function decompressData(data) {
                 result.fermentationCompleted = true;
                 console.log('✅ tr é ["tc"] - Fermentação concluída');
             }
-            // Formato novo: [dias, horas, minutos, status]
             else if (result.tr.length === 4 && 
                 typeof result.tr[0] === 'number' && 
                 typeof result.tr[1] === 'number' && 
@@ -412,7 +408,6 @@ function decompressData(data) {
                 };
                 result.targetReached = true;
                 
-            // Formato antigo: [valor, unidade, status]
             } else if (result.tr.length >= 3) {
                 result.timeRemaining = {
                     value: result.tr[0],
@@ -424,11 +419,9 @@ function decompressData(data) {
                 result.targetReached = true;
             }
         } 
-        // Se tr é booleano (targetReached direto)
         else if (typeof result.tr === 'boolean') {
             result.targetReached = result.tr;
         }
-        // ✅ NOVO: Se tr é string "tc"
         else if (typeof result.tr === 'string' && result.tr === 'tc') {
             result.timeRemaining = {
                 value: 0,
@@ -444,7 +437,6 @@ function decompressData(data) {
         delete result.tr;
     }
     
-    // ========== 3. Inferir targetReached se necessário ==========
     if (result.targetReached === undefined) {
         if (result.timeRemaining) {
             result.targetReached = true;
@@ -458,7 +450,6 @@ function decompressData(data) {
         }
     }
     
-    // ========== 4. Expandir mensagens/status ==========
     if (result.status && messageMap[result.status]) {
         result.status = messageMap[result.status];
     }
@@ -467,12 +458,10 @@ function decompressData(data) {
         result.message = messageMap[result.message];
     }
     
-    // ========== 5. Expandir stageType ==========
     if (result.stageType && stageTypeMap[result.stageType]) {
         result.stageType = stageTypeMap[result.stageType];
     }
     
-    // ========== 6. Expandir control_status ==========
     if (result.control_status && typeof result.control_status === 'object') {
         const cs = result.control_status;
         
@@ -500,13 +489,74 @@ function decompressData(data) {
     return result;
 }
 
+// ========== FUNÇÃO PARA OBTER DADOS DO ISPINDEL ==========
+function getIspindelData() {
+    const ispindel = appState.ispindel;
+    
+    if (!ispindel) {
+        return {
+            gravity: null,
+            temperature: null,
+            battery: null,
+            isStale: true,
+            lastUpdate: null,
+            staleMessage: 'Sem dados do iSpindel'
+        };
+    }
+    
+    const isStale = ispindel.is_stale === true;
+    const secondsSinceUpdate = ispindel.seconds_since_update || 0;
+    
+    let staleMessage = null;
+    if (isStale) {
+        const hours = Math.floor(secondsSinceUpdate / 3600);
+        const minutes = Math.floor((secondsSinceUpdate % 3600) / 60);
+        
+        if (hours > 0) {
+            staleMessage = `Última leitura há ${hours}h ${minutes}min`;
+        } else {
+            staleMessage = `Última leitura há ${minutes}min`;
+        }
+    }
+    
+    return {
+        gravity: parseFloat(ispindel.gravity) || null,
+        temperature: parseFloat(ispindel.temperature) || null,
+        battery: parseFloat(ispindel.battery) || null,
+        isStale: isStale,
+        lastUpdate: ispindel.reading_timestamp,
+        staleMessage: staleMessage
+    };
+}
+
 // ========== CARREGAMENTO ==========
 async function loadCompleteState() {
     try {
         const activeData = await apiRequest('active');
         
         if (!activeData.active || !activeData.id) {
+            // Mesmo sem fermentação ativa, busca últimos dados dos sensores
             appState.config = null;
+            appState.espState = {};
+            appState.readings = [];
+            appState.ispindel = null;
+            appState.ispindelReadings = [];
+            appState.controller = null;
+            appState.controllerHistory = [];
+            appState.heartbeat = null;
+            appState.latestReading = null;
+            
+            // Tenta buscar últimos dados disponíveis
+            try {
+                const latestData = await apiRequest('latest-readings');
+                if (latestData) {
+                    appState.latestReading = latestData.reading || null;
+                    appState.ispindel = latestData.ispindel || null;
+                }
+            } catch (e) {
+                console.log('Não foi possível buscar últimas leituras:', e);
+            }
+            
             renderNoActiveFermentation();
             return;
         }
@@ -515,7 +565,6 @@ async function loadCompleteState() {
         
         console.log('🔍 DADOS BRUTOS DO SERVIDOR (completo):', completeState);
         
-        // Descomprimir dados recebidos
         if (completeState.state) {
             console.log('🔍 Estado ANTES da descompressão:', completeState.state);
             
@@ -533,16 +582,19 @@ async function loadCompleteState() {
         appState.config = completeState.config;
         appState.espState = completeState.state || {};
         appState.readings = completeState.readings || [];
-        appState.ispindel = completeState.ispindel;
+        appState.ispindel = completeState.ispindel || null;
+        appState.ispindelReadings = completeState.ispindel_readings || [];
         appState.controller = completeState.controller;
         appState.controllerHistory = completeState.controller_history || [];
         appState.lastUpdate = completeState.timestamp;
         appState.heartbeat = completeState.heartbeat;
+        appState.latestReading = null;
         
         checkESPStatus();
         renderUI();
         
     } catch (error) {
+        console.error('Erro ao carregar estado:', error);
         renderNoActiveFermentation();
     }
 }
@@ -711,6 +763,111 @@ function updateRelayStatus() {
     }
 }
 
+// ========== TEMPLATES ==========
+const cardTemplate = ({ title, icon, value, subtitle, subtitleStyle = '', color }) => `
+    <div class="card">
+        <div class="flex items-center gap-3 mb-2">
+            <i class="${icon}" style="color: ${color}; font-size: 1.5rem;"></i>
+            <span class="text-sm font-medium text-gray-600">${title}</span>
+        </div>
+        <div class="text-3xl font-bold text-gray-800">
+            ${value}
+        </div>
+        ${subtitle ? `<div class="text-sm text-gray-600 mt-1"${subtitleStyle ? ` style="${subtitleStyle}"` : ''}>${subtitle}</div>` : ''}
+    </div>
+`;
+
+const stageTemplate = (stage, index, isCurrent, isCompleted) => {
+    let borderColor = 'border-gray-200';
+    let bgColor = 'bg-gray-50';
+    let statusText = 'Aguardando';
+    
+    if (isCurrent) {
+        borderColor = 'border-blue-500';
+        bgColor = 'bg-blue-50';
+        statusText = 'Em andamento';
+    } else if (isCompleted) {
+        borderColor = 'border-green-500';
+        bgColor = 'bg-green-50';
+        statusText = 'Concluída';
+    }
+    
+    return `
+    <div class="p-4 rounded-lg border-2 ${borderColor} ${bgColor}">
+        <div class="flex justify-between items-start">
+            <div>
+                <h3 class="font-semibold text-gray-800">
+                    ${stage.type === 'ramp' ? '<i class="fas fa-chart-line text-blue-600 mr-2"></i>' : ''}
+                    Etapa ${index + 1}
+                    ${isCurrent ? `<span class="ml-2 text-sm text-blue-600">(${statusText})</span>` : ''}
+                    ${isCompleted ? '<span class="ml-2 text-sm text-green-600">(Concluída)</span>' : ''}
+                </h3>
+                <p class="text-sm text-gray-600 mt-1">
+                    ${getStageDescription(stage)}
+                </p>
+            </div>
+        </div>
+    </div>
+    `;
+};
+
+function getStageDescription(stage) {
+    const formatDurationDisplay = (days) => {
+        if (days >= 1) {
+            return days % 1 === 0 ? `${days} dias` : `${days.toFixed(1)} dias`;
+        } else {
+            const totalHours = days * 24;
+            const hours = Math.floor(totalHours);
+            const minutes = Math.round((totalHours - hours) * 60);
+            
+            if (hours === 0 && minutes === 0) {
+                return "menos de 1 minuto";
+            } else if (hours === 0) {
+                return `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+            } else if (minutes === 0) {
+                return `${hours} hora${hours !== 1 ? 's' : ''}`;
+            } else {
+                return `${hours} hora${hours !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+            }
+        }
+    };
+
+    switch(stage.type) {
+        case 'temperature':
+            return `${stage.target_temp}°C por ${formatDurationDisplay(stage.duration)}`;
+        case 'gravity':
+            return `${stage.target_temp}°C até ${stage.target_gravity} SG`;
+        case 'gravity_time':
+            return `${stage.target_temp}°C até ${stage.target_gravity} SG (máx ${formatDurationDisplay(stage.max_duration)})`;
+        case 'ramp':
+            const direction = stage.direction === 'up' ? '▲' : '▼';
+            
+            let rampTimeDisplay;
+            const rampDays = stage.ramp_time / 24;
+            
+            if (rampDays >= 1) {
+                rampTimeDisplay = rampDays % 1 === 0 ? `${rampDays} dias` : `${rampDays.toFixed(1)} dias`;
+            } else {
+                const hours = stage.ramp_time;
+                const minutes = Math.round((hours - Math.floor(hours)) * 60);
+                
+                if (hours === 0 && minutes === 0) {
+                    rampTimeDisplay = "menos de 1 minuto";
+                } else if (Math.floor(hours) === 0) {
+                    rampTimeDisplay = `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+                } else if (minutes === 0) {
+                    rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''}`;
+                } else {
+                    rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+                }
+            }
+            
+            return `${direction} ${stage.start_temp}°C → ${stage.target_temp}°C em ${rampTimeDisplay}`;
+        default:
+            return '';
+    }
+}
+
 // ========== RENDERIZAÇÃO ==========
 function renderUI() {
     console.log('🔍 RenderUI chamada', {
@@ -720,6 +877,11 @@ function renderUI() {
         timeRemaining: appState.espState?.timeRemaining,
         fermentationCompleted: appState.espState?.fermentationCompleted
     });
+    
+    const noFermentationCard = document.getElementById('no-fermentation-card');
+    if (noFermentationCard) {
+        noFermentationCard.style.display = 'none';
+    }
     
     if (!appState.config || !appState.config.stages || appState.config.stages.length === 0) {
         renderNoActiveFermentation();
@@ -735,7 +897,6 @@ function renderUI() {
         const currentStage = (appState.config.current_stage_index || 0) + 1;
         const totalStages = appState.config.stages.length;
         
-        // ✅ NOVO: Verifica se fermentação está concluída
         if (appState.espState?.fermentationCompleted || 
             appState.espState?.timeRemaining?.status === 'completed') {
             stageElement.textContent = `Todas as ${totalStages} etapas concluídas`;
@@ -744,7 +905,6 @@ function renderUI() {
         }
     }
     
-    // ========== BLOCO DO TIME-REMAINING ==========
     const timeElement = document.getElementById('time-remaining');
     if (timeElement && appState.espState) {
         const tr = appState.espState.timeRemaining;
@@ -758,7 +918,6 @@ function renderUI() {
             timeRemaining: tr
         });
         
-        // ✅ NOVO: Fermentação concluída
         if (fermentationCompleted || tr?.status === 'completed' || tr?.unit === 'completed') {
             timeElement.innerHTML = `
                 <i class="fas fa-check-circle text-green-600"></i> 
@@ -779,17 +938,21 @@ function renderUI() {
             }
             
             const timeDisplay = formatTimeRemaining(tr);
-            const statusText = tr.status === 'waiting_gravity' ? 'aguardando gravidade' : 'restantes';
+            
+            let statusText = '';
+            if (tr.status !== 'waiting_gravity' && tr.unit !== 'indefinite' && tr.unit !== 'ind') {
+                statusText = ' restantes';
+            }
             
             timeElement.innerHTML = `
                 <i class="${icon} ${statusClass}"></i> 
                 <span class="${statusClass}">
-                    ${timeDisplay} ${statusText}
+                    ${timeDisplay}${statusText}
                 </span>
             `;
             timeElement.style.display = 'flex';
             
-            console.log(`🎨 Time element (targetReached=true): ${timeDisplay} ${statusText}`);
+            console.log(`🎨 Time element (targetReached=true): ${timeDisplay}${statusText}`);
         } else if (targetReached === false) {
             timeElement.innerHTML = `
                 <i class="fas fa-hourglass-start text-yellow-600"></i>
@@ -801,7 +964,6 @@ function renderUI() {
             console.log('🎨 Time element (targetReached=false): Aguardando temperatura alvo');
         } else {
             timeElement.style.display = 'none';
-            console.log('⚠️ Time element escondido - estado incompleto');
         }
     }
     
@@ -841,16 +1003,18 @@ function renderInfoCards() {
         }
     }
 
-    // Dados do iSpindel - prioriza readings, fallback para ispindel_readings
-    const gravityValue = parseFloat(lastReading.gravity) || parseFloat(appState.ispindel?.gravity) || 0;
-    const spindelTemp = parseFloat(lastReading.spindel_temp) || parseFloat(appState.ispindel?.temperature) || 0;
-    const spindelBattery = parseFloat(lastReading.spindel_battery) || parseFloat(appState.ispindel?.battery) || 0;
-
+    const ispindelData = getIspindelData();
+    
     let spindelSubtitle = '';
-    if (spindelTemp > 0 || spindelBattery > 0) {
+    let spindelSubtitleColor = '';
+    
+    if (ispindelData.isStale && ispindelData.staleMessage) {
+        spindelSubtitle = `⚠️ ${ispindelData.staleMessage}`;
+        spindelSubtitleColor = 'color: #f59e0b;';
+    } else if (ispindelData.temperature || ispindelData.battery) {
         const parts = [];
-        if (spindelTemp > 0) parts.push(`${spindelTemp.toFixed(1)}°C`);
-        if (spindelBattery > 0) parts.push(`${spindelBattery.toFixed(2)}V`);
+        if (ispindelData.temperature) parts.push(`${ispindelData.temperature.toFixed(1)}°C`);
+        if (ispindelData.battery) parts.push(`${ispindelData.battery.toFixed(2)}V`);
         spindelSubtitle = parts.join(' • ');
     }
 
@@ -859,8 +1023,8 @@ function renderInfoCards() {
         : 0;
     
     let gravityTargetSubtitle = '';
-    if (targetGravity > 0 && gravityValue > 0) {
-        const diff = gravityValue - targetGravity;
+    if (targetGravity > 0 && ispindelData.gravity) {
+        const diff = ispindelData.gravity - targetGravity;
         if (Math.abs(diff) < 0.001) {
             gravityTargetSubtitle = '✅ No alvo';
         } else if (diff > 0) {
@@ -916,9 +1080,10 @@ function renderInfoCards() {
         ${cardTemplate({
             title: 'Gravidade Atual',
             icon: 'fas fa-tint',
-            value: gravityValue > 0 ? gravityValue.toFixed(3) : '--',
+            value: ispindelData.gravity ? ispindelData.gravity.toFixed(3) : '--',
             subtitle: spindelSubtitle,
-            color: '#10b981'
+            subtitleStyle: spindelSubtitleColor,
+            color: ispindelData.isStale ? '#f59e0b' : '#10b981'
         })}
         ${cardTemplate({
             title: 'Gravidade Alvo',
@@ -1039,6 +1204,31 @@ function renderChart() {
         });
     }
 
+    const gravityMap = new Map();
+    if (appState.ispindelReadings && appState.ispindelReadings.length > 0) {
+        appState.ispindelReadings.forEach(ir => {
+            const timestamp = new Date(ir.reading_timestamp).getTime();
+            gravityMap.set(timestamp, parseFloat(ir.gravity));
+        });
+    }
+    
+    const gravityData = appState.readings.map(r => {
+        const readingTime = new Date(r.reading_timestamp).getTime();
+        
+        let closestGravity = null;
+        let closestDiff = Infinity;
+        
+        gravityMap.forEach((gravity, timestamp) => {
+            const diff = Math.abs(timestamp - readingTime);
+            if (diff < closestDiff && diff < 1800000) {
+                closestDiff = diff;
+                closestGravity = gravity;
+            }
+        });
+        
+        return closestGravity;
+    });
+
     const datasets = [
         {
             label: 'Temp. Geladeira',
@@ -1070,14 +1260,15 @@ function renderChart() {
             order: 2
         },
         {
-            label: 'Gravidade (x1000)',
-            data: appState.readings.map(r => r.gravity ? parseFloat(r.gravity) * 1000 : null),
+            label: 'Gravidade',
+            data: gravityData,
             borderColor: '#10b981',
             backgroundColor: 'rgba(16, 185, 129, 0.1)',
             tension: 0.4,
             fill: false,
             yAxisID: 'y1',
-            order: 2
+            order: 2,
+            spanGaps: true
         }
     ];
 
@@ -1144,7 +1335,7 @@ function renderChart() {
                             if (label) label += ': ';
                             if (context.parsed.y !== null) {
                                 if (context.dataset.yAxisID === 'y1') {
-                                    label += (context.parsed.y / 1000).toFixed(3);
+                                    label += context.parsed.y.toFixed(3);
                                 } else {
                                     label += context.parsed.y.toFixed(1) + '°C';
                                 }
@@ -1165,8 +1356,13 @@ function renderChart() {
                     type: 'linear',
                     display: true,
                     position: 'right',
-                    title: { display: true, text: 'Gravidade (x1000)' },
-                    grid: { drawOnChartArea: false }
+                    title: { display: true, text: 'Gravidade' },
+                    grid: { drawOnChartArea: false },
+                    ticks: {
+                        callback: function(value) {
+                            return value.toFixed(3);
+                        }
+                    }
                 }
             }
         }
@@ -1174,128 +1370,134 @@ function renderChart() {
 }
 
 function renderNoActiveFermentation() {
-    const container = document.querySelector('.container');
-    if (container) {
-        container.innerHTML = `
-            <div class="min-h-screen flex items-center justify-center">
-                <div class="card max-w-md text-center">
-                    <i class="fas fa-chart-line" style="font-size: 4rem; color: #9ca3af; margin-bottom: 1rem;"></i>
-                    <h2 class="text-2xl mb-2">Nenhuma Fermentação Ativa</h2>
-                    <p class="text-gray-600 mb-4">
-                        Configure e inicie uma fermentação para monitorá-la aqui.
-                    </p>
-                    <button onclick="location.href='config.html'" class="btn btn-primary">
-                        <i class="fas fa-cog"></i> Ir para Configuração
-                    </button>
-                </div>
+    const nameElement = document.getElementById('fermentation-name');
+    const stageElement = document.getElementById('stage-info');
+    const timeElement = document.getElementById('time-remaining');
+    
+    if (nameElement) nameElement.textContent = 'Nenhuma fermentação';
+    if (stageElement) stageElement.textContent = 'Inicie uma fermentação para monitorar';
+    if (timeElement) timeElement.style.display = 'none';
+    
+    // Pega dados reais dos sensores (se disponíveis)
+    const lastReading = appState.latestReading || {};
+    const ispindelData = getIspindelData();
+    
+    const currentTemp = parseFloat(lastReading.temp_fermenter) || null;
+    const fridgeTemp = parseFloat(lastReading.temp_fridge) || null;
+    
+    // Monta o subtitle do iSpindel
+    let spindelSubtitle = '';
+    let spindelSubtitleColor = '';
+    
+    if (ispindelData.gravity) {
+        if (ispindelData.isStale && ispindelData.staleMessage) {
+            spindelSubtitle = `⚠️ ${ispindelData.staleMessage}`;
+            spindelSubtitleColor = 'color: #f59e0b;';
+        } else if (ispindelData.temperature || ispindelData.battery) {
+            const parts = [];
+            if (ispindelData.temperature) parts.push(`${ispindelData.temperature.toFixed(1)}°C`);
+            if (ispindelData.battery) parts.push(`${ispindelData.battery.toFixed(2)}V`);
+            spindelSubtitle = parts.join(' • ');
+        }
+    } else {
+        spindelSubtitle = 'Sem dados do iSpindel';
+    }
+    
+    const infoCards = document.getElementById('info-cards');
+    if (infoCards) {
+        infoCards.innerHTML = `
+            ${cardTemplate({
+                title: 'Temp. Fermentador',
+                icon: 'fas fa-thermometer-full',
+                value: currentTemp !== null ? `${currentTemp.toFixed(1)}°C` : '--',
+                subtitle: currentTemp !== null ? 'Leitura atual' : 'Sem dados',
+                color: currentTemp !== null ? '#10b981' : '#9ca3af'
+            })}
+            ${cardTemplate({
+                title: 'Temp. Geladeira',
+                icon: 'fas fa-thermometer-half',
+                value: fridgeTemp !== null ? `${fridgeTemp.toFixed(1)}°C` : '--',
+                subtitle: fridgeTemp !== null ? 'Leitura atual' : 'Sem dados',
+                color: fridgeTemp !== null ? '#3b82f6' : '#9ca3af'
+            })}
+            ${cardTemplate({
+                title: 'Temperatura Alvo',
+                icon: 'fas fa-crosshairs',
+                value: '--',
+                subtitle: 'Sem fermentação ativa',
+                color: '#9ca3af'
+            })}
+            ${cardTemplate({
+                title: 'Gravidade Atual',
+                icon: 'fas fa-tint',
+                value: ispindelData.gravity ? ispindelData.gravity.toFixed(3) : '--',
+                subtitle: spindelSubtitle,
+                subtitleStyle: spindelSubtitleColor,
+                color: ispindelData.gravity ? (ispindelData.isStale ? '#f59e0b' : '#10b981') : '#9ca3af'
+            })}
+            ${cardTemplate({
+                title: 'Gravidade Alvo',
+                icon: 'fas fa-bullseye',
+                value: '--',
+                subtitle: 'Sem alvo definido',
+                color: '#9ca3af'
+            })}
+        `;
+    }
+    
+    const canvas = document.getElementById('fermentation-chart');
+    const noDataMsg = document.getElementById('no-data-message');
+    const chartContainer = canvas ? canvas.parentElement : null;
+    
+    if (canvas) canvas.style.display = 'none';
+    if (noDataMsg) noDataMsg.style.display = 'none';
+    
+    let noFermentationCard = document.getElementById('no-fermentation-card');
+    
+    if (!noFermentationCard && chartContainer) {
+        noFermentationCard = document.createElement('div');
+        noFermentationCard.id = 'no-fermentation-card';
+        chartContainer.appendChild(noFermentationCard);
+    }
+    
+    if (noFermentationCard) {
+        noFermentationCard.className = 'flex flex-col items-center justify-center py-16';
+        noFermentationCard.innerHTML = `
+            <i class="fas fa-chart-line" style="font-size: 4rem; color: #9ca3af; margin-bottom: 1rem;"></i>
+            <h2 class="text-2xl font-semibold text-gray-700 mb-2">Nenhuma Fermentação Ativa</h2>
+            <p class="text-gray-500 mb-6 text-center max-w-md">
+                Configure e inicie uma fermentação para visualizar o gráfico de temperatura e gravidade aqui.
+            </p>
+            <button onclick="location.href='config.html'" class="btn btn-primary flex items-center gap-2">
+                <i class="fas fa-cog"></i> Ir para Configuração
+            </button>
+        `;
+        noFermentationCard.style.display = 'flex';
+    }
+    
+    const stagesList = document.getElementById('stages-list');
+    if (stagesList) {
+        stagesList.innerHTML = `
+            <div class="p-4 rounded-lg border-2 border-gray-200 bg-gray-50 text-center">
+                <p class="text-gray-500">
+                    <i class="fas fa-info-circle mr-2"></i>
+                    Nenhuma etapa configurada. Inicie uma fermentação para ver as etapas.
+                </p>
             </div>
         `;
     }
-}
-
-// ========== TEMPLATES ==========
-const cardTemplate = ({ title, icon, value, subtitle, color }) => `
-    <div class="card">
-        <div class="flex items-center gap-3 mb-2">
-            <i class="${icon}" style="color: ${color}; font-size: 1.5rem;"></i>
-            <span class="text-sm font-medium text-gray-600">${title}</span>
-        </div>
-        <div class="text-3xl font-bold text-gray-800">
-            ${value}
-        </div>
-        ${subtitle ? `<div class="text-sm text-gray-600 mt-1">${subtitle}</div>` : ''}
-    </div>
-`;
-
-const stageTemplate = (stage, index, isCurrent, isCompleted) => {
-    let borderColor = 'border-gray-200';
-    let bgColor = 'bg-gray-50';
-    let statusText = 'Aguardando';
     
-    if (isCurrent) {
-        borderColor = 'border-blue-500';
-        bgColor = 'bg-blue-50';
-        statusText = 'Em andamento';
-    } else if (isCompleted) {
-        borderColor = 'border-green-500';
-        bgColor = 'bg-green-50';
-        statusText = 'Concluída';
-    }
+    const alertDiv = document.getElementById('esp-status-alert');
+    const badgeDiv = document.getElementById('esp-status-badge');
+    if (alertDiv) alertDiv.classList.add('hidden');
+    if (badgeDiv) badgeDiv.classList.add('hidden');
     
-    return `
-    <div class="p-4 rounded-lg border-2 ${borderColor} ${bgColor}">
-        <div class="flex justify-between items-start">
-            <div>
-                <h3 class="font-semibold text-gray-800">
-                    ${stage.type === 'ramp' ? '<i class="fas fa-chart-line text-blue-600 mr-2"></i>' : ''}
-                    Etapa ${index + 1}
-                    ${isCurrent ? `<span class="ml-2 text-sm text-blue-600">(${statusText})</span>` : ''}
-                    ${isCompleted ? '<span class="ml-2 text-sm text-green-600">(Concluída)</span>' : ''}
-                </h3>
-                <p class="text-sm text-gray-600 mt-1">
-                    ${getStageDescription(stage)}
-                </p>
-            </div>
-        </div>
-    </div>
-    `;
-};
-
-function getStageDescription(stage) {
-    const formatDurationDisplay = (days) => {
-        if (days >= 1) {
-            return days % 1 === 0 ? `${days} dias` : `${days.toFixed(1)} dias`;
-        } else {
-            const totalHours = days * 24;
-            const hours = Math.floor(totalHours);
-            const minutes = Math.round((totalHours - hours) * 60);
-            
-            if (hours === 0 && minutes === 0) {
-                return "menos de 1 minuto";
-            } else if (hours === 0) {
-                return `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-            } else if (minutes === 0) {
-                return `${hours} hora${hours !== 1 ? 's' : ''}`;
-            } else {
-                return `${hours} hora${hours !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-            }
-        }
-    };
-
-    switch(stage.type) {
-        case 'temperature':
-            return `${stage.target_temp}°C por ${formatDurationDisplay(stage.duration)}`;
-        case 'gravity':
-            return `${stage.target_temp}°C até ${stage.target_gravity} SG`;
-        case 'gravity_time':
-            return `${stage.target_temp}°C até ${stage.target_gravity} SG (máx ${formatDurationDisplay(stage.max_duration)})`;
-        case 'ramp':
-            const direction = stage.direction === 'up' ? '▲' : '▼';
-            
-            let rampTimeDisplay;
-            const rampDays = stage.ramp_time / 24;
-            
-            if (rampDays >= 1) {
-                rampTimeDisplay = rampDays % 1 === 0 ? `${rampDays} dias` : `${rampDays.toFixed(1)} dias`;
-            } else {
-                const hours = stage.ramp_time;
-                const minutes = Math.round((hours - Math.floor(hours)) * 60);
-                
-                if (hours === 0 && minutes === 0) {
-                    rampTimeDisplay = "menos de 1 minuto";
-                } else if (Math.floor(hours) === 0) {
-                    rampTimeDisplay = `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-                } else if (minutes === 0) {
-                    rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''}`;
-                } else {
-                    rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-                }
-            }
-            
-            return `${direction} ${stage.start_temp}°C → ${stage.target_temp}°C em ${rampTimeDisplay}`;
-        default:
-            return '';
-    }
+    const coolerStatusDiv = document.getElementById('cooler-status');
+    const heaterStatusDiv = document.getElementById('heater-status');
+    const waitingStatusDiv = document.getElementById('waiting-status');
+    if (coolerStatusDiv) coolerStatusDiv.classList.add('hidden');
+    if (heaterStatusDiv) heaterStatusDiv.classList.add('hidden');
+    if (waitingStatusDiv) waitingStatusDiv.classList.add('hidden');
 }
 
 // ========== INICIALIZAÇÃO ==========
@@ -1309,7 +1511,8 @@ async function initAppAfterAuth() {
         
         refreshInterval = setInterval(autoRefreshData, REFRESH_INTERVAL);
     } catch (error) {
-        alert('Erro ao inicializar o monitor. Por favor, recarregue a página.');
+        console.error('Erro ao inicializar:', error);
+        renderNoActiveFermentation();
     }
 }
 
