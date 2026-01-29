@@ -1,3 +1,4 @@
+//wifi_manager.cpp - Gerenciamento de conexão WiFi
 #include "wifi_manager.h"
 #include "secrets.h"
 

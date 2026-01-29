@@ -36,8 +36,7 @@ public:
 
     // ==================== LEITURAS ====================
     bool sendReading(const char* configId, float tempFridge, 
-                    float tempFermenter, float tempTarget, float gravity,
-                    float spindelTemp = 0, float spindelBat = 0);
+                    float tempFermenter, float tempTarget);
     
     // ==================== CONTROLE ====================
     bool updateControlState(const char* configId, float setpoint, 
@@ -51,7 +50,7 @@ public:
     
     // ==================== ISPINDEL ====================
     bool sendSpindelData(const String& spindelJson);
-    
+ 
     // ==================== UTILIDADES ====================
     bool isConnected();
     void printError(const char* context);

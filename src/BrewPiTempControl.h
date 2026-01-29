@@ -1,4 +1,4 @@
-// BrewPiTempControl.h - Controle de temperatura BrewPi adaptado
+// BrewPiTempControl.h
 #pragma once
 
 #include <Arduino.h>

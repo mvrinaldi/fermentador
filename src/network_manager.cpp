@@ -1,3 +1,4 @@
+//network_manager.cpp - Gerenciamento de rede WiFi e HTTP
 #include "network_manager.h"
 #include "wifi_manager.h"
 #include "http_client.h"

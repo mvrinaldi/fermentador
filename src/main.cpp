@@ -1,8 +1,7 @@
 // main.cpp - Fermentador com MySQL e BrewPi
-// ✅ CONSOLIDADO: Envios MySQL centralizados, duplicações removidas
 
-#define FIRMWARE_VERSION "1.4.0"
-#define IMPLEMENTACAO "Fermentação concluída no servidor"
+#define FIRMWARE_VERSION "1.0.0"
+#define IMPLEMENTACAO "Versão Inicial"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -56,8 +55,6 @@ unsigned long lastSensorCheck = 0;
 
 const unsigned long SENSOR_CHECK_INTERVAL = 30000;   // 30 segundos
 
-int activeConfigId = 0; // Atualizado quando inicia fermentação
-
 // Formata a data de Jan 18 2026 para 18/01/2026
 String getBuildDateFormatted() {
     char month[4];
@@ -96,46 +93,16 @@ String getBuildTimeShort() {
 // ============================================
 
 void setupNTP() {
-    #if DEBUG_MAIN
-    Serial.println(F("[NTP] Configurando sincronização de tempo (UTC)..."));
-    #endif
 
     configTime(0, 0, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
-
-    #if DEBUG_MAIN
-    Serial.print(F("[NTP] Aguardando sincronização"));
-    #endif
 
     int timeout = 0;
     time_t now = time(nullptr);
 
     while (now < 1577836800L && timeout < 100) {
         delay(100);
-        #if DEBUG_MAIN
-        Serial.print(".");
-        #endif
         now = time(nullptr);
         timeout++;
-    }
-    
-    #if DEBUG_MAIN
-    Serial.println();
-    #endif
-
-    if (now > 1577836800L) {
-        #if DEBUG_MAIN
-        Serial.println(F("[NTP] ✅ Sincronizado com sucesso! (UTC)"));
-        
-        struct tm timeinfo;
-        gmtime_r(&now, &timeinfo);
-        char buffer[64];
-        strftime(buffer, sizeof(buffer), "%d/%m/%Y %H:%M:%S UTC", &timeinfo);
-        Serial.printf("[NTP] Data/Hora UTC: %s\n", buffer);
-        #endif
-    } else {
-        #if DEBUG_MAIN
-        Serial.println(F("[NTP] ⚠️ Falha na sincronização"));
-        #endif
     }
 }
 
@@ -151,27 +118,7 @@ void checkNTPSync() {
 
         time_t now = time(nullptr);
         if (now < 1577836800L) {
-            #if DEBUG_MAIN
-            Serial.println(F("[NTP] ⚠️ Perdeu sincronização, tentando reconectar..."));
-            #endif
             setupNTP();
-        }
-    }
-}
-
-// ==================== CARREGA CONFIG ATIVA ====================
-
-void loadActiveConfiguration() {
-    JsonDocument doc;
-    
-    if (httpClient.getActiveFermentation(doc)) {
-        if (doc["active"] == true) {
-            activeConfigId = doc["id"];
-            #if DEBUG_MAIN
-            Serial.printf("[CONFIG] Fermentação ativa: ID %d\n", activeConfigId);
-            #endif
-        } else {
-            activeConfigId = 0;
         }
     }
 }
@@ -184,54 +131,17 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
     
-    #if DEBUG_MAIN
-    Serial.println("\n\n");
-    Serial.println("╔════════════════════════════════════════════════╗");
-    Serial.println("║                                                ║");
-    Serial.println("║     🚀 FERMENTADOR INTELIGENTE - BREWPI      ║");
-    Serial.println("║                                                ║");
-    Serial.println("╚════════════════════════════════════════════════╝");
-    Serial.println("");
-    Serial.printf("📦 Firmware: v%s\n", FIRMWARE_VERSION);
-    Serial.printf("📅 Compilado: %s às %s\n", BUILD_DATE, BUILD_TIME);
-    Serial.printf("🔐 MD5: %s\n", ESP.getSketchMD5().c_str());
-    Serial.printf("💾 Tamanho: %u bytes\n", ESP.getSketchSize());
-    Serial.printf("🆓 Espaço OTA: %u bytes\n", ESP.getFreeSketchSpace());
-    Serial.println("");
-    
-    rst_info *resetInfo = ESP.getResetInfoPtr();
-    
-    Serial.print("🔄 Último reset: ");
-    switch (resetInfo->reason) {
-        case REASON_DEFAULT_RST:
-            Serial.println("Power-on");
-            break;
-        case REASON_WDT_RST:
-            Serial.println("Watchdog Timer");
-            break;
-        case REASON_EXCEPTION_RST:
-            Serial.println("Exception");
-            break;
-        case REASON_SOFT_WDT_RST:
-            Serial.println("Software Watchdog");
-            break;
-        case REASON_SOFT_RESTART:
-            Serial.println("Software Restart");
-            break;
-        case REASON_DEEP_SLEEP_AWAKE:
-            Serial.println("Deep Sleep Wake");
-            break;
-        case REASON_EXT_SYS_RST:
-            Serial.println("Reinício via Software (ESP.restart())");
-            Serial.println("💡 POSSÍVEL OTA RECÉM-CONCLUÍDO!");
-            break;
-        default:
-            Serial.printf("Desconhecido (%d)\n", resetInfo->reason);
-    }
-    
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.println("");
-    #endif
+LOG_MAIN(F(
+"\n\n"
+"╔════════════════════════════════════════════════╗\n"
+"║                                                ║\n"
+"║        FERMENTADOR INTELIGENTE - BREWPI        ║\n"
+"║                                                ║\n"
+"╚════════════════════════════════════════════════╝\n"
+"\n"
+"Firmware: " FIRMWARE_VERSION "\n"
+"Compilado: " BUILD_DATE " " BUILD_TIME "\n"
+));
 
     // ==================== INICIALIZAÇÃO DO SISTEMA ====================
     
@@ -242,21 +152,8 @@ void setup() {
     cooler.atualizar();
     heater.atualizar();
 
-    #if DEBUG_SENSORES
-    Serial.println("✅ Relés inicializados");
-    Serial.printf("   • Cooler: Pino %d (%s)\n",
-                  cooler.pino, cooler.invertido ? "invertido" : "normal");
-    Serial.printf("   • Heater: Pino %d (%s)\n",
-                  heater.pino, heater.invertido ? "invertido" : "normal");
-    Serial.println("\n🌡️  Inicializando sensores de temperatura...");
-    #endif
-
     setupSensorManager();
     
-    #if DEBUG_MAIN
-    Serial.println("✅ Sensores Dallas inicializados");
-    Serial.println("\n🍺 Inicializando sistema BrewPi...");
-    #endif
 
     DallasTemperature* dallasPtr = getSensorsPointer();
     
@@ -264,51 +161,22 @@ void setup() {
         brewPiControl.setSensors(dallasPtr, 1, 0);
         brewPiControl.setActuators(&cooler, &heater);
         brewPiControl.init();
-        
-        #if DEBUG_MAIN
-        Serial.println("✅ Sistema BrewPi inicializado");
-        #endif
-    } else {
-        #if DEBUG_MAIN
-        Serial.println("❌ ERRO: Não foi possível obter ponteiro dos sensores Dallas!");
-        #endif
     }
     
-    #if DEBUG_MAIN
-    Serial.println("\n💾 Carregando estado salvo...");
-    #endif
-
     setupActiveListener();
-    
-    #if DEBUG_MAIN
-    Serial.println("\n📡 Conectando à rede...");
-    #endif
-
     networkSetup(server);
     
     #if DEBUG_TELNET
-    telnetSetup();
-    Serial.println("📡 Telnet debug ativo");
+        telnetSetup();
     #endif
 
     if (WiFi.status() == WL_CONNECTED) {
-        #if DEBUG_MAIN
-        Serial.println("\n⏰ Configurando NTP...");
-        #endif
         setupNTP();
     }
     
     if (isHTTPOnline()) {
-        #if DEBUG_MAIN
-        Serial.println(F("\n📡 Enviando sensores detectados ao servidor..."));
-        #endif
-
         scanAndSendSensors();
         
-        #if DEBUG_MAIN
-        Serial.println(F("\n📥 Buscando configuração de sensores do servidor..."));
-        #endif
-
         String fermenterAddr, fridgeAddr;
         
         if (httpClient.getAssignedSensors(fermenterAddr, fridgeAddr)) {
@@ -316,64 +184,31 @@ void setup() {
             
             if (!fermenterAddr.isEmpty()) {
                 if (saveSensorToEEPROM(SENSOR1_NOME, fermenterAddr)) {
-                    #if DEBUG_MAIN
-                    Serial.println(F("✅ Sensor fermentador salvo na EEPROM"));
-                    #endif
                     updated = true;
                 }
             }
             
             if (!fridgeAddr.isEmpty()) {
                 if (saveSensorToEEPROM(SENSOR2_NOME, fridgeAddr)) {
-                    #if DEBUG_MAIN
-                    Serial.println(F("✅ Sensor geladeira salvo na EEPROM"));
-                    #endif
                     updated = true;
                 }
             }
             
             if (updated) {
-                #if DEBUG_MAIN
-                Serial.println(F("✅ Sensores sincronizados do servidor!"));
-                #endif
-
                 setupSensorManager();
                 
                 DallasTemperature* dallasPtr = getSensorsPointer();
                 if (dallasPtr) {
                     brewPiControl.setSensors(dallasPtr, 1, 0);
-                    #if DEBUG_MAIN
-                    Serial.println(F("✅ Sensores BrewPi atualizados"));
-                    #endif
                 }
             }
-        } else {
-            #if DEBUG_MAIN
-            Serial.println(F("⚠️ Nenhum sensor configurado no servidor"));
-            #endif
         }
         
         if (fermentacaoState.active) {
-            #if DEBUG_MAIN
-            Serial.println(F("\n🔍 Verificando se fermentação ainda está ativa no servidor..."));
-            #endif
             getTargetFermentacao();
         }
     }
     
-    #if DEBUG_MAIN
-    auto lista = listSensors();
-    if (lista.empty()) {
-        Serial.println(F("\n⚠️ Nenhum sensor configurado"));
-        Serial.println(F("➜ Acesse http://fermentador.mvrinaldi.com.br/sensores.html"));
-    } else {
-        Serial.printf("\n✅ %d sensor(es) configurado(s):\n", lista.size());
-        for (const auto& s : lista) {
-            Serial.printf("  - %s: %s\n", s.nome, s.endereco);
-        }
-    }
-    #endif
-
     setupSpindelRoutes(server);
     
     // Endpoint: /version
@@ -519,57 +354,17 @@ void setup() {
     setupOTA(server);
     
     server.begin();
-    #if DEBUG_MAIN
-    Serial.println("🌐 Servidor Web ativo");
-    #endif
     
     if (!fermentacaoState.active) {
         if (state.targetTemp != DEFAULT_TEMPERATURE) {
-            #if DEBUG_MAIN
-            Serial.printf("[Setup] ⚠️  Ajustando temperatura para padrão: %.1f°C\n", DEFAULT_TEMPERATURE);
-            #endif
             updateTargetTemperature(DEFAULT_TEMPERATURE);
         }
     } else {
         if (fermentacaoState.tempTarget < MIN_SAFE_TEMPERATURE || 
             fermentacaoState.tempTarget > MAX_SAFE_TEMPERATURE) {
-            #if DEBUG_MAIN
-            Serial.printf("[Setup] ⚠️  Temperatura alvo inválida: %.1f°C, ajustando para %.1f°C\n",
-                         fermentacaoState.tempTarget, DEFAULT_TEMPERATURE);
-            #endif
             updateTargetTemperature(DEFAULT_TEMPERATURE);
         }
-    }
-   
-    #if DEBUG_MAIN
-    Serial.println("\n==============================================");
-    Serial.println("✅ Sistema BrewPi pronto");
-    Serial.printf("Fermentação ativa: %s\n",
-                  fermentacaoState.active ? "SIM" : "NÃO");
-                  
-    if (fermentacaoState.active) {
-        Serial.printf("ID: %s\n", fermentacaoState.activeId);
-        Serial.printf("Config: %s\n", fermentacaoState.configName);
-        Serial.printf("Etapa: %d/%d\n",
-                      fermentacaoState.currentStageIndex + 1,
-                      fermentacaoState.totalStages);
-        Serial.printf("Temp alvo: %.1f°C\n", fermentacaoState.tempTarget);
-        
-        if (fermentacaoState.stageStartEpoch > 0) {
-            time_t now = time(nullptr);
-            if (now > 1000000000L) {
-                float elapsedH = difftime(now, fermentacaoState.stageStartEpoch) / 3600.0;
-                Serial.printf("Tempo decorrido: %.1f horas\n", elapsedH);
-            }
-        }
-        
-        Serial.println("[BrewPi] 🔄 Sistema carregado com fermentação ativa");
-    } else {
-        Serial.printf("Temperatura padrão: %.1f°C\n", DEFAULT_TEMPERATURE);
-        Serial.println("[BrewPi] 🛑 Sistema em standby");
-    }
-    Serial.println("==============================================\n");
-    #endif
+    }   
 }
 
 // ============================================
@@ -631,7 +426,6 @@ void loop() {
         }
         
         // ✅ ENVIO UNIFICADO: Estado completo + controle (30s interno)
-        // Substitui: enviarEstadoCompleto + sendControlStateMySQL + parte do heartbeat
         if (isHTTPOnline()) {
             verificarTargetAtingido();
             enviarEstadoCompletoMySQL();
@@ -640,10 +434,13 @@ void loop() {
 
     // ═══════════════════════════════════════════════════════════════
     // ✅ HEARTBEAT SIMPLIFICADO (saúde do sistema)
-    // Apenas uptime e free_heap - dados de controle já em enviarEstadoCompleto
+    // Usa fermentacaoState.activeId diretamente
     // ═══════════════════════════════════════════════════════════════
-    if (isHTTPOnline() && activeConfigId > 0) {
-        sendHeartbeatMySQL(activeConfigId);  // Controle de tempo interno (30s)
+    if (isHTTPOnline() && fermentacaoState.active && strlen(fermentacaoState.activeId) > 0) {
+        int configId = atoi(fermentacaoState.activeId);
+        if (configId > 0) {
+            sendHeartbeatMySQL(configId);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -675,12 +472,20 @@ void loop() {
     
     // ═══════════════════════════════════════════════════════════════
     // ✅ ENVIO DE LEITURAS PARA HISTÓRICO (60s)
-    // Substitui: enviarLeiturasSensores + sendCurrentTemperaturesMySQL
     // ═══════════════════════════════════════════════════════════════
     if (isHTTPOnline()) {
-        enviarLeiturasSensoresMySQL();  // Controle de tempo interno (60s)
+        enviarLeiturasSensoresMySQL();
+        
+        float tempF, tempG;
+        bool sensoresOk = readConfiguredTemperatures(tempF, tempG);
+        
+        char logBuf[80];
+        snprintf(logBuf, sizeof(logBuf), 
+                "[DEBUG] Sensores OK: %s, Ferm: %.1f, Geladeira: %.1f",
+                sensoresOk ? "SIM" : "NAO", tempF, tempG);
+        LOG_SENSORES_MAIN(logBuf);
     }
-    
+
     // ═══════════════════════════════════════════════════════════════
     // VERIFICAÇÃO PERIÓDICA DE SENSORES
     // ═══════════════════════════════════════════════════════════════
@@ -693,9 +498,6 @@ void loop() {
                 
                 String fermenterAddr, fridgeAddr;
                 if (httpClient.getAssignedSensors(fermenterAddr, fridgeAddr)) {
-                    #if DEBUG_MAIN
-                    Serial.println(F("📥 Configuração encontrada no servidor!"));
-                    #endif
                     
                     if (!fermenterAddr.isEmpty()) {
                         saveSensorToEEPROM(SENSOR1_NOME, fermenterAddr);
@@ -711,14 +513,6 @@ void loop() {
                         brewPiControl.setSensors(dallasPtr, 1, 0);
                     }
                 }
-            }
-        } else {
-            static unsigned long lastSuccessLog = 0;
-            if (now - lastSuccessLog >= 300000) {
-                #if DEBUG_MAIN
-                Serial.printf("✓ %d sensor(es) configurado(s)\n", lista.size());
-                #endif
-                lastSuccessLog = now;
             }
         }
         

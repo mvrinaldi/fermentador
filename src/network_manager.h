@@ -1,3 +1,4 @@
+//network_manager.h - Gerenciamento de rede WiFi e HTTP
 #pragma once
 #include <ESP8266WebServer.h>
 

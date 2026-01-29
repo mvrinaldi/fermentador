@@ -26,6 +26,8 @@
 
 // Intervalo de envio para o banco de dados (5 minutos)
 #define READINGS_UPDATE_INTERVAL 300000UL
+// Intervalo de envio para o banco de dados (30 segundos para teste)
+// #define READINGS_UPDATE_INTERVAL 30000UL
 
 // === Parâmetros PID === //
 #define PID_KP 20.0f                       // Ganho proporcional

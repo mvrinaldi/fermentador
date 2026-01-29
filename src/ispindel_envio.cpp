@@ -1,5 +1,4 @@
 // ispindel_envio.cpp - Processamento e envio de dados iSpindel
-// ✅ REFATORADO: Envio MySQL movido para mysql_sender.cpp
 #define ENABLE_DATABASE
 
 #include <Arduino.h>
@@ -9,7 +8,7 @@
 #include <ArduinoJson.h>
 
 #include "ispindel_envio.h"
-#include "mysql_sender.h"  // ✅ NOVO: Módulo de envio MySQL
+#include "mysql_sender.h"
 #include "http_client.h"
 #include "network_manager.h"
 #include "globais.h"

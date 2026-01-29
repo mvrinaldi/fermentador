@@ -419,13 +419,13 @@ void getTargetFermentacao() {
     lastActiveCheck = now;
     
     if (WiFi.status() != WL_CONNECTED) {
-        LOG_FERMENTATION(F("[MySQL] ⚠️ WiFi desconectado"));
+        LOG_FERMENTATION(F("[MySQL] WiFi desconectado"));
         isFirstCheck = false;
         return;
     }
 
     LOG_FERMENTATION(F("\n========================================"));
-    LOG_FERMENTATION(F("[MySQL] 🔍 INICIANDO BUSCA DE FERMENTAÇÃO"));
+    LOG_FERMENTATION(F("[MySQL] INICIANDO BUSCA DE FERMENTAÇÃO"));
     LOG_FERMENTATION(F("========================================"));
 
     JsonDocument doc;
@@ -435,13 +435,13 @@ void getTargetFermentacao() {
     LOG_FERMENTATION("[MySQL] getActiveFermentation() retornou: " + String(requestOk ? "TRUE" : "FALSE"));
     
     if (!requestOk) {
-        LOG_FERMENTATION(F("[MySQL] ❌ Falha na requisição HTTP"));
+        LOG_FERMENTATION(F("[MySQL] Falha na requisição HTTP"));
         isFirstCheck = false;
         return;
     }
 
     #if DEBUG_FERMENTATION
-    Serial.println(F("\n[MySQL] 📄 DOCUMENTO JSON RECEBIDO:"));
+    Serial.println(F("\n[MySQL] DOCUMENTO JSON RECEBIDO:"));
     serializeJsonPretty(doc, Serial);
     Serial.println();
     #endif
@@ -458,25 +458,25 @@ void getTargetFermentacao() {
     const char* id = idString.c_str();
     int serverStageIndex = doc["currentStageIndex"] | 0;
     
-    LOG_FERMENTATION(F("\n[MySQL] 🔍 VALORES EXTRAÍDOS:"));
+    LOG_FERMENTATION(F("\n[MySQL] VALORES EXTRAÍDOS:"));
     LOG_FERMENTATION("  active: " + String(active ? "TRUE" : "FALSE"));
     LOG_FERMENTATION("  id: '" + String(id) + "' (length: " + String(strlen(id)) + ")");
     LOG_FERMENTATION("  serverStageIndex: " + String(serverStageIndex));
     
-    LOG_FERMENTATION(F("\n[MySQL] 🔍 ESTADO ATUAL DO SISTEMA:"));
+    LOG_FERMENTATION(F("\n[MySQL] ESTADO ATUAL DO SISTEMA:"));
     LOG_FERMENTATION("  fermentacaoState.active: " + String(fermentacaoState.active ? "TRUE" : "FALSE"));
     LOG_FERMENTATION("  fermentacaoState.activeId: '" + String(fermentacaoState.activeId) + "'");
     LOG_FERMENTATION("  fermentacaoState.currentStageIndex: " + String(fermentacaoState.currentStageIndex));
     LOG_FERMENTATION("  lastActiveId: '" + String(lastActiveId) + "'");
 
     if (!isValidString(id)) {
-        LOG_FERMENTATION(F("[MySQL] ⚠️ ID é inválido ou vazio!"));
+        LOG_FERMENTATION(F("[MySQL] ID é inválido ou vazio!"));
         id = "";
     } else {
-        LOG_FERMENTATION("[MySQL] ✅ ID válido: '" + String(id) + "'");
+        LOG_FERMENTATION("[MySQL] ID válido: '" + String(id) + "'");
     }
 
-    LOG_FERMENTATION(F("\n[MySQL] 🔍 DECISÃO:"));
+    LOG_FERMENTATION(F("\n[MySQL] DECISÃO:"));
 
     if (active && isValidString(id)) {
         LOG_FERMENTATION(F("  → Fermentação ATIVA detectada no servidor"));
@@ -491,7 +491,7 @@ void getTargetFermentacao() {
             LOG_FERMENTATION(F("  → INICIANDO NOVA FERMENTAÇÃO"));
 
             brewPiControl.reset();
-            LOG_FERMENTATION(F("[BrewPi] ✅ Sistema resetado para nova fermentação"));
+            LOG_FERMENTATION(F("[BrewPi] Sistema resetado para nova fermentação"));
             
             fermentacaoState.active = true;
             fermentacaoState.concluidaMantendoTemp = false;
@@ -499,7 +499,7 @@ void getTargetFermentacao() {
             fermentacaoState.currentStageIndex = serverStageIndex;
             safe_strcpy(lastActiveId, id, sizeof(lastActiveId));
 
-            LOG_FERMENTATION("[MySQL] 🔧 Carregando configuração ID: " + String(id));
+            LOG_FERMENTATION("[MySQL] Carregando configuração ID: " + String(id));
 
             loadConfigParameters(id);
 
@@ -509,7 +509,7 @@ void getTargetFermentacao() {
 
             saveStateToEEPROM();
             
-            LOG_FERMENTATION(F("[MySQL] ✅ CONFIGURAÇÃO CONCLUÍDA"));
+            LOG_FERMENTATION(F("[MySQL] CONFIGURAÇÃO CONCLUÍDA"));
             LOG_FERMENTATION("  activeId: '" + String(fermentacaoState.activeId) + "'");
             LOG_FERMENTATION("  tempTarget: " + String(fermentacaoState.tempTarget, 1) + "°C");
             LOG_FERMENTATION("  totalStages: " + String(fermentacaoState.totalStages));
@@ -580,7 +580,7 @@ void getTargetFermentacao() {
         
         if (state.targetTemp == DEFAULT_TEMPERATURE) {
             brewPiControl.reset();
-            LOG_FERMENTATION(F("[BrewPi] ✅ Sistema resetado em modo standby"));
+            LOG_FERMENTATION(F("[BrewPi] Sistema resetado em modo standby"));
         }
     } else if (!active && fermentacaoState.active) {
         // =====================================================
@@ -608,7 +608,7 @@ void loadConfigParameters(const char* configId) {
         return;
     }
 
-    LOG_FERMENTATION("[MySQL] 🔧 Buscando config: " + String(configId));
+    LOG_FERMENTATION("[MySQL] Buscando config: " + String(configId));
     
     JsonDocument doc;
     
@@ -1004,14 +1004,14 @@ void verificarTrocaDeFase() {
             brewPiControl.reset();
             saveStateToEEPROM();
 
-            LOG_FERMENTATION("[Fase] ↪️ Indo para etapa " + String(fermentacaoState.currentStageIndex + 1) + "/" + String(fermentacaoState.totalStages));
+            LOG_FERMENTATION("[Fase] Indo para etapa " + String(fermentacaoState.currentStageIndex + 1) + "/" + String(fermentacaoState.totalStages));
         } else {
             // ✅ CORREÇÃO: Última etapa concluída - NÃO incrementa o índice
             // Mantém o índice na última etapa válida para referência
             // O estado concluidaMantendoTemp controla o comportamento
             
-            LOG_FERMENTATION(F("[Fase] 🎉 TODAS AS ETAPAS CONCLUÍDAS!"));
-            LOG_FERMENTATION(F("[Fase] 🔒 Mantendo última temperatura até comando manual"));
+            LOG_FERMENTATION(F("[Fase] TODAS AS ETAPAS CONCLUÍDAS!"));
+            LOG_FERMENTATION(F("[Fase] Mantendo última temperatura até comando manual"));
             
             concluirFermentacaoMantendoTemperatura();
         }

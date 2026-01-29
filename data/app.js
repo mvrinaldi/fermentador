@@ -1,4 +1,4 @@
-// app.js - Monitor Passivo (COM visualização de Cooler/Heater) - CORRIGIDO
+// app.js - Monitor Passivo (COM visualização de Cooler/Heater)
 const API_BASE_URL = '/api.php?path=';
 
 // ========== VARIÁVEIS GLOBAIS ==========
@@ -10,6 +10,10 @@ const REFRESH_INTERVAL = 30000;
 const ESP_OFFLINE_THRESHOLD = 120000;
 const ISPINDEL_STALE_THRESHOLD = 3600000; // 1 hora em ms
 const SAO_PAULO_UTC_OFFSET = -3 * 60 * 60 * 1000;
+
+// Limites de memória heap do ESP8266 (em bytes)
+const HEAP_WARNING_THRESHOLD = 30000;  // Abaixo disso: atenção (amarelo)
+const HEAP_CRITICAL_THRESHOLD = 15000; // Abaixo disso: crítico (vermelho)
 
 // ========== ESTADO DA APLICAÇÃO ==========
 let appState = {
@@ -636,6 +640,7 @@ function checkESPStatus() {
     };
     
     updateRelayStatus();
+    updateHeapStatus();
     
     if (appState.heartbeat && appState.heartbeat.heartbeat_timestamp) {
         const lastTimestamp = appState.heartbeat.heartbeat_timestamp;
@@ -682,6 +687,72 @@ function checkESPStatus() {
     } else {
         alertDiv.classList.add('hidden');
         badgeDiv.classList.remove('hidden');
+    }
+}
+
+// ========== STATUS MEMÓRIA HEAP ==========
+function updateHeapStatus() {
+    const relayContainer = document.getElementById('relay-status');
+    if (!relayContainer) return;
+    
+    // Remove alerta existente se houver
+    let existingHeapAlert = document.getElementById('heap-status-alert');
+    
+    // Busca free_heap do heartbeat
+    const freeHeap = appState.heartbeat?.free_heap;
+    
+    // **CORREÇÃO AQUI**: Alerta deve aparecer APENAS quando freeHeap for BAIXO
+    // Se não tem dado ou está saudável (> 30KB), esconde o alerta
+    if (!freeHeap || freeHeap > HEAP_WARNING_THRESHOLD) {
+        if (existingHeapAlert) {
+            existingHeapAlert.classList.add('hidden');
+        }
+        return;
+    }
+    
+    // **CORREÇÃO AQUI**: Cria/mostra alerta APENAS quando a memória está baixa
+    if (freeHeap <= HEAP_WARNING_THRESHOLD) {
+        // Cria o elemento se não existir
+        if (!existingHeapAlert) {
+            existingHeapAlert = document.createElement('div');
+            existingHeapAlert.id = 'heap-status-alert';
+            existingHeapAlert.className = 'flex items-center gap-1 text-sm';
+            relayContainer.appendChild(existingHeapAlert);
+        }
+        
+        // Formata o valor em KB
+        const heapKB = (freeHeap / 1024).toFixed(1);
+        
+        // Determina se é crítico ou apenas atenção
+        const isCritical = freeHeap < HEAP_CRITICAL_THRESHOLD;
+        
+        if (isCritical) {
+            existingHeapAlert.innerHTML = `
+                <i class="fas fa-exclamation-triangle text-red-600"></i>
+                <span class="font-semibold text-red-700">
+                    Memória crítica: ${heapKB}KB
+                </span>
+            `;
+            existingHeapAlert.title = 'Memória do ESP8266 muito baixa! Risco de travamento. Considere reiniciar o dispositivo.';
+        } else {
+            existingHeapAlert.innerHTML = `
+                <i class="fas fa-exclamation-circle text-yellow-600"></i>
+                <span class="font-semibold text-yellow-700">
+                    Memória baixa: ${heapKB}KB
+                </span>
+            `;
+            existingHeapAlert.title = 'Memória do ESP8266 abaixo do ideal. Monitore para possíveis problemas.';
+        }
+        
+        existingHeapAlert.classList.remove('hidden');
+        
+        // Log para debug
+        console.log(`⚠️ Heap ${isCritical ? 'CRÍTICO' : 'baixo'}: ${heapKB}KB (${freeHeap} bytes)`);
+    } else {
+        // **CORREÇÃO AQUI**: Se a memória estiver OK (> 30KB), esconde o alerta
+        if (existingHeapAlert) {
+            existingHeapAlert.classList.add('hidden');
+        }
     }
 }
 
@@ -1121,14 +1192,6 @@ function renderInfoCards() {
             statusText = 'Aquecendo';
             statusColor = '#ef4444';
         }
-        
-        infoCards.innerHTML += cardTemplate({
-            title: 'Status do Controle',
-            icon: statusIcon,
-            value: statusText,
-            subtitle: statusSubtitle,
-            color: statusColor
-        });
     }
 }
 
@@ -1495,9 +1558,11 @@ function renderNoActiveFermentation() {
     const coolerStatusDiv = document.getElementById('cooler-status');
     const heaterStatusDiv = document.getElementById('heater-status');
     const waitingStatusDiv = document.getElementById('waiting-status');
+    const heapStatusDiv = document.getElementById('heap-status-alert');
     if (coolerStatusDiv) coolerStatusDiv.classList.add('hidden');
     if (heaterStatusDiv) heaterStatusDiv.classList.add('hidden');
     if (waitingStatusDiv) waitingStatusDiv.classList.add('hidden');
+    if (heapStatusDiv) heapStatusDiv.classList.add('hidden');
 }
 
 // ========== INICIALIZAÇÃO ==========

@@ -22,7 +22,7 @@ void checkSerialCommands();
 
 void clearAllEEPROM() {
     #if DEBUG_EEPROM
-    LOG_EEPROM("⚠️ LIMPANDO TODA A EEPROM...");
+    LOG_EEPROM("LIMPANDO TODA A EEPROM...");
     #endif
     
     EEPROM.begin(512);
@@ -33,14 +33,14 @@ void clearAllEEPROM() {
     
     if (EEPROM.commit()) {
         #if DEBUG_EEPROM
-        LOG_EEPROM("✅ EEPROM limpa! Reiniciando em 3s...");
+        LOG_EEPROM("EEPROM limpa! Reiniciando em 3s...");
         #endif
         delay(3000);
         ESP.restart();  // ✅ SEMPRE REINICIA
     }
     #if DEBUG_EEPROM
     else {
-        LOG_EEPROM("❌ Falha ao limpar EEPROM");
+        LOG_EEPROM("Falha ao limpar EEPROM");
     }
     #endif
 }
@@ -48,7 +48,7 @@ void clearAllEEPROM() {
 void diagnosticEEPROM() {
     #if DEBUG_EEPROM
     // Toda a função dentro do #if
-    LOG_EEPROM("📊 DIAGNÓSTICO DA EEPROM");
+    LOG_EEPROM("DIAGNÓSTICO DA EEPROM");
     LOG_EEPROM("==============================================");
     
     EEPROM.begin(512);
@@ -89,7 +89,7 @@ void checkSerialCommands() {
             diagnosticEEPROM();
         } else if (cmd.equalsIgnoreCase("RESTART")) {
             #if DEBUG_EEPROM
-            LOG_EEPROM("🔄 Reiniciando...");
+            LOG_EEPROM("Reiniciando...");
             #endif
             delay(1000);
             ESP.restart();

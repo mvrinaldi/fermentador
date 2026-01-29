@@ -1,3 +1,4 @@
+// eeprom_layout.h
 #pragma once
 
 #include <Arduino.h>

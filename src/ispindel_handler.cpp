@@ -1,18 +1,84 @@
+// ispindel_handler.cpp
 #include <ArduinoJson.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
 
 #include "ispindel_handler.h"
 #include "ispindel_struct.h"
 #include "debug_config.h"
+#include "http_client.h"
+#include "controle_fermentacao.h"
+#include "definitions.h"  // Para SERVER_URL e isValidString
+#include "globais.h"      // Para fermentacaoState
 
 // Definição real da variável global
 SpindelData mySpindel;
+
+// Função auxiliar para envio imediato ao MySQL
+void sendImmediateToMySQL() {
+    if (!(fermentacaoState.active || fermentacaoState.concluidaMantendoTemp)) {
+        #if DEBUG_ISPINDEL
+        Serial.println(F("[iSpindel] ⏸️  Sem fermentação ativa - não envia MySQL"));
+        #endif
+        return;
+    }
+    
+    if (!isValidString(fermentacaoState.activeId)) {
+        #if DEBUG_ISPINDEL
+        Serial.println(F("[iSpindel] ❌ ID inválido - não envia MySQL"));
+        #endif
+        return;
+    }
+    
+    JsonDocument doc;
+    doc["name"] = mySpindel.name;
+    doc["temperature"] = mySpindel.temperature;
+    doc["gravity"] = mySpindel.gravity;
+    doc["battery"] = mySpindel.battery;
+    doc["angle"] = mySpindel.angle;
+    doc["config_id"] = fermentacaoState.activeId;
+    
+    WiFiClient wifiClient;
+    HTTPClient http;
+    
+    String url = String(SERVER_URL) + "api.php?path=ispindel/data";
+    
+    if (!http.begin(wifiClient, url)) {
+        #if DEBUG_ISPINDEL
+        Serial.println(F("[iSpindel] ❌ Não foi possível iniciar conexão MySQL"));
+        #endif
+        return;
+    }
+    
+    http.setTimeout(5000);
+    http.addHeader("Content-Type", "application/json");
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    #if DEBUG_ISPINDEL
+    Serial.printf("[iSpindel] Enviando para MySQL: %s\n", payload.c_str());
+    #endif
+        
+    #if DEBUG_ISPINDEL
+    int code = http.POST(payload);
+    bool success = (code == HTTP_CODE_OK || code == HTTP_CODE_CREATED);
+    if (success) {
+        Serial.println(F("[iSpindel] ✅ MySQL: Envio imediato OK"));
+    } else {
+        Serial.printf("[iSpindel] ❌ Falha MySQL. Código: %d\n", code);
+    }
+    #endif
+    
+    http.end();
+}
 
 void setupSpindelRoutes(ESP8266WebServer& server) {
     LOG_ISPINDEL("[iSpindel] Rotas do iSpindel inicializadas");
     
     server.on("/gravity", HTTP_POST, [&server]() {
         // Log 1: Quando a requisição é recebida
-        LOG_ISPINDEL("[iSpindel] 📥 Requisição POST recebida em /gravity");
+        LOG_ISPINDEL("[iSpindel] Requisição POST recebida em /gravity");
 
         if (!server.hasArg("plain")) {
             LOG_ISPINDEL("[iSpindel] Body ausente na requisição");
@@ -57,6 +123,9 @@ void setupSpindelRoutes(ESP8266WebServer& server) {
 
         // Log 4: Confirmação de processamento
         LOG_ISPINDEL("[iSpindel] Dados processados e armazenados");
+
+        // ✅ CHAMADA DA FUNÇÃO DE ENVIO IMEDIATO
+        sendImmediateToMySQL();
 
         server.send(200, "text/plain", "OK");
     });

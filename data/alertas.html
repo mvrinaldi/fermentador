@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuração de Alertas - Fermentação</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .notification-card {
+            transition: all 0.3s ease;
+        }
+        .notification-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .3s;
+            border-radius: 26px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+        input:checked + .toggle-slider {
+            background-color: #10b981;
+        }
+        input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+        .alert-item {
+            animation: slideIn 0.3s ease;
+        }
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    
+    <!-- Header -->
+    <header class="bg-gradient-to-r from-amber-600 to-amber-700 text-white shadow-lg">
+        <div class="container mx-auto px-4 py-4">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center gap-3">
+                    <i class="fas fa-bell text-2xl"></i>
+                    <h1 class="text-xl font-bold">Sistema de Alertas</h1>
+                </div>
+                <nav class="flex gap-4">
+                    <a href="index.html" class="hover:text-amber-200 transition">
+                        <i class="fas fa-chart-line mr-1"></i> Monitor
+                    </a>
+                    <a href="config.html" class="hover:text-amber-200 transition">
+                        <i class="fas fa-cog mr-1"></i> Configurações
+                    </a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main class="container mx-auto px-4 py-6">
+        
+        <!-- Status Card -->
+        <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <div id="status-icon" class="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
+                        <i class="fas fa-bell-slash text-gray-400 text-xl"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-gray-800">Status do Sistema</h2>
+                        <p id="status-text" class="text-gray-500">Carregando...</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span class="text-sm text-gray-500">Alertas Ativados</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="alerts-enabled" onchange="toggleAlerts()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-6">
+            
+            <!-- Configuração WhatsApp -->
+            <div class="notification-card bg-white rounded-xl shadow-md p-6">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                        <i class="fab fa-whatsapp text-green-600 text-xl"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-gray-800">WhatsApp</h3>
+                        <p class="text-sm text-gray-500">Via CallMeBot (gratuito)</p>
+                    </div>
+                </div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Número do WhatsApp
+                        </label>
+                        <input type="text" id="whatsapp_phone" 
+                               placeholder="5541999999999" 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent">
+                        <p class="text-xs text-gray-500 mt-1">Com código do país (55 para Brasil)</p>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            API Key (CallMeBot)
+                        </label>
+                        <input type="password" id="whatsapp_apikey" 
+                               placeholder="Sua API Key" 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent">
+                        <p class="text-xs text-gray-500 mt-1">
+                            <a href="#" onclick="showCallMeBotInstructions()" class="text-green-600 hover:underline">
+                                Como obter a API Key?
+                            </a>
+                        </p>
+                    </div>
+                    
+                    <button onclick="testWhatsApp()" 
+                            class="w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-lg transition flex items-center justify-center gap-2">
+                        <i class="fas fa-paper-plane"></i>
+                        Enviar Teste
+                    </button>
+                </div>
+            </div>
+
+            <!-- Configuração Telegram -->
+            <div class="notification-card bg-white rounded-xl shadow-md p-6">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                        <i class="fab fa-telegram text-blue-500 text-xl"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-gray-800">Telegram</h3>
+                        <p class="text-sm text-gray-500">Via Bot API (gratuito)</p>
+                    </div>
+                </div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Bot Token
+                        </label>
+                        <input type="password" id="telegram_bot_token" 
+                               placeholder="123456789:ABCdefGHI..." 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <p class="text-xs text-gray-500 mt-1">Obtido com @BotFather</p>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Chat ID
+                        </label>
+                        <input type="text" id="telegram_chat_id" 
+                               placeholder="123456789" 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <p class="text-xs text-gray-500 mt-1">
+                            <a href="#" onclick="showTelegramInstructions()" class="text-blue-600 hover:underline">
+                                Como obter o Chat ID?
+                            </a>
+                        </p>
+                    </div>
+                    
+                    <button onclick="testTelegram()" 
+                            class="w-full bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded-lg transition flex items-center justify-center gap-2">
+                        <i class="fas fa-paper-plane"></i>
+                        Enviar Teste
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Configurações de Limites -->
+        <div class="bg-white rounded-xl shadow-md p-6 mt-6">
+            <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <i class="fas fa-sliders-h text-amber-600"></i>
+                Configurações de Alertas
+            </h3>
+            
+            <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Nível Mínimo
+                    </label>
+                    <select id="min_level" 
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500">
+                        <option value="info">Todos (Info, Aviso, Crítico)</option>
+                        <option value="warning" selected>Aviso e Crítico</option>
+                        <option value="critical">Apenas Crítico</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Tolerância Temperatura (°C)
+                    </label>
+                    <input type="number" id="temp_tolerance" value="2" step="0.5" min="0.5" max="10"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500">
+                    <p class="text-xs text-gray-500 mt-1">Diferença para disparar aviso</p>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Tolerância Crítica (°C)
+                    </label>
+                    <input type="number" id="temp_critical_tolerance" value="4" step="0.5" min="1" max="15"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500">
+                    <p class="text-xs text-gray-500 mt-1">Diferença para alerta crítico</p>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        Cooldown (minutos)
+                    </label>
+                    <input type="number" id="cooldown_minutes" value="30" min="5" max="120"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500">
+                    <p class="text-xs text-gray-500 mt-1">Não repetir alerta em X min</p>
+                </div>
+            </div>
+            
+            <div class="mt-4 flex justify-end">
+                <button onclick="saveConfig()" 
+                        class="bg-amber-600 hover:bg-amber-700 text-white py-2 px-6 rounded-lg transition flex items-center gap-2">
+                    <i class="fas fa-save"></i>
+                    Salvar Configurações
+                </button>
+            </div>
+        </div>
+
+        <!-- Lista de Alertas Recentes -->
+        <div class="bg-white rounded-xl shadow-md p-6 mt-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-semibold text-gray-800 flex items-center gap-2">
+                    <i class="fas fa-history text-amber-600"></i>
+                    Alertas Recentes
+                    <span id="unread-count" class="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full hidden">0</span>
+                </h3>
+                <div class="flex gap-2">
+                    <button onclick="markAllRead()" 
+                            class="text-sm text-gray-600 hover:text-amber-600 transition">
+                        <i class="fas fa-check-double mr-1"></i>
+                        Marcar todas como lidas
+                    </button>
+                    <button onclick="loadAlerts()" 
+                            class="text-sm text-gray-600 hover:text-amber-600 transition">
+                        <i class="fas fa-sync-alt mr-1"></i>
+                        Atualizar
+                    </button>
+                </div>
+            </div>
+            
+            <div id="alerts-list" class="space-y-2">
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                    <p>Carregando alertas...</p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Modal de Instruções -->
+    <div id="instructions-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 id="modal-title" class="text-lg font-semibold text-gray-800"></h3>
+                    <button onclick="closeModal()" class="text-gray-500 hover:text-gray-700">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+                <div id="modal-content" class="text-gray-600"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2"></div>
+
+    <script>
+        const API_BASE = 'api/alerts.php';
+        
+        // Carregar configurações ao iniciar
+        document.addEventListener('DOMContentLoaded', () => {
+            loadConfig();
+            loadAlerts();
+        });
+        
+        // Carregar configurações do servidor
+        async function loadConfig() {
+            try {
+                const response = await fetch(`${API_BASE}?action=config`);
+                const data = await response.json();
+                
+                if (data.success && data.config) {
+                    const config = data.config;
+                    
+                    // Preencher campos
+                    document.getElementById('alerts-enabled').checked = config.enabled === '1';
+                    document.getElementById('whatsapp_phone').value = config.whatsapp_phone || '';
+                    document.getElementById('telegram_chat_id').value = config.telegram_chat_id || '';
+                    document.getElementById('min_level').value = config.min_level || 'warning';
+                    document.getElementById('temp_tolerance').value = config.temp_tolerance || '2';
+                    document.getElementById('temp_critical_tolerance').value = config.temp_critical_tolerance || '4';
+                    document.getElementById('cooldown_minutes').value = config.cooldown_minutes || '30';
+                    
+                    // Indicar se API keys estão configuradas
+                    if (config.whatsapp_apikey_set) {
+                        document.getElementById('whatsapp_apikey').placeholder = '••••••••••••';
+                    }
+                    if (config.telegram_bot_token_set) {
+                        document.getElementById('telegram_bot_token').placeholder = '••••••••••••';
+                    }
+                    
+                    updateStatusUI(config.enabled === '1');
+                }
+            } catch (error) {
+                console.error('Erro ao carregar configurações:', error);
+                showToast('Erro ao carregar configurações', 'error');
+            }
+        }
+        
+        // Salvar configurações
+        async function saveConfig() {
+            const config = {
+                enabled: document.getElementById('alerts-enabled').checked ? '1' : '0',
+                min_level: document.getElementById('min_level').value,
+                whatsapp_phone: document.getElementById('whatsapp_phone').value,
+                telegram_chat_id: document.getElementById('telegram_chat_id').value,
+                temp_tolerance: document.getElementById('temp_tolerance').value,
+                temp_critical_tolerance: document.getElementById('temp_critical_tolerance').value,
+                cooldown_minutes: document.getElementById('cooldown_minutes').value
+            };
+            
+            // Só enviar API keys se preenchidas (não sobrescrever com vazio)
+            const whatsappApiKey = document.getElementById('whatsapp_apikey').value;
+            if (whatsappApiKey && !whatsappApiKey.includes('•')) {
+                config.whatsapp_apikey = whatsappApiKey;
+            }
+            
+            const telegramToken = document.getElementById('telegram_bot_token').value;
+            if (telegramToken && !telegramToken.includes('•')) {
+                config.telegram_bot_token = telegramToken;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}?action=config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showToast('Configurações salvas com sucesso!', 'success');
+                    updateStatusUI(config.enabled === '1');
+                } else {
+                    showToast(data.error || 'Erro ao salvar', 'error');
+                }
+            } catch (error) {
+                console.error('Erro ao salvar:', error);
+                showToast('Erro ao salvar configurações', 'error');
+            }
+        }
+        
+        // Toggle de alertas
+        function toggleAlerts() {
+            saveConfig();
+        }
+        
+        // Atualizar UI de status
+        function updateStatusUI(enabled) {
+            const icon = document.getElementById('status-icon');
+            const text = document.getElementById('status-text');
+            
+            if (enabled) {
+                icon.className = 'w-12 h-12 rounded-full bg-green-100 flex items-center justify-center';
+                icon.innerHTML = '<i class="fas fa-bell text-green-600 text-xl"></i>';
+                text.textContent = 'Sistema de alertas ativado';
+                text.className = 'text-green-600';
+            } else {
+                icon.className = 'w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center';
+                icon.innerHTML = '<i class="fas fa-bell-slash text-gray-400 text-xl"></i>';
+                text.textContent = 'Sistema de alertas desativado';
+                text.className = 'text-gray-500';
+            }
+        }
+        
+        // Testar WhatsApp
+        async function testWhatsApp() {
+            await saveConfig(); // Salvar antes de testar
+            
+            showToast('Enviando teste via WhatsApp...', 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE}?action=test`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type: 'whatsapp' })
+                });
+                
+                const data = await response.json();
+                
+                if (data.results?.whatsapp?.sent) {
+                    showToast('Mensagem WhatsApp enviada! Verifique seu celular.', 'success');
+                } else {
+                    const error = data.results?.whatsapp?.error || data.results?.whatsapp?.response || 'Falha no envio';
+                    showToast('Erro: ' + error, 'error');
+                }
+            } catch (error) {
+                showToast('Erro ao enviar teste', 'error');
+            }
+        }
+        
+        // Testar Telegram
+        async function testTelegram() {
+            await saveConfig(); // Salvar antes de testar
+            
+            showToast('Enviando teste via Telegram...', 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE}?action=test`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type: 'telegram' })
+                });
+                
+                const data = await response.json();
+                
+                if (data.results?.telegram?.sent) {
+                    showToast('Mensagem Telegram enviada! Verifique seu celular.', 'success');
+                } else {
+                    const error = data.results?.telegram?.error || 
+                                  data.results?.telegram?.response?.description || 
+                                  'Falha no envio';
+                    showToast('Erro: ' + error, 'error');
+                }
+            } catch (error) {
+                showToast('Erro ao enviar teste', 'error');
+            }
+        }
+        
+        // Carregar alertas
+        async function loadAlerts() {
+            try {
+                const response = await fetch(`${API_BASE}?action=all&limit=50`);
+                const data = await response.json();
+                
+                const container = document.getElementById('alerts-list');
+                const unreadCount = document.getElementById('unread-count');
+                
+                if (!data.alerts || data.alerts.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center text-gray-500 py-8">
+                            <i class="fas fa-check-circle text-green-500 text-3xl mb-2"></i>
+                            <p>Nenhum alerta registrado</p>
+                        </div>
+                    `;
+                    unreadCount.classList.add('hidden');
+                    return;
+                }
+                
+                // Contar não lidos
+                const unread = data.alerts.filter(a => a.is_read === '0' || a.is_read === 0).length;
+                if (unread > 0) {
+                    unreadCount.textContent = unread;
+                    unreadCount.classList.remove('hidden');
+                } else {
+                    unreadCount.classList.add('hidden');
+                }
+                
+                // Renderizar alertas
+                container.innerHTML = data.alerts.map(alert => {
+                    const levelColors = {
+                        'critical': 'bg-red-50 border-red-200 text-red-800',
+                        'warning': 'bg-yellow-50 border-yellow-200 text-yellow-800',
+                        'info': 'bg-blue-50 border-blue-200 text-blue-800'
+                    };
+                    
+                    const levelIcons = {
+                        'critical': 'fa-exclamation-circle text-red-500',
+                        'warning': 'fa-exclamation-triangle text-yellow-500',
+                        'info': 'fa-info-circle text-blue-500'
+                    };
+                    
+                    const isUnread = alert.is_read === '0' || alert.is_read === 0;
+                    const colorClass = levelColors[alert.alert_level] || levelColors.info;
+                    const iconClass = levelIcons[alert.alert_level] || levelIcons.info;
+                    
+                    const date = new Date(alert.created_at);
+                    const timeAgo = formatTimeAgo(date);
+                    
+                    return `
+                        <div class="alert-item border rounded-lg p-3 ${colorClass} ${isUnread ? 'border-l-4' : ''}" 
+                             data-alert-id="${alert.id}">
+                            <div class="flex items-start gap-3">
+                                <i class="fas ${iconClass} mt-0.5"></i>
+                                <div class="flex-1">
+                                    <p class="text-sm">${escapeHtml(alert.message)}</p>
+                                    <p class="text-xs opacity-70 mt-1">${timeAgo}</p>
+                                </div>
+                                ${isUnread ? `
+                                    <button onclick="markRead(${alert.id})" 
+                                            class="text-xs opacity-50 hover:opacity-100 transition">
+                                        <i class="fas fa-check"></i>
+                                    </button>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                console.error('Erro ao carregar alertas:', error);
+                document.getElementById('alerts-list').innerHTML = `
+                    <div class="text-center text-red-500 py-8">
+                        <i class="fas fa-exclamation-triangle text-2xl mb-2"></i>
+                        <p>Erro ao carregar alertas</p>
+                    </div>
+                `;
+            }
+        }
+        
+        // Marcar alerta como lido
+        async function markRead(alertId) {
+            try {
+                await fetch(`${API_BASE}?action=read`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ alert_id: alertId })
+                });
+                
+                loadAlerts();
+            } catch (error) {
+                showToast('Erro ao marcar alerta', 'error');
+            }
+        }
+        
+        // Marcar todos como lidos
+        async function markAllRead() {
+            try {
+                await fetch(`${API_BASE}?action=read-all`, {
+                    method: 'POST'
+                });
+                
+                showToast('Todos alertas marcados como lidos', 'success');
+                loadAlerts();
+            } catch (error) {
+                showToast('Erro ao marcar alertas', 'error');
+            }
+        }
+        
+        // Mostrar instruções do CallMeBot
+        function showCallMeBotInstructions() {
+            document.getElementById('modal-title').textContent = 'Configurar WhatsApp (CallMeBot)';
+            document.getElementById('modal-content').innerHTML = `
+                <ol class="list-decimal list-inside space-y-3">
+                    <li>Adicione o número <strong>+34 644 71 81 99</strong> aos seus contatos do WhatsApp</li>
+                    <li>Envie a seguinte mensagem para esse número via WhatsApp:
+                        <div class="bg-gray-100 p-2 rounded mt-1 font-mono text-sm">
+                            I allow callmebot to send me messages
+                        </div>
+                    </li>
+                    <li>Você receberá uma resposta com sua <strong>API Key</strong></li>
+                    <li>Copie a API Key e cole no campo acima</li>
+                    <li>No campo "Número do WhatsApp", coloque seu número com código do país (ex: 5541999999999)</li>
+                </ol>
+                <div class="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p class="text-amber-800 text-sm">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        <strong>Dica:</strong> O CallMeBot é gratuito, mas tem limite de mensagens. 
+                        Para uso intensivo, considere o Telegram (ilimitado).
+                    </p>
+                </div>
+            `;
+            document.getElementById('instructions-modal').classList.remove('hidden');
+            document.getElementById('instructions-modal').classList.add('flex');
+        }
+        
+        // Mostrar instruções do Telegram
+        function showTelegramInstructions() {
+            document.getElementById('modal-title').textContent = 'Configurar Telegram';
+            document.getElementById('modal-content').innerHTML = `
+                <h4 class="font-semibold mb-2">1. Criar um Bot</h4>
+                <ol class="list-decimal list-inside space-y-2 mb-4">
+                    <li>Abra o Telegram e busque por <strong>@BotFather</strong></li>
+                    <li>Envie o comando <code class="bg-gray-100 px-1 rounded">/newbot</code></li>
+                    <li>Escolha um nome para o bot (ex: "Meu Alerta Fermentação")</li>
+                    <li>Escolha um username (deve terminar em "bot", ex: "minha_fermentacao_bot")</li>
+                    <li>Você receberá um <strong>Token</strong> - copie e cole no campo "Bot Token"</li>
+                </ol>
+                
+                <h4 class="font-semibold mb-2">2. Obter seu Chat ID</h4>
+                <ol class="list-decimal list-inside space-y-2">
+                    <li>Inicie uma conversa com seu bot (busque pelo username que você criou)</li>
+                    <li>Envie qualquer mensagem para ele</li>
+                    <li>Acesse no navegador:
+                        <div class="bg-gray-100 p-2 rounded mt-1 font-mono text-xs break-all">
+                            https://api.telegram.org/bot<strong>SEU_TOKEN</strong>/getUpdates
+                        </div>
+                    </li>
+                    <li>Procure por <code>"chat":{"id":</code> - o número é seu Chat ID</li>
+                </ol>
+                
+                <div class="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <p class="text-green-800 text-sm">
+                        <i class="fas fa-check-circle mr-1"></i>
+                        <strong>Vantagem:</strong> Telegram é totalmente gratuito e sem limites!
+                    </p>
+                </div>
+            `;
+            document.getElementById('instructions-modal').classList.remove('hidden');
+            document.getElementById('instructions-modal').classList.add('flex');
+        }
+        
+        // Fechar modal
+        function closeModal() {
+            document.getElementById('instructions-modal').classList.add('hidden');
+            document.getElementById('instructions-modal').classList.remove('flex');
+        }
+        
+        // Fechar modal ao clicar fora
+        document.getElementById('instructions-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'instructions-modal') {
+                closeModal();
+            }
+        });
+        
+        // Mostrar toast
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            
+            const colors = {
+                'success': 'bg-green-500',
+                'error': 'bg-red-500',
+                'warning': 'bg-yellow-500',
+                'info': 'bg-blue-500'
+            };
+            
+            const icons = {
+                'success': 'fa-check-circle',
+                'error': 'fa-exclamation-circle',
+                'warning': 'fa-exclamation-triangle',
+                'info': 'fa-info-circle'
+            };
+            
+            const toast = document.createElement('div');
+            toast.className = `${colors[type]} text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 transform transition-all duration-300 translate-x-full`;
+            toast.innerHTML = `
+                <i class="fas ${icons[type]}"></i>
+                <span>${escapeHtml(message)}</span>
+            `;
+            
+            container.appendChild(toast);
+            
+            // Animar entrada
+            setTimeout(() => toast.classList.remove('translate-x-full'), 10);
+            
+            // Remover após 4s
+            setTimeout(() => {
+                toast.classList.add('translate-x-full');
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+        
+        // Formatar tempo relativo
+        function formatTimeAgo(date) {
+            const seconds = Math.floor((new Date() - date) / 1000);
+            
+            if (seconds < 60) return 'Agora mesmo';
+            if (seconds < 3600) return `${Math.floor(seconds / 60)} min atrás`;
+            if (seconds < 86400) return `${Math.floor(seconds / 3600)}h atrás`;
+            if (seconds < 604800) return `${Math.floor(seconds / 86400)} dias atrás`;
+            
+            return date.toLocaleDateString('pt-BR') + ' ' + date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        }
+        
+        // Escapar HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Atualizar alertas automaticamente a cada 30s
+        setInterval(loadAlerts, 30000);
+    </script>
+</body>
+</html>

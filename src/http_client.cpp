@@ -46,15 +46,7 @@ bool FermentadorHTTPClient::makeRequest(const String& endpoint, const String& me
     }
 
     yield();
-    
-    #if DEBUG_HTTP
-    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
-        Serial.println(F("[HTTP] ✅ Requisição bem-sucedida"));
-    } else {
-        Serial.printf("[HTTP] ❌ Código HTTP: %d\n", httpCode);
-    }
-    #endif
-    
+        
     if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
         response = http.getString();
         http.end();
@@ -72,23 +64,14 @@ bool FermentadorHTTPClient::makeRequest(const String& endpoint, const String& me
 bool FermentadorHTTPClient::getActiveFermentation(JsonDocument& doc) {
     String response;
     yield();
-    // CORREÇÃO: Passar nullptr em vez de "" para requisições GET [1]
+    // CORREÇÃO: Passar nullptr em vez de "" para requisições GET
     if (!makeRequest("api/esp/active.php", "GET", nullptr, response)) {
-        #if DEBUG_HTTP
-        Serial.println(F("[HTTP] ❌ Falha em getActiveFermentation"));
-        #endif
         return false;
     }
     
     yield();
     DeserializationError error = deserializeJson(doc, response);
-    
-    #if DEBUG_HTTP
-    if (error) {
-        Serial.printf("[HTTP] ❌ JSON parse error: %s\n", error.c_str());
-    }
-    #endif
-    
+        
     return !error;
 }
 
@@ -120,7 +103,7 @@ bool FermentadorHTTPClient::updateFermentationState(const char* configId, const 
     String endpoint = "api/esp/state.php?config_id=" + String(configId);
     String response;
     yield();
-    // CORREÇÃO: Passa o endereço do doc diretamente para o makeRequest [3, 4]
+
     bool result = makeRequest(endpoint, "POST", &doc, response);
     
     #if DEBUG_HTTP
@@ -139,8 +122,7 @@ bool FermentadorHTTPClient::updateFermentationState(const char* configId, const 
 // =====================================================
 
 bool FermentadorHTTPClient::sendReading(const char* configId, float tempFridge, 
-                                        float tempFermenter, float tempTarget, float gravity,
-                                        float spindelTemp, float spindelBat) {
+                                        float tempFermenter, float tempTarget) {
     JsonDocument doc;
     if (configId != nullptr && strlen(configId) > 0) {
         doc["cid"] = configId;
@@ -149,14 +131,8 @@ bool FermentadorHTTPClient::sendReading(const char* configId, float tempFridge,
     doc["tb"] = tempFermenter;
     doc["tt"] = tempTarget;
     
-    if (gravity > 0.01) {
-        doc["g"] = gravity;
-        if (spindelTemp > 0) doc["st"] = spindelTemp;
-        if (spindelBat > 0) doc["sb"] = spindelBat;
-    }
-
     String response;
-    bool result = makeRequest("api/esp/reading.php", "POST", &doc, response);
+    bool result = makeRequest("api.php?path=readings", "POST", &doc, response);
     
     #if DEBUG_HTTP
     if (result) {
@@ -178,7 +154,7 @@ bool FermentadorHTTPClient::updateControlState(const char* configId, float setpo
     String response;
     yield();
 
-    bool result = makeRequest("api/esp/control.php", "POST", &doc, response);
+    bool result = makeRequest("api.php?path=control", "POST", &doc, response);
     
     #if DEBUG_HTTP
     if (result) {
@@ -266,7 +242,7 @@ bool FermentadorHTTPClient::sendSpindelData(const String& spindelJson) {
     JsonDocument doc;
     deserializeJson(doc, spindelJson);
     String response;
-    return makeRequest("api/esp/ispindel.php", "POST", &doc, response);
+    return makeRequest("api.php?path=ispindel/data", "POST", &doc, response);
 }
 
 void FermentadorHTTPClient::printError(const char* context) {

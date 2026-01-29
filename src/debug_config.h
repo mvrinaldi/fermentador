@@ -15,13 +15,14 @@
 #define DEBUG_HTTP          0
 #define DEBUG_FERMENTATION  0
 #define DEBUG_SENSORES      0
+#define DEBUG_SENSORES_MAIN 0
 #define DEBUG_BREWPI        0
 #define DEBUG_EEPROM        0
 #define DEBUG_MAIN          0
 #define DEBUG_HEARTBEAT     0
 #define DEBUG_ENVIODADOS    0
 #define DEBUG_ESTADO        0 // Envia logs do State: AGUARDANDO, Cooler: OFF, Heater: OFF ou Wait: Proteção: intervalo mínimo resfriamento
-#define DEBUG_ISPINDEL      1
+#define DEBUG_ISPINDEL      0
 #define DEBUG_TELNET        1 //TELNET SÓ FUNCIONA COM ESSE HABILITADO
 
 // ============================================
@@ -44,6 +45,12 @@
   #define LOG_SENSORES(x) do { Serial.println(x); telnetLog(x); } while(0)
 #else
   #define LOG_SENSORES(x)
+#endif
+
+#if DEBUG_SENSORES_MAIN
+  #define LOG_SENSORES_MAIN(x) do { Serial.println(x); telnetLog(x); } while(0)
+#else
+  #define LOG_SENSORES_MAIN(x)
 #endif
 
 #if DEBUG_BREWPI

@@ -1,4 +1,4 @@
-// BrewPiTempControl.cpp - Implementação COMPLETA do controle BrewPi
+// BrewPiTempControl.cpp
 #include "BrewPiTempControl.h"
 #include "globais.h"
 #include "debug_config.h"

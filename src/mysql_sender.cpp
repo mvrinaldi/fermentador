@@ -258,7 +258,6 @@ void compressStateData(JsonDocument &doc) {
 
 // =====================================================
 // ENVIAR ESTADO COMPLETO (FUNÇÃO PRINCIPAL)
-// Envia: status, etapa, temperaturas, controle, timeRemaining
 // Intervalo: 30 segundos
 // =====================================================
 void enviarEstadoCompletoMySQL() {
@@ -300,11 +299,10 @@ void enviarEstadoCompletoMySQL() {
         doc["status"] = "completed_holding_temp";
         doc["message"] = "Fermentação concluída - mantendo temperatura";
         
-        // ✅ NOVO: Envia timeRemaining com "tc" para indicar fermentação concluída
         JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
         timeRemaining["value"] = 0;
         timeRemaining["unit"] = "completed";
-        timeRemaining["status"] = MSG_TC;  // "tc" = time completed
+        timeRemaining["status"] = MSG_TC;
     } else {
         doc["status"] = "running";
     }
@@ -319,77 +317,95 @@ void enviarEstadoCompletoMySQL() {
     doc["currentTargetTemp"] = fermentacaoState.tempTarget;
     doc["targetReached"] = fermentacaoState.targetReachedSent;
     
-// ========== 3. CÁLCULO DO TEMPO RESTANTE ==========
-if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages && 
-    fermentacaoState.targetReachedSent) {
-    
-    FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
-    JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
-    
-    // ✅ NOVO: Etapas de gravidade - sempre "aguardando gravidade alvo"
-    if (stage.type == STAGE_GRAVITY) {
-        // Gravidade pura: tempo indefinido, aguardando gravidade
-        timeRemaining["value"] = 0;
-        timeRemaining["unit"] = "indefinite";
-        timeRemaining["status"] = "waiting_gravity";
+    // 3. DADOS DO ISPINDEL (ADICIONADOS AO JSON DO ESTADO)
+    if (mySpindel.lastUpdate > 0) {
+        unsigned long timeSinceLastUpdate = millis() - mySpindel.lastUpdate;
+        bool isSpindelDataRecent = timeSinceLastUpdate < 300000; // 5 minutos
+        
+        if (isSpindelDataRecent) {
+            // ✅ Adiciona dados do iSpindel diretamente ao JSON do estado
+            JsonObject spindelData = doc["ispindel"].to<JsonObject>();
+            spindelData["temperature"] = mySpindel.temperature;
+            spindelData["gravity"] = mySpindel.gravity;
+            spindelData["battery"] = mySpindel.battery;
+            
+            #if DEBUG_ENVIODADOS
+            Serial.printf("[Envio] iSpindel incluído: Grav=%.3f, Temp=%.1f°C\n",
+                            mySpindel.gravity, mySpindel.temperature);
+            #endif
+        }
     }
-    else if (stage.type == STAGE_GRAVITY_TIME) {
-        // Gravidade com timeout: mostra tempo restante mas indica que aguarda gravidade
-        if (fermentacaoState.stageStartEpoch > 0) {
+
+    // ========== 4. CÁLCULO DO TEMPO RESTANTE ==========
+    if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages && 
+        fermentacaoState.targetReachedSent) {
+        
+        FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
+        JsonObject timeRemaining = doc["timeRemaining"].to<JsonObject>();
+        
+        if (stage.type == STAGE_GRAVITY) {
+            // Gravidade pura: tempo indefinido, aguardando gravidade
+            timeRemaining["value"] = 0;
+            timeRemaining["unit"] = "indefinite";
+            timeRemaining["status"] = "waiting_gravity";
+        }
+        else if (stage.type == STAGE_GRAVITY_TIME) {
+            // Gravidade com timeout: mostra tempo restante mas indica que aguarda gravidade
+            if (fermentacaoState.stageStartEpoch > 0) {
+                time_t nowEpoch = getCurrentEpoch();
+                
+                if (nowEpoch > 0) {
+                    float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0f;
+                    float remainingH = stage.maxTimeHours - elapsedH;
+                    if (remainingH < 0) remainingH = 0;
+                    
+                    formatTimeRemaining(timeRemaining, remainingH, "waiting_gravity");
+                }
+            } else {
+                formatTimeRemaining(timeRemaining, stage.maxTimeHours, "waiting_gravity");
+            }
+        }
+        else if (fermentacaoState.stageStartEpoch > 0) {
+            // Etapas normais (temperature, ramp)
             time_t nowEpoch = getCurrentEpoch();
             
             if (nowEpoch > 0) {
                 float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0f;
-                float remainingH = stage.maxTimeHours - elapsedH;
+                float totalH = 0.0f;
+                
+                switch (stage.type) {
+                    case STAGE_TEMPERATURE:
+                        totalH = stage.holdTimeHours;
+                        break;
+                    case STAGE_RAMP:
+                        totalH = (float)stage.rampTimeHours;
+                        break;
+                    default:
+                        totalH = 0.0f;
+                }
+                
+                float remainingH = totalH - elapsedH;
                 if (remainingH < 0) remainingH = 0;
                 
-                formatTimeRemaining(timeRemaining, remainingH, "waiting_gravity");
+                formatTimeRemaining(timeRemaining, remainingH, "running");
             }
         } else {
-            formatTimeRemaining(timeRemaining, stage.maxTimeHours, "waiting_gravity");
-        }
-    }
-    else if (fermentacaoState.stageStartEpoch > 0) {
-        // Etapas normais (temperature, ramp)
-        time_t nowEpoch = getCurrentEpoch();
-        
-        if (nowEpoch > 0) {
-            float elapsedH = difftime(nowEpoch, fermentacaoState.stageStartEpoch) / 3600.0f;
-            float totalH = 0.0f;
-            
+            // Sem stageStartEpoch ainda
             switch (stage.type) {
                 case STAGE_TEMPERATURE:
-                    totalH = stage.holdTimeHours;
+                    formatTimeRemaining(timeRemaining, stage.holdTimeHours, "running");
                     break;
                 case STAGE_RAMP:
-                    totalH = (float)stage.rampTimeHours;
+                    formatTimeRemaining(timeRemaining, (float)stage.rampTimeHours, "running");
                     break;
                 default:
-                    totalH = 0.0f;
+                    break;
             }
-            
-            float remainingH = totalH - elapsedH;
-            if (remainingH < 0) remainingH = 0;
-            
-            formatTimeRemaining(timeRemaining, remainingH, "running");
-        }
-    } else {
-        // Sem stageStartEpoch ainda
-        switch (stage.type) {
-            case STAGE_TEMPERATURE:
-                formatTimeRemaining(timeRemaining, stage.holdTimeHours, "running");
-                break;
-            case STAGE_RAMP:
-                formatTimeRemaining(timeRemaining, (float)stage.rampTimeHours, "running");
-                break;
-            default:
-                break;
         }
     }
-}
     
-    // ========== 4. STATUS DO BREWPI (CONTROLE) ==========
-    DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus();
+    // ========== 5. STATUS DO BREWPI (CONTROLE) ==========
+    DetailedControlStatus detailedStatus = brewPiControl.getDetailedStatus(); // ← PRIMEIRA E ÚNICA DECLARAÇÃO
     
     doc["cooling"] = detailedStatus.coolerActive;
     doc["heating"] = detailedStatus.heaterActive;
@@ -424,7 +440,7 @@ if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages &&
         controlStatus["estimated_peak"] = detailedStatus.estimatedPeak;
     }
     
-    // 5. Timestamp e uptime
+    // 6. Timestamp e uptime
     time_t nowEpoch = getCurrentEpoch();
     if (nowEpoch > 0) {
         doc["timestamp"] = nowEpoch;
@@ -432,7 +448,7 @@ if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages &&
     
     doc["uptime_ms"] = millis();
     
-    // 6. stageType para debug
+    // 7. stageType para debug
     if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages) {
         FermentationStage& stage = fermentacaoState.stages[fermentacaoState.currentStageIndex];
         const char* stageTypeStr = "";
@@ -444,21 +460,34 @@ if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages &&
         }
         doc["stageType"] = stageTypeStr;
     }
+
+    // ========== ENVIO DO CONTROLLER_STATE ==========
+    // Envia dados específicos para a tabela controller_states
+    if (fermentacaoState.activeId && strlen(fermentacaoState.activeId) > 0) {
+        // Apenas chama a função sem armazenar o resultado
+        httpClient.updateControlState(
+            fermentacaoState.activeId,
+            fermentacaoState.tempTarget,
+            detailedStatus.coolerActive,
+            detailedStatus.heaterActive
+        );
+        
+        LOG_ESTADO("[HTTP] controller_states enviado");
+    }
     
     // ========== COMPRESSÃO DOS DADOS ==========
     compressStateData(doc);
     
     // ========== ENVIO ==========
     #if DEBUG_ENVIODADOS
-    bool sendSuccess = httpClient.updateFermentationState(fermentacaoState.activeId, doc);
-    Serial.printf("[Envio] Resultado: %s\n", sendSuccess ? "✅ Sucesso" : "❌ Falha");
+    bool stateSendSuccess = httpClient.updateFermentationState(fermentacaoState.activeId, doc);
+    Serial.printf("[Envio] Resultado estado: %s\n", stateSendSuccess ? "✅ Sucesso" : "❌ Falha");
     Serial.printf("[DEBUG] Heap livre: %d bytes\n", ESP.getFreeHeap());
     #else
     httpClient.updateFermentationState(fermentacaoState.activeId, doc);
     #endif
     
-    // ✅ Log de estado de controle (antes era no main.cpp a cada 30s)
-    LOG_MAIN("[HTTP] ✅ Estado completo enviado (30s interval)");
+    LOG_MAIN("[HTTP] Estado completo enviado (30s interval)");
     LOG_MAIN("[DEBUG] State: " + String(detailedStatus.stateName) + 
         ", Cooler: " + (detailedStatus.coolerActive ? "ON" : "OFF") +
         ", Heater: " + (detailedStatus.heaterActive ? "ON" : "OFF"));
@@ -476,39 +505,39 @@ if (fermentacaoState.currentStageIndex < fermentacaoState.totalStages &&
 // =====================================================
 void enviarLeiturasSensoresMySQL() {
     if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
+        LOG_ENVIODADOS("[Leituras] Skip: fermentacao nao ativa");
         return;
     }
 
     static unsigned long lastSensorReading = 0;
     unsigned long now = millis();
     if (now - lastSensorReading < READINGS_UPDATE_INTERVAL) {
-        return;
+        return;  // Não loga aqui pois seria muito frequente
     }
     lastSensorReading = now;
 
     float tempFermenter, tempFridge;
     if (!readConfiguredTemperatures(tempFermenter, tempFridge)) {
+        LOG_ENVIODADOS("[Leituras] Skip: sensores falharam");
         return;
     }
 
-    httpClient.sendReading(
+    // DEBUG: Mostra o que vai enviar
+    char logBuf[128];
+    snprintf(logBuf, sizeof(logBuf), 
+             "[Leituras] Enviando: ID=%s, Ferm=%.1f, Fridge=%.1f, Target=%.1f",
+             fermentacaoState.activeId, tempFermenter, tempFridge, fermentacaoState.tempTarget);
+    LOG_SENSORES(logBuf);
+
+    // ✅ DEBUG: Mostra resultado do envio
+    bool result = httpClient.sendReading(
         fermentacaoState.activeId, 
         tempFridge, 
         tempFermenter, 
-        fermentacaoState.tempTarget, 
-        mySpindel.gravity,
-        mySpindel.temperature,
-        mySpindel.battery
+        fermentacaoState.tempTarget
     );
     
-    #if DEBUG_ENVIODADOS
-    char logBuf[128];
-    snprintf(logBuf, sizeof(logBuf), 
-        "[Envio] F=%.1f G=%.1f Grav=%.3f ST=%.1f SB=%.2f", 
-        tempFermenter, tempFridge, mySpindel.gravity, 
-        mySpindel.temperature, mySpindel.battery);
-    Serial.println(logBuf);
-    #endif
+    LOG_SENSORES(result ? "[Leituras] ✅ Enviado OK" : "[Leituras] ❌ Falha no envio");
 }
 
 // =====================================================
@@ -593,36 +622,20 @@ bool sendISpindelDataMySQL(const JsonDocument& doc) {
         return false;
     }
     
-    WiFiClient wifiClient;
-    HTTPClient httpMySQL;
+    // ✅ Usa a função centralizada do httpClient
+    String jsonString;
+    serializeJson(doc, jsonString);
     
-    String mysqlUrl = String(SERVER_URL) + "ispindel/data";
-    
-    if (!httpMySQL.begin(wifiClient, mysqlUrl)) {
-        #if DEBUG_FERMENTATION
-        Serial.println(F("[MySQL] ❌ Falha ao iniciar conexão iSpindel"));
-        #endif
-        return false;
-    }
-    
-    httpMySQL.setTimeout(HTTP_TIMEOUT);
-    httpMySQL.addHeader("Content-Type", "application/json");
-    
-    String payload;
-    serializeJson(doc, payload);
-    
-    int code = httpMySQL.POST(payload);
-    bool success = (code == HTTP_CODE_OK || code == HTTP_CODE_CREATED);
+    bool success = httpClient.sendSpindelData(jsonString);
     
     #if DEBUG_FERMENTATION
     if (success) {
         Serial.println(F("[MySQL] ✅ Dados iSpindel enviados"));
     } else {
-        Serial.printf("[MySQL] ❌ Erro iSpindel: %d\n", code);
+        Serial.println(F("[MySQL] ❌ Erro ao enviar iSpindel"));
     }
     #endif
     
-    httpMySQL.end();
     return success;
 }
 

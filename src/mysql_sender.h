@@ -1,5 +1,4 @@
 // mysql_sender.h - Módulo de envio de dados para MySQL
-// ✅ CONSOLIDADO: Removidas funções duplicadas
 #pragma once
 
 #include <Arduino.h>

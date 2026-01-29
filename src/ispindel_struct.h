@@ -1,3 +1,4 @@
+//ispindel_stryct.h - Definição da estrutura de dados iSpindel
 #pragma once
 
 #include <Arduino.h>
