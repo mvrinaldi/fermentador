@@ -392,3 +392,4 @@ bool FermentadorHTTPClient::sendSensorsData(const JsonDocument& sensorsDoc) {
     return makeRequest("api/esp/sensors.php?action=save_detected", 
                       "POST", &sensorsDoc, response);
 }
+

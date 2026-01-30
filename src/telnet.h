@@ -1,3 +1,4 @@
+//telnet.h - Definições para debug via telnet
 #pragma once
 #include <Arduino.h>
 

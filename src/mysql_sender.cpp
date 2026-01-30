@@ -521,23 +521,6 @@ void enviarLeiturasSensoresMySQL() {
         LOG_ENVIODADOS("[Leituras] Skip: sensores falharam");
         return;
     }
-
-    // DEBUG: Mostra o que vai enviar
-    char logBuf[128];
-    snprintf(logBuf, sizeof(logBuf), 
-             "[Leituras] Enviando: ID=%s, Ferm=%.1f, Fridge=%.1f, Target=%.1f",
-             fermentacaoState.activeId, tempFermenter, tempFridge, fermentacaoState.tempTarget);
-    LOG_SENSORES(logBuf);
-
-    // ✅ DEBUG: Mostra resultado do envio
-    bool result = httpClient.sendReading(
-        fermentacaoState.activeId, 
-        tempFridge, 
-        tempFermenter, 
-        fermentacaoState.tempTarget
-    );
-    
-    LOG_SENSORES(result ? "[Leituras] ✅ Enviado OK" : "[Leituras] ❌ Falha no envio");
 }
 
 // =====================================================

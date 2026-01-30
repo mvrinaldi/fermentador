@@ -30,3 +30,4 @@
 
 // Códigos para waiting_gravity
 #define WG           "wg"     // waiting_gravity
+

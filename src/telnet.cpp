@@ -1,3 +1,4 @@
+// telnet.cpp - Implementação do servidor Telnet para debug remoto
 #include "telnet.h"
 #include <ESP8266WiFi.h>
 #include "debug_config.h"
