@@ -1,6 +1,9 @@
 <?php
 /**
  * API de Alertas - Versão Simplificada
+ * 
+ * @author Marcos Rinaldi
+ * @version 1.2 - Removido min_level (todos alertas são enviados)
  */
 
 // Headers
@@ -14,28 +17,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-// Inclui AlertSystem
-$alertSystemFile = __DIR__ . '/../AlertSystem.php';
-if (!file_exists($alertSystemFile)) {
+// Caminho flexível para AlertSystem.php
+$alertSystemPaths = [
+    __DIR__ . '/../classes/AlertSystem.php',
+    __DIR__ . '/../AlertSystem.php',
+    dirname(dirname(__DIR__)) . '/classes/AlertSystem.php'
+];
+
+$alertSystemFile = null;
+foreach ($alertSystemPaths as $path) {
+    if (file_exists($path)) {
+        $alertSystemFile = $path;
+        break;
+    }
+}
+
+if (!$alertSystemFile) {
     http_response_code(500);
-    echo json_encode(['error' => 'AlertSystem.php not found at: ' . $alertSystemFile]);
+    echo json_encode([
+        'error' => 'AlertSystem.php not found',
+        'searched_paths' => $alertSystemPaths
+    ]);
     exit;
 }
 
 require_once $alertSystemFile;
 
-// Verifica se classe foi carregada
 if (!class_exists('AlertSystem')) {
     http_response_code(500);
     echo json_encode(['error' => 'Class AlertSystem not found after inclusion']);
     exit;
 }
 
-// Conexão com banco (ajuste o caminho)
+// Conexão com banco
 $dbConfig = __DIR__ . '/../config/database.php';
 if (!file_exists($dbConfig)) {
     http_response_code(500);
-    echo json_encode(['error' => 'Database config not found']);
+    echo json_encode(['error' => 'Database config not found at: ' . $dbConfig]);
     exit;
 }
 
@@ -54,11 +72,6 @@ try {
     exit;
 }
 
-// Inicializa sistema de alertas
-$alertSystem = new AlertSystem($pdo);
-
-// Resto do seu código continua aqui...
-// [O router permanece igual]
 // Inicializa sistema de alertas
 $alertSystem = new AlertSystem($pdo);
 
@@ -189,7 +202,7 @@ try {
             ]);
             break;
         
-        // GET /alerts/config - Retorna configuração de notificações
+        // GET/POST /alerts/config - Configuração de notificações
         case 'config':
             if ($method === 'GET') {
                 $stmt = $pdo->query("
@@ -219,7 +232,6 @@ try {
                     'config' => $config
                 ]);
             }
-            // POST /alerts/config - Salva configuração
             elseif ($method === 'POST') {
                 $input = json_decode(file_get_contents('php://input'), true);
                 
@@ -227,9 +239,9 @@ try {
                     throw new Exception('Invalid JSON', 400);
                 }
                 
-                // Campos permitidos
+                // ✅ Campos permitidos (removido min_level)
                 $allowedFields = [
-                    'enabled', 'min_level', 
+                    'enabled',
                     'whatsapp_phone', 'whatsapp_apikey',
                     'telegram_bot_token', 'telegram_chat_id',
                     'temp_tolerance', 'temp_critical_tolerance',
@@ -317,7 +329,7 @@ try {
                 ];
             }
             
-            // Teste Telegram
+            // Teste Telegram - ✅ SEM parse_mode HTML
             if (($type === 'telegram' || $type === 'both') && 
                 !empty($config['telegram_bot_token']) && 
                 !empty($config['telegram_chat_id'])) {

@@ -5,8 +5,8 @@
  * Monitora condições críticas e envia notificações via WhatsApp/Telegram
  * 
  * @author Marcos Rinaldi
- * @version 1.0
- * @date Janeiro 2026
+ * @version 1.3 - SIMPLIFICADO: remove min_level, todos alertas são enviados
+ * @date Fevereiro 2026
  */
 
 class AlertSystem {
@@ -25,22 +25,22 @@ class AlertSystem {
     const ALERT_MEMORY_LOW = 'device';
     const ALERT_ERROR = 'error';
     
-    // Níveis de alerta
+    // Níveis de alerta (mantidos para classificação visual, mas NÃO filtram envio)
     const LEVEL_INFO = 'info';
     const LEVEL_WARNING = 'warning';
     const LEVEL_CRITICAL = 'critical';
     
     // Configurações padrão
     private $defaults = [
-        'temp_tolerance' => 2.0,           // °C de tolerância antes de alertar
-        'temp_critical_tolerance' => 4.0,  // °C para alerta crítico
-        'esp_offline_seconds' => 300,      // 5 minutos sem heartbeat
-        'ispindel_stale_seconds' => 7200,  // 2 horas sem dados
-        'battery_warning' => 3.5,          // Volts
-        'battery_critical' => 3.2,         // Volts
-        'heap_warning' => 30000,           // Bytes
-        'heap_critical' => 15000,          // Bytes
-        'cooldown_minutes' => 30,          // Não repetir alerta em X minutos
+        'temp_tolerance' => 2.0,
+        'temp_critical_tolerance' => 4.0,
+        'esp_offline_seconds' => 300,
+        'ispindel_stale_seconds' => 7200,
+        'battery_warning' => 3.5,
+        'battery_critical' => 3.2,
+        'heap_warning' => 30000,
+        'heap_critical' => 15000,
+        'cooldown_minutes' => 30,
     ];
     
     public function __construct($pdo, $config = []) {
@@ -50,30 +50,22 @@ class AlertSystem {
     
     /**
      * Executa verificação completa de todas as condições de alerta
-     * 
-     * @param int $configId ID da fermentação ativa
-     * @return array Lista de alertas gerados
      */
     public function checkAll($configId) {
         $alerts = [];
         
-        // 1. Verificar temperatura
         $tempAlerts = $this->checkTemperature($configId);
         $alerts = array_merge($alerts, $tempAlerts);
         
-        // 2. Verificar ESP online
         $espAlerts = $this->checkESPStatus($configId);
         $alerts = array_merge($alerts, $espAlerts);
         
-        // 3. Verificar iSpindel
         $ispindelAlerts = $this->checkISpindel($configId);
         $alerts = array_merge($alerts, $ispindelAlerts);
         
-        // 4. Verificar memória do ESP
         $memoryAlerts = $this->checkESPMemory($configId);
         $alerts = array_merge($alerts, $memoryAlerts);
         
-        // Processar e salvar alertas
         foreach ($alerts as $alert) {
             $this->processAlert($alert);
         }
@@ -81,13 +73,9 @@ class AlertSystem {
         return $alerts;
     }
     
-    /**
-     * Verifica se temperatura está fora do range aceitável
-     */
     public function checkTemperature($configId) {
         $alerts = [];
         
-        // Buscar última leitura e temperatura alvo
         $stmt = $this->pdo->prepare("
             SELECT 
                 r.temp_fermenter,
@@ -111,7 +99,6 @@ class AlertSystem {
         $tempTarget = floatval($reading['temp_target']);
         $diff = abs($tempFermenter - $tempTarget);
         
-        // Verificar tolerância crítica
         if ($diff >= $this->config['temp_critical_tolerance']) {
             $direction = $tempFermenter > $tempTarget ? 'ACIMA' : 'ABAIXO';
             $alerts[] = [
@@ -129,7 +116,6 @@ class AlertSystem {
                 ]
             ];
         }
-        // Verificar tolerância de aviso
         elseif ($diff >= $this->config['temp_tolerance']) {
             $direction = $tempFermenter > $tempTarget ? 'acima' : 'abaixo';
             $alerts[] = [
@@ -150,9 +136,6 @@ class AlertSystem {
         return $alerts;
     }
     
-    /**
-     * Verifica se ESP está online (recebendo heartbeats)
-     */
     public function checkESPStatus($configId) {
         $alerts = [];
         
@@ -172,7 +155,6 @@ class AlertSystem {
         $heartbeat = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$heartbeat) {
-            // Nenhum heartbeat encontrado
             $alerts[] = [
                 'config_id' => $configId,
                 'type' => self::ALERT_ESP_OFFLINE,
@@ -204,9 +186,6 @@ class AlertSystem {
         return $alerts;
     }
     
-    /**
-     * Verifica status do iSpindel
-     */
     public function checkISpindel($configId) {
         $alerts = [];
         
@@ -228,13 +207,12 @@ class AlertSystem {
         $ispindel = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$ispindel) {
-            return $alerts; // Sem iSpindel configurado, ok
+            return $alerts;
         }
         
         $secondsAgo = intval($ispindel['seconds_ago']);
         $battery = floatval($ispindel['battery']);
         
-        // Verificar se dados estão obsoletos
         if ($secondsAgo > $this->config['ispindel_stale_seconds']) {
             $hours = round($secondsAgo / 3600, 1);
             $alerts[] = [
@@ -251,7 +229,6 @@ class AlertSystem {
             ];
         }
         
-        // Verificar bateria crítica
         if ($battery > 0 && $battery < $this->config['battery_critical']) {
             $alerts[] = [
                 'config_id' => $configId,
@@ -262,7 +239,6 @@ class AlertSystem {
                 'data' => ['battery' => $battery]
             ];
         }
-        // Verificar bateria baixa
         elseif ($battery > 0 && $battery < $this->config['battery_warning']) {
             $alerts[] = [
                 'config_id' => $configId,
@@ -277,9 +253,6 @@ class AlertSystem {
         return $alerts;
     }
     
-    /**
-     * Verifica memória livre do ESP
-     */
     public function checkESPMemory($configId) {
         $alerts = [];
         
@@ -325,10 +298,10 @@ class AlertSystem {
     }
     
     /**
-     * Cria alerta de etapa concluída
+     * ✅ Cria alerta de etapa concluída SEM cooldown
      */
     public function createStageCompletedAlert($configId, $stageIndex, $stageName, $nextStageName = null) {
-        $message = "✅ Etapa {$stageIndex} concluída: {$stageName}";
+        $message = "✅ Etapa concluída: {$stageName}";
         if ($nextStageName) {
             $message .= " | Próxima: {$nextStageName}";
         }
@@ -342,32 +315,28 @@ class AlertSystem {
                 'stage_index' => $stageIndex,
                 'stage_name' => $stageName,
                 'next_stage' => $nextStageName
-            ]
+            ],
+            'skip_cooldown' => true
         ];
         
-        $this->processAlert($alert);
-        return $alert;
+        error_log("[ALERTS] createStageCompletedAlert() chamado: config_id={$configId}, stage={$stageIndex}, skip_cooldown=true");
+        
+        return $this->processAlert($alert);
     }
     
-    /**
-     * Cria alerta de fermentação concluída
-     */
     public function createFermentationCompletedAlert($configId, $configName) {
         $alert = [
             'config_id' => $configId,
             'type' => self::ALERT_FERMENTATION_COMPLETE,
             'level' => self::LEVEL_INFO,
             'message' => "🎉 FERMENTAÇÃO CONCLUÍDA: {$configName}! Hora de engarrafar!",
-            'data' => ['config_name' => $configName]
+            'data' => ['config_name' => $configName],
+            'skip_cooldown' => true
         ];
         
-        $this->processAlert($alert);
-        return $alert;
+        return $this->processAlert($alert);
     }
     
-    /**
-     * Cria alerta de gravidade alvo atingida
-     */
     public function createGravityReachedAlert($configId, $currentGravity, $targetGravity) {
         $alert = [
             'config_id' => $configId,
@@ -378,41 +347,53 @@ class AlertSystem {
             'data' => [
                 'current_gravity' => $currentGravity,
                 'target_gravity' => $targetGravity
-            ]
+            ],
+            'skip_cooldown' => true
         ];
         
-        $this->processAlert($alert);
-        return $alert;
+        return $this->processAlert($alert);
     }
     
     /**
-     * Processa um alerta: verifica cooldown, salva no banco, envia notificação
+     * ✅ Processa e envia alerta - SIMPLIFICADO sem min_level
      */
     private function processAlert($alert) {
-        // Verificar cooldown (não repetir alerta recente)
-        if ($this->isInCooldown($alert)) {
-            return false;
+        $skipCooldown = isset($alert['skip_cooldown']) && $alert['skip_cooldown'] === true;
+        
+        error_log("[ALERTS] processAlert() iniciado: tipo={$alert['type']}, level={$alert['level']}, skip_cooldown=" . ($skipCooldown ? 'true' : 'false'));
+        
+        // Verifica cooldown apenas se não tiver flag skip_cooldown
+        if (!$skipCooldown) {
+            if ($this->isInCooldown($alert)) {
+                error_log("[ALERTS] ❌ BLOQUEADO por cooldown: tipo={$alert['type']}, level={$alert['level']}");
+                return false;
+            }
+            error_log("[ALERTS] ✅ Passou pelo cooldown (não há alerta recente)");
+        } else {
+            error_log("[ALERTS] ✅ PULOU verificação de cooldown (skip_cooldown=true)");
         }
         
-        // Salvar no banco
         $alertId = $this->saveAlert($alert);
         
-        // Enviar notificação
         if ($alertId) {
-            $this->sendNotification($alert);
+            error_log("[ALERTS] ✅ Alerta salvo no banco: ID={$alertId}, mensagem=\"{$alert['message']}\"");
+            
+            error_log("[ALERTS] Chamando sendNotification()...");
+            $result = $this->sendNotification($alert);
+            error_log("[ALERTS] sendNotification() retornou: " . ($result ? 'true (enviado)' : 'false (não enviado)'));
+            
+            return $alertId;
+        } else {
+            error_log("[ALERTS] ❌ ERRO: Falha ao salvar alerta no banco");
+            return false;
         }
-        
-        return $alertId;
     }
     
-    /**
-     * Verifica se alerta similar foi enviado recentemente
-     */
     private function isInCooldown($alert) {
         $cooldownMinutes = $this->config['cooldown_minutes'];
         
         $stmt = $this->pdo->prepare("
-            SELECT id FROM alerts 
+            SELECT id, created_at FROM alerts 
             WHERE config_id = ? 
             AND alert_type = ? 
             AND alert_level = ?
@@ -427,83 +408,88 @@ class AlertSystem {
             $cooldownMinutes
         ]);
         
-        return $stmt->fetch() !== false;
+        $existingAlert = $stmt->fetch();
+        
+        if ($existingAlert) {
+            error_log("[ALERTS] Cooldown ativo: encontrado alerta ID={$existingAlert['id']} criado em {$existingAlert['created_at']}");
+            return true;
+        }
+        
+        return false;
     }
     
-    /**
-     * Salva alerta no banco de dados
-     */
     private function saveAlert($alert) {
-        $stmt = $this->pdo->prepare("
-            INSERT INTO alerts (config_id, alert_type, alert_level, message, is_read, created_at)
-            VALUES (?, ?, ?, ?, 0, NOW())
-        ");
-        
-        $stmt->execute([
-            $alert['config_id'],
-            $alert['type'],
-            $alert['level'],
-            $alert['message']
-        ]);
-        
-        return $this->pdo->lastInsertId();
+        try {
+            $stmt = $this->pdo->prepare("
+                INSERT INTO alerts (config_id, alert_type, alert_level, message, is_read, created_at)
+                VALUES (?, ?, ?, ?, 0, NOW())
+            ");
+            
+            $stmt->execute([
+                $alert['config_id'],
+                $alert['type'],
+                $alert['level'],
+                $alert['message']
+            ]);
+            
+            return $this->pdo->lastInsertId();
+        } catch (Exception $e) {
+            error_log("[ALERTS] ❌ Erro ao salvar alerta: " . $e->getMessage());
+            return false;
+        }
     }
     
     /**
-     * Envia notificação (WhatsApp/Telegram)
+     * ✅ SIMPLIFICADO: Envia notificação SEMPRE (sem filtro de min_level)
+     * Apenas verifica se o sistema está ativado e se há canais configurados
      */
     private function sendNotification($alert) {
-        // Buscar configurações de notificação
         $notifyConfig = $this->getNotificationConfig();
         
         if (!$notifyConfig || !$notifyConfig['enabled']) {
+            error_log("[ALERTS] ❌ Sistema de alertas está DESATIVADO (enabled=0)");
             return false;
         }
         
-        // Filtrar por nível (só enviar se nível atende mínimo configurado)
-        if (!$this->shouldNotify($alert['level'], $notifyConfig['min_level'])) {
-            return false;
-        }
+        error_log("[ALERTS] ✅ Sistema ativado, enviando alerta: tipo={$alert['type']}, level={$alert['level']}");
         
         $sent = false;
         
-        // WhatsApp via CallMeBot
+        // WhatsApp
         if (!empty($notifyConfig['whatsapp_phone']) && !empty($notifyConfig['whatsapp_apikey'])) {
+            error_log("[ALERTS] Tentando enviar via WhatsApp...");
             $sent = $this->sendWhatsApp(
                 $notifyConfig['whatsapp_phone'],
                 $notifyConfig['whatsapp_apikey'],
                 $alert['message']
             );
+        } else {
+            error_log("[ALERTS] WhatsApp não configurado (phone ou apikey vazio)");
         }
         
         // Telegram
         if (!empty($notifyConfig['telegram_chat_id']) && !empty($notifyConfig['telegram_bot_token'])) {
-            $sent = $this->sendTelegram(
+            error_log("[ALERTS] Tentando enviar via Telegram...");
+            $telegramSent = $this->sendTelegram(
                 $notifyConfig['telegram_bot_token'],
                 $notifyConfig['telegram_chat_id'],
                 $alert['message']
-            ) || $sent;
+            );
+            if (!$telegramSent) {
+                error_log("[ALERTS] ❌ Falha no envio Telegram!");
+            }
+            $sent = $telegramSent || $sent;
+        } else {
+            error_log("[ALERTS] Telegram não configurado (token ou chat_id vazio)");
+        }
+        
+        if (!$sent) {
+            error_log("[ALERTS] ⚠️ NENHUM canal de notificação enviou com sucesso!");
         }
         
         return $sent;
     }
     
-    /**
-     * Verifica se deve notificar baseado no nível
-     */
-    private function shouldNotify($alertLevel, $minLevel) {
-        $levels = [
-            self::LEVEL_INFO => 1,
-            self::LEVEL_WARNING => 2,
-            self::LEVEL_CRITICAL => 3
-        ];
-        
-        return $levels[$alertLevel] >= $levels[$minLevel];
-    }
-    
-    /**
-     * Busca configurações de notificação do banco
-     */
     private function getNotificationConfig() {
         $stmt = $this->pdo->query("
             SELECT config_key, config_value 
@@ -519,7 +505,6 @@ class AlertSystem {
         
         return [
             'enabled' => ($config['enabled'] ?? '0') === '1',
-            'min_level' => $config['min_level'] ?? self::LEVEL_WARNING,
             'whatsapp_phone' => $config['whatsapp_phone'] ?? '',
             'whatsapp_apikey' => $config['whatsapp_apikey'] ?? '',
             'telegram_bot_token' => $config['telegram_bot_token'] ?? '',
@@ -527,9 +512,6 @@ class AlertSystem {
         ];
     }
     
-    /**
-     * Envia mensagem via WhatsApp (CallMeBot)
-     */
     private function sendWhatsApp($phone, $apikey, $message) {
         $url = "https://api.callmebot.com/whatsapp.php?" . http_build_query([
             'phone' => $phone,
@@ -547,47 +529,61 @@ class AlertSystem {
         
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
         curl_close($ch);
         
-        // Log do envio
-        error_log("WhatsApp Alert: HTTP {$httpCode} - " . substr($response, 0, 100));
+        error_log("[ALERTS] WhatsApp: HTTP {$httpCode} - " . substr($response, 0, 100));
+        if ($error) {
+            error_log("[ALERTS] WhatsApp curl error: {$error}");
+        }
         
         return $httpCode === 200 && strpos($response, 'Message queued') !== false;
     }
     
     /**
-     * Envia mensagem via Telegram
+     * ✅ CORREÇÃO: Removido parse_mode => 'HTML' que causava falha com emojis
      */
     private function sendTelegram($botToken, $chatId, $message) {
         $url = "https://api.telegram.org/bot{$botToken}/sendMessage";
+        
+        $postData = [
+            'chat_id' => $chatId,
+            'text' => $message
+        ];
+        
+        error_log("[ALERTS] Telegram request: chat_id={$chatId}, msg_length=" . strlen($message));
         
         $ch = curl_init();
         curl_setopt_array($ch, [
             CURLOPT_URL => $url,
             CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => http_build_query([
-                'chat_id' => $chatId,
-                'text' => $message,
-                'parse_mode' => 'HTML'
-            ]),
+            CURLOPT_POSTFIELDS => http_build_query($postData),
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 10
         ]);
         
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
         curl_close($ch);
         
-        // Log do envio
-        error_log("Telegram Alert: HTTP {$httpCode} - " . substr($response, 0, 100));
+        error_log("[ALERTS] Telegram: HTTP {$httpCode} - " . substr($response, 0, 200));
+        if ($error) {
+            error_log("[ALERTS] Telegram curl error: {$error}");
+        }
         
         $result = json_decode($response, true);
-        return $httpCode === 200 && ($result['ok'] ?? false);
+        
+        if ($httpCode !== 200 || !($result['ok'] ?? false)) {
+            $desc = $result['description'] ?? 'Unknown error';
+            error_log("[ALERTS] ❌ Telegram FALHOU: {$desc}");
+            return false;
+        }
+        
+        error_log("[ALERTS] ✅ Telegram enviado com sucesso! message_id=" . ($result['result']['message_id'] ?? '?'));
+        return true;
     }
     
-    /**
-     * Retorna alertas não lidos
-     */
     public function getUnreadAlerts($configId = null) {
         $sql = "SELECT * FROM alerts WHERE is_read = 0";
         $params = [];
@@ -605,19 +601,11 @@ class AlertSystem {
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     
-    /**
-     * Marca alerta como lido
-     */
     public function markAsRead($alertId) {
-        $stmt = $this->pdo->prepare("
-            UPDATE alerts SET is_read = 1 WHERE id = ?
-        ");
+        $stmt = $this->pdo->prepare("UPDATE alerts SET is_read = 1 WHERE id = ?");
         return $stmt->execute([$alertId]);
     }
     
-    /**
-     * Marca todos alertas como lidos
-     */
     public function markAllAsRead($configId = null) {
         $sql = "UPDATE alerts SET is_read = 1 WHERE is_read = 0";
         $params = [];
@@ -631,13 +619,8 @@ class AlertSystem {
         return $stmt->execute($params);
     }
     
-    /**
-     * Resolve alerta (marca como resolvido)
-     */
     public function resolveAlert($alertId) {
-        $stmt = $this->pdo->prepare("
-            UPDATE alerts SET is_read = 1, resolved_at = NOW() WHERE id = ?
-        ");
+        $stmt = $this->pdo->prepare("UPDATE alerts SET is_read = 1, resolved_at = NOW() WHERE id = ?");
         return $stmt->execute([$alertId]);
     }
 }

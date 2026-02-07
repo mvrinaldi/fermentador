@@ -3,10 +3,11 @@
  * API Unificada do Sistema de Fermentação
  * 
  * Inclui integração com Sistema de Alertas (WhatsApp/Telegram)
+ * e DatabaseCleanup centralizado
  * 
  * @author Marcos Rinaldi
- * @version 2.0
- * @date Janeiro 2026
+ * @version 2.1
+ * @date Fevereiro 2026
  */
 
 header('Access-Control-Allow-Origin: *');
@@ -38,15 +39,27 @@ $_SESSION['last_activity'] = time();
 // ==================== INCLUDES ====================
 
 require_once $_SERVER['DOCUMENT_ROOT'] . '/config/database.php';
+require_once __DIR__ . '/classes/DatabaseCleanup.php';
 
-// Sistema de Alertas (carregar se existir)
+// Sistema de Alertas
 $alertSystemAvailable = false;
-if (file_exists(__DIR__ . '/AlertSystem.php')) {
-    require_once __DIR__ . '/AlertSystem.php';
-    if (file_exists(__DIR__ . '/api/AlertIntegration.php')) {
-        require_once __DIR__ . '/api/AlertIntegration.php';
+try {
+    if (file_exists(__DIR__ . '/classes/AlertSystem.php')) {
+        require_once __DIR__ . '/classes/AlertSystem.php';
+        
+        if (file_exists(__DIR__ . '/api/AlertIntegration.php')) {
+            require_once __DIR__ . '/api/AlertIntegration.php';
+            $alertSystemAvailable = true;
+            error_log("[ALERTS] Sistema de alertas carregado com sucesso");
+        } else {
+            error_log("[ALERTS] AlertIntegration.php não encontrado");
+        }
+    } else {
+        error_log("[ALERTS] AlertSystem.php não encontrado em " . __DIR__ . '/classes/');
     }
-    $alertSystemAvailable = true;
+} catch (Exception $e) {
+    error_log("[ALERTS] Erro ao carregar sistema de alertas: " . $e->getMessage());
+    $alertSystemAvailable = false;
 }
 
 // ==================== CONEXÃO COM BANCO ====================
@@ -254,142 +267,6 @@ function decompressStateData(&$data) {
             $cs['state'] = $messageMap[$cs['state']];
         }
     }
-}
-
-/**
- * Limpa registros antigos de um config_id específico
- */
-function cleanupOldRecords($pdo, $tableName, $configId, $keepCount = 100, $timestampColumn = 'created_at') {
-    try {
-        // Validar nome da tabela
-        $validTables = ['readings', 'controller_states', 'esp_heartbeat', 
-                       'fermentation_states', 'ispindel_readings'];
-        if (!in_array($tableName, $validTables)) {
-            error_log("[CLEANUP ERROR] Tabela inválida: {$tableName}");
-            return;
-        }
-        
-        // 1. Limpeza do config_id específico
-        if ($configId) {
-            $sql = "SELECT COUNT(*) as total FROM `{$tableName}` WHERE config_id = ?";
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute([$configId]);
-            $count = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
-            
-            if ($count > ($keepCount + 50)) {
-                $sql = "
-                    SELECT `{$timestampColumn}` as cutoff_time 
-                    FROM `{$tableName}` 
-                    WHERE config_id = ? 
-                    ORDER BY `{$timestampColumn}` DESC 
-                    LIMIT 1 OFFSET ?
-                ";
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute([$configId, $keepCount]);
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($result && !empty($result['cutoff_time'])) {
-                    $sql = "
-                        DELETE FROM `{$tableName}` 
-                        WHERE config_id = ? 
-                        AND `{$timestampColumn}` < ?
-                        LIMIT 1000
-                    ";
-                    $stmt = $pdo->prepare($sql);
-                    $stmt->execute([$configId, $result['cutoff_time']]);
-                    
-                    $deleted = $stmt->rowCount();
-                    if ($deleted > 0) {
-                        error_log("[CLEANUP] {$tableName}: config_id={$configId}, removidos {$deleted}");
-                    }
-                }
-            }
-        }
-        
-        // 2. Limpeza de órfãos (ocasionalmente)
-        static $orphanCleanupCounter = 0;
-        if (++$orphanCleanupCounter % 20 === 0) {
-            $stmt = $pdo->prepare("DELETE FROM `{$tableName}` WHERE config_id IS NULL LIMIT 500");
-            $stmt->execute();
-            $orphansDeleted = $stmt->rowCount();
-            
-            if ($orphansDeleted > 0) {
-                error_log("[CLEANUP ORPHANS] {$tableName}: removidos {$orphansDeleted} órfãos");
-            }
-        }
-        
-    } catch (Exception $e) {
-        error_log("[CLEANUP ERROR] {$tableName}: " . $e->getMessage());
-    }
-}
-
-/**
- * Limpeza emergencial de todas as tabelas
- */
-function emergencyCleanup($pdo) {
-    $tables = [
-        'controller_states' => ['keep' => 500, 'ts' => 'state_timestamp'],
-        'esp_heartbeat' => ['keep' => 200, 'ts' => 'heartbeat_timestamp'],
-        'fermentation_states' => ['keep' => 300, 'ts' => 'state_timestamp'],
-        'readings' => ['keep' => 1000, 'ts' => 'reading_timestamp'],
-        'ispindel_readings' => ['keep' => 500, 'ts' => 'reading_timestamp'],
-    ];
-    
-    $results = [];
-    
-    foreach ($tables as $table => $config) {
-        $keepCount = $config['keep'];
-        $tsColumn = $config['ts'];
-        
-        try {
-            // Deletar órfãos
-            $stmt = $pdo->prepare("DELETE FROM `{$table}` WHERE config_id IS NULL");
-            $stmt->execute();
-            $orphansDeleted = $stmt->rowCount();
-            
-            // Buscar config_ids
-            $stmt = $pdo->prepare("SELECT DISTINCT config_id FROM `{$table}` WHERE config_id IS NOT NULL");
-            $stmt->execute();
-            $configIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
-            
-            $totalDeleted = $orphansDeleted;
-            
-            foreach ($configIds as $cid) {
-                $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM `{$table}` WHERE config_id = ?");
-                $stmt->execute([$cid]);
-                $count = $stmt->fetch()['total'];
-                
-                if ($count > $keepCount) {
-                    $sql = "
-                        SELECT `{$tsColumn}` as cutoff
-                        FROM `{$table}` 
-                        WHERE config_id = ? 
-                        ORDER BY `{$tsColumn}` DESC 
-                        LIMIT 1 OFFSET ?
-                    ";
-                    $stmt = $pdo->prepare($sql);
-                    $stmt->execute([$cid, $keepCount]);
-                    $result = $stmt->fetch();
-                    
-                    if ($result && $result['cutoff']) {
-                        $stmt = $pdo->prepare("DELETE FROM `{$table}` WHERE config_id = ? AND `{$tsColumn}` < ?");
-                        $stmt->execute([$cid, $result['cutoff']]);
-                        $totalDeleted += $stmt->rowCount();
-                    }
-                }
-            }
-            
-            $results[$table] = [
-                'orphans_deleted' => $orphansDeleted,
-                'total_deleted' => $totalDeleted
-            ];
-            
-        } catch (Exception $e) {
-            $results[$table] = ['error' => $e->getMessage()];
-        }
-    }
-    
-    return $results;
 }
 
 /**
@@ -1019,7 +896,8 @@ if ($path === 'readings' && $method === 'POST') {
     ");
     $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget]);
     
-    cleanupOldRecords($pdo, 'readings', $configId, 200, 'reading_timestamp');
+    // ✅ USAR CLASSE CENTRALIZADA
+    DatabaseCleanup::cleanupTable($pdo, 'readings', $configId);
     
     sendResponse(['success' => true, 'reading_id' => $pdo->lastInsertId()], 201);
 }
@@ -1069,8 +947,9 @@ if ($path === 'ispindel/data' && $method === 'POST') {
         ");
         $stmt->execute([$configId, $name, $temperature, $gravity, $battery]);
         
+        // ✅ LIMPEZA APÓS INSERT
         if ($configId) {
-            cleanupOldRecords($pdo, 'ispindel_readings', $configId, 500, 'reading_timestamp');
+            DatabaseCleanup::cleanupTable($pdo, 'ispindel_readings', $configId);
         }
         
         sendResponse([
@@ -1102,7 +981,8 @@ if ($path === 'control' && $method === 'POST') {
     ");
     $stmt->execute([$configId, $setpoint, $cooling, $heating]);
     
-    cleanupOldRecords($pdo, 'controller_states', $configId, 200, 'state_timestamp');
+    // ✅ LIMPEZA APÓS INSERT
+    DatabaseCleanup::cleanupTable($pdo, 'controller_states', $configId);
     
     sendResponse(['success' => true], 201);
 }
@@ -1124,7 +1004,8 @@ if ($path === 'fermentation-state' && $method === 'POST') {
     ");
     $stmt->execute([$configId, json_encode($input)]);
     
-    cleanupOldRecords($pdo, 'fermentation_states', $configId, 100, 'state_timestamp');
+    // ✅ LIMPEZA APÓS INSERT
+    DatabaseCleanup::cleanupTable($pdo, 'fermentation_states', $configId);
     
     sendResponse(['success' => true], 201);
 }
@@ -1168,7 +1049,13 @@ if ($path === 'heartbeat' && $method === 'POST') {
             $controlStatus ? json_encode($controlStatus) : null
         ]);
         
-        cleanupOldRecords($pdo, 'esp_heartbeat', $configId, 50, 'heartbeat_timestamp');
+        // ✅ LIMPEZA APÓS INSERT
+        DatabaseCleanup::cleanupTable($pdo, 'esp_heartbeat', $configId);
+        
+        // ✅ LIMPEZA OCASIONAL DE ÓRFÃOS (5% de chance)
+        if (rand(1, 20) === 1) {
+            DatabaseCleanup::cleanupOrphans($pdo);
+        }
         
         // ✅ VERIFICAR ALERTAS após heartbeat
         checkAlertsIfEnabled($pdo, $configId);
@@ -1422,11 +1309,11 @@ if ($path === 'cleanup' && $method === 'POST') {
         foreach ($configs as $config) {
             $configId = $config['id'];
             
-            cleanupOldRecords($pdo, 'readings', $configId, 500, 'reading_timestamp');
-            cleanupOldRecords($pdo, 'controller_states', $configId, 200, 'state_timestamp');
-            cleanupOldRecords($pdo, 'fermentation_states', $configId, 100, 'state_timestamp');
-            cleanupOldRecords($pdo, 'esp_heartbeat', $configId, 50, 'heartbeat_timestamp');
-            cleanupOldRecords($pdo, 'ispindel_readings', $configId, 500, 'reading_timestamp');
+            DatabaseCleanup::cleanupTable($pdo, 'readings', $configId);
+            DatabaseCleanup::cleanupTable($pdo, 'controller_states', $configId);
+            DatabaseCleanup::cleanupTable($pdo, 'fermentation_states', $configId);
+            DatabaseCleanup::cleanupTable($pdo, 'esp_heartbeat', $configId);
+            DatabaseCleanup::cleanupTable($pdo, 'ispindel_readings', $configId);
             
             $cleaned++;
         }
@@ -1451,11 +1338,33 @@ if ($path === 'emergency-cleanup' && $method === 'POST') {
     }
     
     try {
-        $results = emergencyCleanup($pdo);
+        $results = [];
+        
+        // Buscar todas as configurações ativas
+        $stmt = $pdo->prepare("SELECT DISTINCT id FROM configurations WHERE status = 'active'");
+        $stmt->execute();
+        $configs = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        // Limpeza agressiva de cada config
+        foreach ($configs as $configId) {
+            $results["config_{$configId}"] = [
+                'readings' => DatabaseCleanup::aggressiveCleanup($pdo, 'readings', $configId, 200),
+                'controller_states' => DatabaseCleanup::aggressiveCleanup($pdo, 'controller_states', $configId, 200),
+                'esp_heartbeat' => DatabaseCleanup::aggressiveCleanup($pdo, 'esp_heartbeat', $configId, 50),
+                'fermentation_states' => DatabaseCleanup::aggressiveCleanup($pdo, 'fermentation_states', $configId, 100),
+                'ispindel_readings' => DatabaseCleanup::aggressiveCleanup($pdo, 'ispindel_readings', $configId, 500)
+            ];
+        }
+        
+        // Limpar órfãos
+        $results['orphans_cleaned'] = DatabaseCleanup::cleanupOrphans($pdo);
+        
         sendResponse([
             'success' => true,
-            'results' => $results
+            'results' => $results,
+            'timestamp' => date('Y-m-d H:i:s')
         ]);
+        
     } catch (Exception $e) {
         sendResponse(['error' => 'Erro na limpeza emergencial: ' . $e->getMessage()], 500);
     }
