@@ -791,13 +791,14 @@ function updateRelayStatus() {
     let heaterActive = false;
     let waitingStatus = null;
     
-    if (appState.heartbeat) {
-        coolerActive = appState.heartbeat.cooler_active === 1 || appState.heartbeat.cooler_active === true;
-        heaterActive = appState.heartbeat.heater_active === 1 || appState.heartbeat.heater_active === true;
+    // ✅ Fonte 1: espState (fermentation_states) - dados mais completos do ESP
+    // O ESP envia cooling/heating no estado completo a cada 30s
+    if (appState.espState) {
+        coolerActive = appState.espState.cooling === true || appState.espState.cooling === 1;
+        heaterActive = appState.espState.heating === true || appState.espState.heating === 1;
         
-        if (appState.heartbeat.control_status) {
-            const cs = appState.heartbeat.control_status;
-            
+        if (appState.espState.control_status) {
+            const cs = appState.espState.control_status;
             if (cs.is_waiting && cs.wait_reason) {
                 waitingStatus = {
                     reason: cs.wait_reason,
@@ -805,16 +806,19 @@ function updateRelayStatus() {
                 };
             }
         }
-    } 
-    else if (appState.controller) {
+    }
+    
+    // ✅ Fonte 2: controller_states - tabela dedicada de controle
+    if (!coolerActive && !heaterActive && appState.controller) {
         coolerActive = appState.controller.cooling === 1 || appState.controller.cooling === true;
         heaterActive = appState.controller.heating === 1 || appState.controller.heating === true;
     }
     
-    if (!waitingStatus && appState.espState && appState.espState.control_status) {
-        const cs = appState.espState.control_status;
+    // ✅ Fonte 3: heartbeat control_status (para waiting status)
+    if (appState.heartbeat && appState.heartbeat.control_status) {
+        const cs = appState.heartbeat.control_status;
         
-        if (cs.is_waiting && cs.wait_reason) {
+        if (!waitingStatus && cs.is_waiting && cs.wait_reason) {
             waitingStatus = {
                 reason: cs.wait_reason,
                 display: cs.wait_display || 'aguardando'
