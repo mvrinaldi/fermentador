@@ -1,6 +1,9 @@
 // app.js - Monitor Passivo (COM visualização de Cooler/Heater)
 const API_BASE_URL = '/api.php?path=';
 
+// ========== CONFIGURAÇÃO DE DEBUG ==========
+const DEBUG_MODE = false; // false para produção, true para debug
+
 // ========== VARIÁVEIS GLOBAIS ==========
 let chart = null;
 let refreshInterval = null;
@@ -354,7 +357,9 @@ function decompressData(data) {
     
     const result = { ...data };
     
-    console.log('🔍 DEBUG decompressData INPUT:', result);
+    if (DEBUG_MODE) {
+        console.log('🔍 DEBUG decompressData INPUT:', result);
+    }
     
     const fieldMap = {
         'cn': 'config_name',
@@ -394,7 +399,9 @@ function decompressData(data) {
                 };
                 result.targetReached = true;
                 result.fermentationCompleted = true;
-                console.log('✅ tr é ["tc"] - Fermentação concluída');
+                if (DEBUG_MODE) {
+                    console.log('✅ tr é ["tc"] - Fermentação concluída');
+                }
             }
             else if (result.tr.length === 4 && 
                 typeof result.tr[0] === 'number' && 
@@ -435,7 +442,9 @@ function decompressData(data) {
             };
             result.targetReached = true;
             result.fermentationCompleted = true;
-            console.log('✅ tr é "tc" (string) - Fermentação concluída');
+            if (DEBUG_MODE) {
+                console.log('✅ tr é "tc" (string) - Fermentação concluída');
+            }
         }
         
         delete result.tr;
@@ -444,13 +453,19 @@ function decompressData(data) {
     if (result.targetReached === undefined) {
         if (result.timeRemaining) {
             result.targetReached = true;
-            console.log('✅ Inferido targetReached = true (tem timeRemaining)');
+            if (DEBUG_MODE) {
+                console.log('✅ Inferido targetReached = true (tem timeRemaining)');
+            }
         } else if (result.status === 'running' || result.status === 'Executando') {
             result.targetReached = false;
-            console.log('✅ Inferido targetReached = false (status running, sem timeRemaining)');
+            if (DEBUG_MODE) {
+                console.log('✅ Inferido targetReached = false (status running, sem timeRemaining)');
+            }
         } else if (result.status === 'waiting' || result.status === 'Aguardando') {
             result.targetReached = false;
-            console.log('✅ Inferido targetReached = false (status waiting)');
+            if (DEBUG_MODE) {
+                console.log('✅ Inferido targetReached = false (status waiting)');
+            }
         }
     }
     
@@ -558,7 +573,9 @@ async function loadCompleteState() {
                     appState.ispindel = latestData.ispindel || null;
                 }
             } catch (e) {
-                console.log('Não foi possível buscar últimas leituras:', e);
+                if (DEBUG_MODE) {
+                    console.log('Não foi possível buscar últimas leituras:', e);
+                }
             }
             
             renderNoActiveFermentation();
@@ -567,20 +584,26 @@ async function loadCompleteState() {
         
         const completeState = await apiRequest(`state/complete&config_id=${activeData.id}`);
         
-        console.log('🔍 DADOS BRUTOS DO SERVIDOR (completo):', completeState);
+        if (DEBUG_MODE) {
+            console.log('🔍 DADOS BRUTOS DO SERVIDOR (completo):', completeState);
+        }
         
         if (completeState.state) {
-            console.log('🔍 Estado ANTES da descompressão:', completeState.state);
+            if (DEBUG_MODE) {
+                console.log('🔍 Estado ANTES da descompressão:', completeState.state);
+            }
             
             completeState.state = decompressData(completeState.state);
             
-            console.log('🔍 Estado APÓS descompressão:', {
-                targetReached: completeState.state.targetReached,
-                timeRemaining: completeState.state.timeRemaining,
-                status: completeState.state.status,
-                config_name: completeState.state.config_name,
-                fermentationCompleted: completeState.state.fermentationCompleted
-            });
+            if (DEBUG_MODE) {
+                console.log('🔍 Estado APÓS descompressão:', {
+                    targetReached: completeState.state.targetReached,
+                    timeRemaining: completeState.state.timeRemaining,
+                    status: completeState.state.status,
+                    config_name: completeState.state.config_name,
+                    fermentationCompleted: completeState.state.fermentationCompleted
+                });
+            }
         }
         
         appState.config = completeState.config;
@@ -746,8 +769,9 @@ function updateHeapStatus() {
         
         existingHeapAlert.classList.remove('hidden');
         
-        // Log para debug
-        console.log(`⚠️ Heap ${isCritical ? 'CRÍTICO' : 'baixo'}: ${heapKB}KB (${freeHeap} bytes)`);
+        if (DEBUG_MODE) {
+            console.log(`⚠️ Heap ${isCritical ? 'CRÍTICO' : 'baixo'}: ${heapKB}KB (${freeHeap} bytes)`);
+        }
     } else {
         // **CORREÇÃO AQUI**: Se a memória estiver OK (> 30KB), esconde o alerta
         if (existingHeapAlert) {
@@ -941,13 +965,15 @@ function getStageDescription(stage) {
 
 // ========== RENDERIZAÇÃO ==========
 function renderUI() {
-    console.log('🔍 RenderUI chamada', {
-        temConfig: !!appState.config,
-        temStages: appState.config?.stages?.length || 0,
-        temEspState: !!appState.espState,
-        timeRemaining: appState.espState?.timeRemaining,
-        fermentationCompleted: appState.espState?.fermentationCompleted
-    });
+    if (DEBUG_MODE) {
+        console.log('🔍 RenderUI chamada', {
+            temConfig: !!appState.config,
+            temStages: appState.config?.stages?.length || 0,
+            temEspState: !!appState.espState,
+            timeRemaining: appState.espState?.timeRemaining,
+            fermentationCompleted: appState.espState?.fermentationCompleted
+        });
+    }
     
     const noFermentationCard = document.getElementById('no-fermentation-card');
     if (noFermentationCard) {
@@ -982,12 +1008,14 @@ function renderUI() {
         const targetReached = appState.espState.targetReached === true;
         const fermentationCompleted = appState.espState.fermentationCompleted === true;
         
-        console.log('⏱️ Time Element Debug:', {
-            hasTimeRemaining: !!tr,
-            targetReached: targetReached,
-            fermentationCompleted: fermentationCompleted,
-            timeRemaining: tr
-        });
+        if (DEBUG_MODE) {
+            console.log('⏱️ Time Element Debug:', {
+                hasTimeRemaining: !!tr,
+                targetReached: targetReached,
+                fermentationCompleted: fermentationCompleted,
+                timeRemaining: tr
+            });
+        }
         
         if (fermentationCompleted || tr?.status === 'completed' || tr?.unit === 'completed') {
             timeElement.innerHTML = `
@@ -997,7 +1025,9 @@ function renderUI() {
                 </span>
             `;
             timeElement.style.display = 'flex';
-            console.log('🎨 Time element: Fermentação concluída');
+            if (DEBUG_MODE) {
+                console.log('🎨 Time element: Fermentação concluída');
+            }
         }
         else if (tr && targetReached) {
             let icon = 'fas fa-hourglass-half';
@@ -1023,7 +1053,9 @@ function renderUI() {
             `;
             timeElement.style.display = 'flex';
             
-            console.log(`🎨 Time element (targetReached=true): ${timeDisplay}${statusText}`);
+            if (DEBUG_MODE) {
+                console.log(`🎨 Time element (targetReached=true): ${timeDisplay}${statusText}`);
+            }
         } else if (targetReached === false) {
             timeElement.innerHTML = `
                 <i class="fas fa-hourglass-start text-yellow-600"></i>
@@ -1032,7 +1064,9 @@ function renderUI() {
                 </span>
             `;
             timeElement.style.display = 'flex';
-            console.log('🎨 Time element (targetReached=false): Aguardando temperatura alvo');
+            if (DEBUG_MODE) {
+                console.log('🎨 Time element (targetReached=false): Aguardando temperatura alvo');
+            }
         } else {
             timeElement.style.display = 'none';
         }

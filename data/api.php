@@ -6,7 +6,7 @@
  * e DatabaseCleanup centralizado
  * 
  * @author Marcos Rinaldi
- * @version 2.1
+ * @version 2.2 - Correção integração alertas + limpeza código redundante
  * @date Fevereiro 2026
  */
 
@@ -41,24 +41,27 @@ $_SESSION['last_activity'] = time();
 require_once $_SERVER['DOCUMENT_ROOT'] . '/config/database.php';
 require_once __DIR__ . '/classes/DatabaseCleanup.php';
 
-// Sistema de Alertas
+// ✅ Sistema de Alertas - carregamento único e simplificado
 $alertSystemAvailable = false;
 try {
-    if (file_exists(__DIR__ . '/classes/AlertSystem.php')) {
-        require_once __DIR__ . '/classes/AlertSystem.php';
-        
-        if (file_exists(__DIR__ . '/api/AlertIntegration.php')) {
-            require_once __DIR__ . '/api/AlertIntegration.php';
-            $alertSystemAvailable = true;
-            error_log("[ALERTS] Sistema de alertas carregado com sucesso");
-        } else {
-            error_log("[ALERTS] AlertIntegration.php não encontrado");
-        }
+    $alertSystemFile = __DIR__ . '/classes/AlertSystem.php';
+    $alertIntegrationFile = __DIR__ . '/api/AlertIntegration.php';
+    
+    if (file_exists($alertSystemFile) && file_exists($alertIntegrationFile)) {
+        require_once $alertSystemFile;
+        require_once $alertIntegrationFile;
+        $alertSystemAvailable = true;
+        error_log("[API] Sistema de alertas carregado com sucesso");
     } else {
-        error_log("[ALERTS] AlertSystem.php não encontrado em " . __DIR__ . '/classes/');
+        if (!file_exists($alertSystemFile)) {
+            error_log("[API] AlertSystem.php não encontrado em: $alertSystemFile");
+        }
+        if (!file_exists($alertIntegrationFile)) {
+            error_log("[API] AlertIntegration.php não encontrado em: $alertIntegrationFile");
+        }
     }
 } catch (Exception $e) {
-    error_log("[ALERTS] Erro ao carregar sistema de alertas: " . $e->getMessage());
+    error_log("[API] Erro ao carregar sistema de alertas: " . $e->getMessage());
     $alertSystemAvailable = false;
 }
 
@@ -314,6 +317,8 @@ function sendResponse($data, $code = 200, $options = 0) {
     exit;
 }
 
+// ==================== FUNÇÕES DE ALERTA ====================
+
 /**
  * Verifica alertas (chamado após heartbeat)
  */
@@ -332,53 +337,77 @@ function checkAlertsIfEnabled($pdo, $configId) {
 }
 
 /**
- * Dispara alerta de etapa concluída
+ * ✅ Dispara alerta de etapa concluída
  */
 function triggerStageCompletedAlert($pdo, $configId, $stageIndex, $stageName, $nextStageName = null) {
     global $alertSystemAvailable;
     
-    if (!$alertSystemAvailable || !$configId) {
+    error_log("[API] triggerStageCompletedAlert() chamado: available={$alertSystemAvailable}, configId={$configId}, stage={$stageIndex}");
+    
+    if (!$alertSystemAvailable) {
+        error_log("[API] ❌ Sistema de alertas NÃO disponível!");
+        return;
+    }
+    
+    if (!$configId) {
+        error_log("[API] ❌ configId vazio!");
         return;
     }
     
     try {
         AlertIntegration::onStageCompleted($pdo, $configId, $stageIndex, $stageName, $nextStageName);
+        error_log("[API] ✅ AlertIntegration::onStageCompleted() executado com sucesso");
     } catch (Exception $e) {
-        error_log("[ALERTS] Erro ao disparar alerta de etapa: " . $e->getMessage());
+        error_log("[API] ❌ Erro ao disparar alerta de etapa: " . $e->getMessage());
     }
 }
 
 /**
- * Dispara alerta de fermentação concluída
+ * ✅ Dispara alerta de fermentação concluída
  */
 function triggerFermentationCompletedAlert($pdo, $configId, $configName) {
     global $alertSystemAvailable;
     
-    if (!$alertSystemAvailable || !$configId) {
+    error_log("[API] triggerFermentationCompletedAlert() chamado: available={$alertSystemAvailable}, configId={$configId}");
+    
+    if (!$alertSystemAvailable) {
+        error_log("[API] ❌ Sistema de alertas NÃO disponível!");
+        return;
+    }
+    
+    if (!$configId) {
+        error_log("[API] ❌ configId vazio!");
         return;
     }
     
     try {
         AlertIntegration::onFermentationCompleted($pdo, $configId, $configName);
+        error_log("[API] ✅ AlertIntegration::onFermentationCompleted() executado com sucesso");
     } catch (Exception $e) {
-        error_log("[ALERTS] Erro ao disparar alerta de conclusão: " . $e->getMessage());
+        error_log("[API] ❌ Erro ao disparar alerta de conclusão: " . $e->getMessage());
     }
 }
 
 /**
- * Dispara alerta de gravidade atingida
+ * ✅ Dispara alerta de gravidade atingida
  */
 function triggerGravityReachedAlert($pdo, $configId, $currentGravity, $targetGravity) {
     global $alertSystemAvailable;
     
-    if (!$alertSystemAvailable || !$configId) {
+    error_log("[API] triggerGravityReachedAlert() chamado: available={$alertSystemAvailable}, configId={$configId}");
+    
+    if (!$alertSystemAvailable) {
+        return;
+    }
+    
+    if (!$configId) {
         return;
     }
     
     try {
         AlertIntegration::onGravityReached($pdo, $configId, $currentGravity, $targetGravity);
     } catch (Exception $e) {
-        error_log("[ALERTS] Erro ao disparar alerta de gravidade: " . $e->getMessage());
+        error_log("[API] ❌ Erro ao disparar alerta de gravidade: " . $e->getMessage());
     }
 }
 
@@ -852,7 +881,7 @@ if ($path === 'state/complete' && $method === 'GET') {
         error_log("Error fetching heartbeat: " . $e->getMessage());
     }
     
-    // Busca alertas não lidos (se sistema de alertas disponível)
+    // Busca alertas não lidos
     $unreadAlerts = 0;
     try {
         $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM alerts WHERE config_id = ? AND is_read = 0");
@@ -880,7 +909,6 @@ if ($path === 'state/complete' && $method === 'GET') {
 // ==================== LEITURAS ====================
 
 if ($path === 'readings' && $method === 'POST') {
-    // Aceita formato comprimido e completo
     $configId = $input['config_id'] ?? $input['cid'] ?? null;
     $tempFridge = $input['temp_fridge'] ?? $input['tf'] ?? null;
     $tempFermenter = $input['temp_fermenter'] ?? $input['tb'] ?? null;
@@ -896,7 +924,6 @@ if ($path === 'readings' && $method === 'POST') {
     ");
     $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget]);
     
-    // ✅ USAR CLASSE CENTRALIZADA
     DatabaseCleanup::cleanupTable($pdo, 'readings', $configId);
     
     sendResponse(['success' => true, 'reading_id' => $pdo->lastInsertId()], 201);
@@ -916,7 +943,6 @@ if ($path === 'ispindel/data' && $method === 'POST') {
     }
     
     try {
-        // Usa config_id do ESP se fornecido, senão busca fermentação ativa
         $configId = null;
         
         if ($configIdFromEsp) {
@@ -929,7 +955,6 @@ if ($path === 'ispindel/data' && $method === 'POST') {
             }
         }
         
-        // Fallback: busca qualquer fermentação ativa
         if (!$configId) {
             $stmt = $pdo->prepare("
                 SELECT c.id FROM configurations c
@@ -947,7 +972,6 @@ if ($path === 'ispindel/data' && $method === 'POST') {
         ");
         $stmt->execute([$configId, $name, $temperature, $gravity, $battery]);
         
-        // ✅ LIMPEZA APÓS INSERT
         if ($configId) {
             DatabaseCleanup::cleanupTable($pdo, 'ispindel_readings', $configId);
         }
@@ -981,7 +1005,6 @@ if ($path === 'control' && $method === 'POST') {
     ");
     $stmt->execute([$configId, $setpoint, $cooling, $heating]);
     
-    // ✅ LIMPEZA APÓS INSERT
     DatabaseCleanup::cleanupTable($pdo, 'controller_states', $configId);
     
     sendResponse(['success' => true], 201);
@@ -1004,7 +1027,6 @@ if ($path === 'fermentation-state' && $method === 'POST') {
     ");
     $stmt->execute([$configId, json_encode($input)]);
     
-    // ✅ LIMPEZA APÓS INSERT
     DatabaseCleanup::cleanupTable($pdo, 'fermentation_states', $configId);
     
     sendResponse(['success' => true], 201);
@@ -1049,15 +1071,14 @@ if ($path === 'heartbeat' && $method === 'POST') {
             $controlStatus ? json_encode($controlStatus) : null
         ]);
         
-        // ✅ LIMPEZA APÓS INSERT
         DatabaseCleanup::cleanupTable($pdo, 'esp_heartbeat', $configId);
         
-        // ✅ LIMPEZA OCASIONAL DE ÓRFÃOS (5% de chance)
+        // Limpeza ocasional de órfãos (5% de chance)
         if (rand(1, 20) === 1) {
             DatabaseCleanup::cleanupOrphans($pdo);
         }
         
-        // ✅ VERIFICAR ALERTAS após heartbeat
+        // ✅ Verificar alertas após heartbeat
         checkAlertsIfEnabled($pdo, $configId);
         
         sendResponse(['success' => true], 201);
@@ -1076,6 +1097,11 @@ if ($path === 'stage/advance' && $method === 'POST') {
     if (!$configId || $newStageIndex === null) {
         sendResponse(['error' => 'config_id e stage_index são obrigatórios'], 400);
     }
+    
+    error_log("[API] ========================================");
+    error_log("[API] stage/advance RECEBIDO: config_id={$configId}, new_stage={$newStageIndex}");
+    error_log("[API] alertSystemAvailable=" . ($alertSystemAvailable ? 'true' : 'false'));
+    error_log("[API] ========================================");
     
     $pdo->beginTransaction();
     
@@ -1111,6 +1137,19 @@ if ($path === 'stage/advance' && $method === 'POST') {
         $completedStage = $stmt->fetch();
         $completedStageName = "Etapa " . ($previousIndex + 1) . " (" . ($completedStage['type'] ?? 'unknown') . ")";
         
+        // Registrar no action_history
+        $stmt = $pdo->prepare("
+            INSERT INTO action_history (config_id, action_type, action_details)
+            VALUES (?, 'stage_advanced', ?)
+        ");
+        $stmt->execute([$configId, json_encode([
+            'previous_stage' => $previousIndex,
+            'new_stage' => $newStageIndex,
+            'new_target_temp' => null,
+            'timestamp' => date('Y-m-d H:i:s'),
+            'source' => 'esp8266'
+        ])]);
+        
         // Verificar se é a última etapa
         if ($newStageIndex >= $totalStages) {
             // Fermentação concluída
@@ -1123,7 +1162,8 @@ if ($path === 'stage/advance' && $method === 'POST') {
             
             $pdo->commit();
             
-            // ✅ Disparar alerta de fermentação concluída
+            // ✅ Disparar alerta de fermentação concluída (APÓS commit)
+            error_log("[API] Fermentação concluída! Disparando alerta...");
             triggerFermentationCompletedAlert($pdo, $configId, $configName);
             
             sendResponse([
@@ -1161,9 +1201,25 @@ if ($path === 'stage/advance' && $method === 'POST') {
                 $stmt->execute([$newTargetTemp, $configId]);
             }
             
+            // Atualizar action_history com target_temp
+            $stmt = $pdo->prepare("
+                UPDATE action_history 
+                SET action_details = ? 
+                WHERE config_id = ? AND action_type = 'stage_advanced'
+                ORDER BY action_timestamp DESC LIMIT 1
+            ");
+            $stmt->execute([json_encode([
+                'previous_stage' => $previousIndex,
+                'new_stage' => $newStageIndex,
+                'new_target_temp' => $newTargetTemp,
+                'timestamp' => date('Y-m-d H:i:s'),
+                'source' => 'esp8266'
+            ]), $configId]);
+            
             $pdo->commit();
             
-            // ✅ Disparar alerta de etapa concluída
+            // ✅ Disparar alerta de etapa concluída (APÓS commit)
+            error_log("[API] Etapa avançou: {$completedStageName} -> {$newStageName}. Disparando alerta...");
             triggerStageCompletedAlert($pdo, $configId, $previousIndex, $completedStageName, $newStageName);
             
             sendResponse([
@@ -1176,6 +1232,7 @@ if ($path === 'stage/advance' && $method === 'POST') {
         
     } catch (Exception $e) {
         $pdo->rollBack();
+        error_log("[API] ❌ Erro em stage/advance: " . $e->getMessage());
         sendResponse(['error' => 'Erro ao avançar etapa: ' . $e->getMessage()], 500);
     }
 }
@@ -1185,7 +1242,7 @@ if ($path === 'stage/advance' && $method === 'POST') {
 if ($path === 'target/reached' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
     $stageIndex = $input['stage_index'] ?? null;
-    $targetType = $input['target_type'] ?? 'temperature'; // temperature ou gravity
+    $targetType = $input['target_type'] ?? 'temperature';
     $currentValue = $input['current_value'] ?? null;
     $targetValue = $input['target_value'] ?? null;
     
@@ -1340,12 +1397,10 @@ if ($path === 'emergency-cleanup' && $method === 'POST') {
     try {
         $results = [];
         
-        // Buscar todas as configurações ativas
         $stmt = $pdo->prepare("SELECT DISTINCT id FROM configurations WHERE status = 'active'");
         $stmt->execute();
         $configs = $stmt->fetchAll(PDO::FETCH_COLUMN);
         
-        // Limpeza agressiva de cada config
         foreach ($configs as $configId) {
             $results["config_{$configId}"] = [
                 'readings' => DatabaseCleanup::aggressiveCleanup($pdo, 'readings', $configId, 200),
@@ -1356,7 +1411,6 @@ if ($path === 'emergency-cleanup' && $method === 'POST') {
             ];
         }
         
-        // Limpar órfãos
         $results['orphans_cleaned'] = DatabaseCleanup::cleanupOrphans($pdo);
         
         sendResponse([
