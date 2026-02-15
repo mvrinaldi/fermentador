@@ -2,7 +2,7 @@
 /**
  * api/esp/stage.php - Atualiza etapa atual da fermentação
  * 
- * v1.1 - Com integração ao Sistema de Alertas
+ * ✅ v1.1 - Com integração ao Sistema de Alertas
  * 
  * @author Marcos Rinaldi
  * @date Fevereiro 2026
@@ -20,7 +20,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require_once $_SERVER['DOCUMENT_ROOT'] . '/config/database.php';
 
-// Carregar sistema de alertas
+// ✅ Carregar sistema de alertas
 $alertSystemAvailable = false;
 try {
     $alertSystemFile = $_SERVER['DOCUMENT_ROOT'] . '/fermentador/classes/AlertSystem.php';
@@ -182,7 +182,7 @@ try {
     // Confirma transação
     $pdo->commit();
     
-    // DISPARAR ALERTAS (após commit, para não bloquear a transação)
+    // ✅ DISPARAR ALERTAS (após commit, para não bloquear a transação)
     if ($alertSystemAvailable) {
         try {
             if ($isFermentationComplete) {
@@ -194,10 +194,10 @@ try {
             }
         } catch (Exception $e) {
             // Não deixa erro de alerta afetar a resposta ao ESP
-            error_log("[STAGE] Erro ao disparar alerta: " . $e->getMessage());
+            error_log("[STAGE] ❌ Erro ao disparar alerta: " . $e->getMessage());
         }
     } else {
-        error_log("[STAGE] Sistema de alertas não disponível - alerta NÃO disparado");
+        error_log("[STAGE] ⚠️ Sistema de alertas não disponível - alerta NÃO disparado");
     }
     
     // Resposta ao ESP
