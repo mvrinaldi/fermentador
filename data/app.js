@@ -2,7 +2,7 @@
 const API_BASE_URL = '/api.php?path=';
 
 // ========== CONFIGURAÇÃO DE DEBUG ==========
-const DEBUG_MODE = false; // false para produção, true para debug
+const DEBUG_MODE = true; // false para produção, true para debug
 
 // ========== VARIÁVEIS GLOBAIS ==========
 let chart = null;

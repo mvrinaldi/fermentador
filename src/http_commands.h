@@ -4,7 +4,7 @@
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include "http_client.h"
-#include "eeprom_utils.h"
+#include "preferences_utils.h"
 
 // ===== Função para marcar comando como executado =====
 void markCommandExecuted(int commandId) {
@@ -21,7 +21,6 @@ void markCommandExecuted(int commandId) {
     http.begin(client, url);
     http.addHeader("Content-Type", "application/json");
     
-    // Prepara JSON
     JsonDocument doc;
     doc["command_id"] = commandId;
     
@@ -44,7 +43,7 @@ void markCommandExecuted(int commandId) {
 // ===== Função para verificar comandos pendentes =====
 void checkPendingCommands() {
     if (!isHTTPOnline()) {
-        return;  // Silencioso quando offline
+        return;
     }
     
     HTTPClient http;
@@ -69,31 +68,25 @@ void checkPendingCommands() {
             if (count > 0) {
                 Serial.printf("[CMD] %d comando(s) pendente(s)\n", count);
                 
-                // Processa cada comando
                 for (JsonObject cmd : commands) {
                     int cmdId = cmd["id"];
                     const char* cmdName = cmd["command"];
                     
                     Serial.printf("[CMD] Executando: %s (ID: %d)\n", cmdName, cmdId);
                     
-                    // Executa o comando
                     if (strcmp(cmdName, "CLEAR_EEPROM") == 0) {
-                        // Marca como executado ANTES de limpar (para não perder a confirmação)
                         markCommandExecuted(cmdId);
                         
-                        Serial.println(F("[CMD] Iniciando limpeza da EEPROM..."));
-                        delay(1000); // Aguarda confirmação chegar ao servidor
+                        Serial.println(F("[CMD] Iniciando limpeza do Preferences..."));
+                        delay(1000);
                         
-                        // Chama sua função existente (que já reinicia o ESP)
-                        clearAllEEPROM();
-                        
-                        // Nota: clearAllEEPROM() reinicia o ESP, então código após não executa
+                        // ✅ MIGRADO: Chama função de limpar Preferences
+                        clearAllPreferencesUtil();
                     }
                 }
             }
         }
     } else if (httpCode != HTTP_CODE_NOT_FOUND) {
-        // Só loga erro se não for 404 (que é esperado quando não há comandos)
         static unsigned long lastError = 0;
         if (millis() - lastError >= 60000) {
             Serial.printf("[CMD] Erro HTTP: %d\n", httpCode);

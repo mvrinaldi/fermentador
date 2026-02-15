@@ -13,7 +13,6 @@
 #define SENSOR2_NOME "sensor_geladeira"
 
 // === Configurações do Sistema === //
-#define EEPROM_SIZE 512                    // Tamanho da EEPROM
 #define MAX_STAGES 10                      // Máximo de etapas por fermentação
 #define TEMPERATURE_TOLERANCE 0.3f         // Tolerância para considerar temperatura atingida (°C)
 #define DEFAULT_TEMPERATURE 5.0f          // Temperatura padrão quando não há fermentação ativa (°C)

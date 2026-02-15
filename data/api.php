@@ -907,26 +907,72 @@ if ($path === 'state/complete' && $method === 'GET') {
 }
 
 // ==================== LEITURAS ====================
-
 if ($path === 'readings' && $method === 'POST') {
+    // Aceita tanto formato comprimido quanto expandido
     $configId = $input['config_id'] ?? $input['cid'] ?? null;
     $tempFridge = $input['temp_fridge'] ?? $input['tf'] ?? null;
     $tempFermenter = $input['temp_fermenter'] ?? $input['tb'] ?? null;
     $tempTarget = $input['temp_target'] ?? $input['tt'] ?? null;
     
-    if (!$configId || $tempFridge === null || $tempFermenter === null || $tempTarget === null) {
-        sendResponse(['error' => 'Dados incompletos'], 400);
+    // Validação básica
+    if ($tempFridge === null || $tempFermenter === null || $tempTarget === null) {
+        sendResponse(['error' => 'Dados incompletos: temperaturas obrigatórias'], 400);
     }
     
-    $stmt = $pdo->prepare("
-        INSERT INTO readings (config_id, temp_fridge, temp_fermenter, temp_target)
-        VALUES (?, ?, ?, ?)
-    ");
-    $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget]);
-    
-    DatabaseCleanup::cleanupTable($pdo, 'readings', $configId);
-    
-    sendResponse(['success' => true, 'reading_id' => $pdo->lastInsertId()], 201);
+    try {
+        // Se não tem config_id, busca fermentação ativa
+        if (!$configId) {
+            $stmt = $pdo->prepare("
+                SELECT id FROM configurations 
+                WHERE status = 'active' 
+                ORDER BY started_at DESC 
+                LIMIT 1
+            ");
+            $stmt->execute();
+            $activeConfig = $stmt->fetch();
+            
+            if ($activeConfig) {
+                $configId = $activeConfig['id'];
+            } else {
+                // Sem fermentação ativa - AINDA ASSIM salva a leitura (config_id = null)
+                error_log("[API] Salvando leitura sem fermentação ativa");
+            }
+        }
+        
+        // ✅ INSERT DA LEITURA
+        $stmt = $pdo->prepare("
+            INSERT INTO readings (config_id, temp_fridge, temp_fermenter, temp_target)
+            VALUES (?, ?, ?, ?)
+        ");
+        
+        $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget]);
+        $readingId = $pdo->lastInsertId();
+        
+        // Limpeza automática se tiver config_id
+        if ($configId) {
+            DatabaseCleanup::cleanupTable($pdo, 'readings', $configId);
+        }
+        
+        // Log de sucesso
+        error_log(sprintf(
+            "[API] ✅ Leitura salva: ID=%d, Config=%s, Ferm=%.1f, Fridge=%.1f, Target=%.1f",
+            $readingId,
+            $configId ?? 'null',
+            $tempFermenter,
+            $tempFridge,
+            $tempTarget
+        ));
+        
+        sendResponse([
+            'success' => true, 
+            'reading_id' => $readingId,
+            'config_id' => $configId
+        ], 201);
+        
+    } catch (Exception $e) {
+        error_log("[API] ❌ Erro ao salvar leitura: " . $e->getMessage());
+        sendResponse(['error' => 'Erro ao salvar leitura: ' . $e->getMessage()], 500);
+    }
 }
 
 // ==================== ISPINDEL ====================

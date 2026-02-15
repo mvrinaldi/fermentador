@@ -521,6 +521,24 @@ void enviarLeiturasSensoresMySQL() {
         LOG_ENVIODADOS("[Leituras] Skip: sensores falharam");
         return;
     }
+    
+    // ✅ Log antes do envio
+    if (fermentacaoState.active) {
+        LOG_ENVIODADOS(String("[Envio] Enviando leitura: Ferm=") + 
+                       String(tempFermenter, 1) + 
+                       "°C, Fridge=" + 
+                       String(tempFridge, 1) + "°C");
+    }
+    
+    // ✅ ENVIO REAL
+    if (httpClient.isConnected()) {
+        httpClient.sendReading(
+            fermentacaoState.activeId,
+            tempFridge,
+            tempFermenter,
+            fermentacaoState.tempTarget
+        );
+    }
 }
 
 // =====================================================

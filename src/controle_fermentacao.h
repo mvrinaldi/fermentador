@@ -1,5 +1,4 @@
 // controle_fermentacao.h
-// ✅ CONSOLIDADO: Envios MySQL centralizados em mysql_sender.cpp
 #pragma once
 
 #include <Arduino.h>
@@ -20,10 +19,10 @@ String formatTime(time_t timestamp);
 // FUNÇÃO VALIDAÇÃO
 bool isValidString(const char* str);
 
-// Funções EEPROM
-void saveStateToEEPROM();
-void loadStateFromEEPROM();
-void clearEEPROM();
+// Funções Preferences (antigas EEPROM)
+void saveStateToPreferences();
+void loadStateFromPreferences();
+void clearPreferences();
 
 // Controle de estado
 void updateTargetTemperature(float temp);
@@ -45,5 +44,5 @@ void verificarTargetAtingido();
 void enviarEstadoCompleto();
 void enviarLeiturasSensores();
 
-// Declaração da função de leitura de temperatura (implementada em gerenciador_sensores.cpp)
+// Declaração da função de leitura de temperatura
 bool readConfiguredTemperatures(float &tempFermenter, float &tempFridge);

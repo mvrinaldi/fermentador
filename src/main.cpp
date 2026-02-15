@@ -1,7 +1,7 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "1.0.0"
-#define IMPLEMENTACAO "Versão Inicial"
+#define FIRMWARE_VERSION "1.0.2"
+#define IMPLEMENTACAO "Migrado para Preferences"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -10,17 +10,14 @@
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
-#include <EEPROM.h>
+#include <Preferences.h>
 
 #include <time.h>
 #include <TZ.h>
 
-// Configuração NTP
 #define NTP_SERVER1 "pool.ntp.org"
 #define NTP_SERVER2 "time.nist.gov"
 #define NTP_SERVER3 "time.google.com"
-
-// Fuso horário do Brasil (Brasília UTC-3)
 #define TZ_STRING "BRST3BRDT,M10.3.0/0,M2.3.0/0"
 
 #include "secrets.h"
@@ -39,23 +36,19 @@
 #include "ota.h"
 #include "wifi_manager.h"
 #include "network_manager.h"
-#include "eeprom_utils.h"
+#include "preferences_utils.h"  // ✅ MIGRADO
 #include "http_commands.h"
 #include "telnet.h"
 #include "debug_config.h"
 
 ESP8266WebServer server(80);
 
-// === Variáveis de Controle de Tempo === //
 unsigned long lastTemperatureControl = 0;
 unsigned long lastPhaseCheck = 0;
-
-// ==================== TIMERS ====================
 unsigned long lastSensorCheck = 0;
 
-const unsigned long SENSOR_CHECK_INTERVAL = 30000;   // 30 segundos
+const unsigned long SENSOR_CHECK_INTERVAL = 30000;
 
-// Formata a data de Jan 18 2026 para 18/01/2026
 String getBuildDateFormatted() {
     char month[4];
     int day, year;
@@ -80,7 +73,6 @@ String getBuildDateFormatted() {
     return String(buffer);
 }
 
-// Formata a hora de 15:30:21 para 15:30
 String getBuildTimeShort() {
     char timeBuf[6];
     memcpy(timeBuf, __TIME__, 5);
@@ -88,12 +80,7 @@ String getBuildTimeShort() {
     return String(timeBuf);
 }
 
-// ============================================
-// FUNÇÃO DE SETUP DO NTP (UTC PURO)
-// ============================================
-
 void setupNTP() {
-
     configTime(0, 0, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
 
     int timeout = 0;
@@ -105,10 +92,6 @@ void setupNTP() {
         timeout++;
     }
 }
-
-// ============================================
-// MONITORAMENTO PERIÓDICO DO NTP
-// ============================================
 
 void checkNTPSync() {
     static unsigned long lastCheck = 0;
@@ -123,19 +106,16 @@ void checkNTPSync() {
     }
 }
 
-// ============================================
-// SETUP - INTEGRAÇÃO BREWPI
-// ============================================
-
 void setup() {
     Serial.begin(115200);
     delay(1000);
     
-LOG_MAIN(F(
+    LOG_MAIN(F(
 "\n\n"
 "╔════════════════════════════════════════════════╗\n"
 "║                                                ║\n"
 "║        FERMENTADOR INTELIGENTE - BREWPI        ║\n"
+"║              (PREFERENCES VERSION)             ║\n"
 "║                                                ║\n"
 "╚════════════════════════════════════════════════╝\n"
 "\n"
@@ -143,9 +123,8 @@ LOG_MAIN(F(
 "Compilado: " BUILD_DATE " " BUILD_TIME "\n"
 ));
 
-    // ==================== INICIALIZAÇÃO DO SISTEMA ====================
-    
-    EEPROM.begin(512);
+    // ✅ REMOVIDO: EEPROM.begin()
+    // Preferences gerencia memória automaticamente
     
     pinMode(cooler.pino, OUTPUT);
     pinMode(heater.pino, OUTPUT);
@@ -154,7 +133,6 @@ LOG_MAIN(F(
 
     setupSensorManager();
     
-
     DallasTemperature* dallasPtr = getSensorsPointer();
     
     if (dallasPtr) {
@@ -211,7 +189,6 @@ LOG_MAIN(F(
     
     setupSpindelRoutes(server);
     
-    // Endpoint: /version
     server.on("/version", HTTP_GET, []() {
         String json = "{";
         json += "\"version\":\"" + String(FIRMWARE_VERSION) + "\",";
@@ -219,13 +196,13 @@ LOG_MAIN(F(
         json += "\"md5\":\"" + ESP.getSketchMD5() + "\",";
         json += "\"size\":" + String(ESP.getSketchSize()) + ",";
         json += "\"free_ota_space\":" + String(ESP.getFreeSketchSpace()) + ",";
-        json += "\"control_system\":\"BrewPi\"";
+        json += "\"control_system\":\"BrewPi\",";
+        json += "\"storage\":\"Preferences\"";  // ✅ NOVO
         json += "}";
         
         server.send(200, "application/json", json);
     });
         
-    // Endpoint: / - página inicial
     server.on("/", HTTP_GET, []() {
         String html = R"(
 <!DOCTYPE html>
@@ -367,16 +344,9 @@ LOG_MAIN(F(
     }   
 }
 
-// ============================================
-// LOOP - INTEGRAÇÃO BREWPI
-// ============================================
-
 void loop() {
     unsigned long now = millis();
     
-    // ═══════════════════════════════════════════════════════════════
-    // ✅ PRIORIDADE MÁXIMA: OTA EM PROGRESSO
-    // ═══════════════════════════════════════════════════════════════
     if (isOTAInProgress()) {
         server.handleClient();
         handleOTA();
@@ -384,58 +354,36 @@ void loop() {
         return;
     }
     
-    // ═══════════════════════════════════════════════════════════════
-    // Loop normal (quando OTA NÃO está ativo)
-    // ═══════════════════════════════════════════════════════════════
-    
-    // Comandos seriais
     checkSerialCommands();
     
-    // Comandos HTTP
     static unsigned long lastCommandCheck = 0;
     if (now - lastCommandCheck >= 10000) {
         lastCommandCheck = now;
         checkPendingCommands();
     }
     
-    // Network Manager
     networkLoop();
-
-    // WebServer
     server.handleClient();
     handleOTA();
     telnetLoop();
-
-    // NTP
     checkNTPSync();
     
-    // ═══════════════════════════════════════════════════════════════
-    // ✅ CONTROLE DE TEMPERATURA BREWPI (NÚCLEO DO SISTEMA)
-    // Executa a cada 5 segundos (conforme BrewPi original)
-    // ═══════════════════════════════════════════════════════════════
     if (now - lastTemperatureControl >= 5000) {
         lastTemperatureControl = now;
         
-        // Se há fermentação ativa, executa controle BrewPi
         if (fermentacaoState.active) {
             brewPiControl.update();
             
-            // Atualiza estado global para compatibilidade
             state.currentTemp = tempToFloat(brewPiControl.getBeerTemp());
             state.targetTemp = fermentacaoState.tempTarget;
         }
         
-        // ✅ ENVIO UNIFICADO: Estado completo + controle (30s interno)
         if (isHTTPOnline()) {
             verificarTargetAtingido();
             enviarEstadoCompletoMySQL();
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // ✅ HEARTBEAT SIMPLIFICADO (saúde do sistema)
-    // Usa fermentacaoState.activeId diretamente
-    // ═══════════════════════════════════════════════════════════════
     if (isHTTPOnline() && fermentacaoState.active && strlen(fermentacaoState.activeId) > 0) {
         int configId = atoi(fermentacaoState.activeId);
         if (configId > 0) {
@@ -443,9 +391,6 @@ void loop() {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // VERIFICAÇÃO DE FERMENTAÇÃO ATIVA
-    // ═══════════════════════════════════════════════════════════════
     static unsigned long lastCheck = 0;
     if (isHTTPOnline() && now - lastCheck >= ACTIVE_CHECK_INTERVAL) {
         lastCheck = now;
@@ -453,26 +398,17 @@ void loop() {
         checkPauseOrComplete();
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // TROCA DE FASE
-    // ═══════════════════════════════════════════════════════════════
     if (now - lastPhaseCheck >= PHASE_CHECK_INTERVAL) {
         lastPhaseCheck = now;
         verificarTrocaDeFase();
     }
     
-    // ═══════════════════════════════════════════════════════════════
-    // ISPINDEL
-    // ═══════════════════════════════════════════════════════════════
     static unsigned long lastSpindel = 0;
     if (now - lastSpindel >= 10000) {
         lastSpindel = now;
         processCloudUpdatesiSpindel();
     }
     
-    // ═══════════════════════════════════════════════════════════════
-    // ✅ ENVIO DE LEITURAS PARA HISTÓRICO (60s)
-    // ═══════════════════════════════════════════════════════════════
     if (isHTTPOnline()) {
         enviarLeiturasSensoresMySQL();
         
@@ -486,9 +422,6 @@ void loop() {
         LOG_SENSORES_MAIN(logBuf);
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // VERIFICAÇÃO PERIÓDICA DE SENSORES
-    // ═══════════════════════════════════════════════════════════════
     if (now - lastSensorCheck >= SENSOR_CHECK_INTERVAL) {
         auto lista = listSensors();
         

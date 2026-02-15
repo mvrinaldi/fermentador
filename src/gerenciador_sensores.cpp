@@ -1,38 +1,25 @@
 //gerenciador_sensores.cpp
-// ✅ REFATORADO: Envio MySQL movido para mysql_sender.cpp
 #include "gerenciador_sensores.h"
-#include "eeprom_layout.h"
+#include "preferences_layout.h"
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include "network_manager.h"
 #include "http_client.h"
-#include "mysql_sender.h"  // ✅ NOVO: Módulo de envio MySQL
+#include "mysql_sender.h"
 #include "debug_config.h"
 
 // Cliente HTTP
 extern FermentadorHTTPClient httpClient;
 
+// ✅ NOVO: Instância Preferences para sensores
+Preferences prefsSensors;
+
 // =================================================
 // ACESSO AO PONTEIRO DOS SENSORES (PARA BREWPI)
 // =================================================
 
-/**
- * Retorna ponteiro para o objeto DallasTemperature global.
- * Usado pelo BrewPi para acesso direto aos sensores.
- * 
- * @return Ponteiro para objeto sensors
- */
 DallasTemperature* getSensorsPointer() {
     return &sensors;
-}
-
-// =================================================
-// MAPEAMENTO DE SENSORES → EEPROM
-// =================================================
-
-int keyToEEPROMAddr(const char* key) {
-    if (strcmp(key, SENSOR1_NOME) == 0) return ADDR_SENSOR_FERMENTADOR;
-    if (strcmp(key, SENSOR2_NOME) == 0) return ADDR_SENSOR_GELADEIRA;
-    return -1;
 }
 
 // =================================================
@@ -53,15 +40,12 @@ String addressToString(DeviceAddress deviceAddress) {
 // =================================================
 
 void setupSensorManager() {
-    EEPROM.begin(EEPROM_SIZE);
-    
     #if DEBUG_SENSORES
-    Serial.println(F("✅ EEPROM iniciada (Gerenciador de Sensores)"));
+    Serial.println(F("✅ Gerenciador de Sensores iniciado (Preferences)"));
     #endif
     
     // Inicializa biblioteca Dallas
     sensors.begin();
-    
     
     #if DEBUG_SENSORES
     int count = sensors.getDeviceCount();
@@ -69,50 +53,34 @@ void setupSensorManager() {
     #endif
     
     #ifdef DEBUG_EEPROM
-    printEEPROMLayout();
-    debugEEPROMContents();
+    printPreferencesLayout();
+    debugPreferencesContents();
     #endif
 }
 
 // =================================================
-// Scan OneWire
-// =================================================
-
-// =================================================
-// LIMPAR TODA EEPROM (usar uma vez para corrigir corrupção)
+// LIMPAR PREFERENCES DE SENSORES
 // =================================================
 void clearAllSensorsEEPROM() {
     #if DEBUG_SENSORES
-    Serial.println(F("🧹 Limpando EEPROM de sensores..."));
+    Serial.println(F("🧹 Limpando namespace sensors..."));
     #endif
     
-    // Limpa área de sensores
-    char empty[SENSOR_ADDR_SIZE] = {0};
-    
-    EEPROM.put(ADDR_SENSOR_FERMENTADOR, empty);
-    EEPROM.put(ADDR_SENSOR_GELADEIRA, empty);
+    clearPreferencesNamespace(PREFS_NAMESPACE_SENSORS);
     
     #if DEBUG_SENSORES
-    if (EEPROM.commit()) {
-        Serial.println(F("✅ EEPROM limpa com sucesso"));
-    } else {
-        Serial.println(F("❌ Erro ao limpar EEPROM"));
-    }
-    #else
-    EEPROM.commit();
+    Serial.println(F("✅ Namespace sensors limpo"));
     #endif
 }
 
 // =================================================
-// VALIDAR SE ENDEREÇO É VÁLIDO (antes de salvar)
+// VALIDAR SE ENDEREÇO É VÁLIDO
 // =================================================
 bool isValidSensorAddress(const String& address) {
-    // Deve ter exatamente 16 caracteres hexadecimais
     if (address.length() != 16) {
         return false;
     }
     
-    // Verifica se todos são hex válidos
     String upperAddr = address;
     upperAddr.toUpperCase();
     
@@ -148,7 +116,6 @@ void scanAndSendSensors() {
         return;
     }
 
-    // ✅ Cria JsonDocument local
     JsonDocument doc;
     JsonArray arr = doc["sensors"].to<JsonArray>();
 
@@ -162,7 +129,6 @@ void scanAndSendSensors() {
     #if DEBUG_SENSORES
     Serial.printf("📡 Enviando %d sensores...\n", arr.size());
     
-    // Debug opcional: mostra o payload JSON
     #if DEBUG_SENSORES_VERBOSE
     String debugPayload;
     serializeJson(doc, debugPayload);
@@ -170,44 +136,43 @@ void scanAndSendSensors() {
     #endif
     #endif
     
-    // ✅ REFATORADO: Usa mysql_sender para envio
     sendSensorsDataMySQL(doc);
 }
 
 // =================================================
-// EEPROM helpers
-// =================================================
-
-// =================================================
-// SALVAR COM VALIDAÇÃO
+// SALVAR COM VALIDAÇÃO (PREFERENCES)
 // =================================================
 bool saveSensorToEEPROM(const char* sensorKey, const String& sensorAddress) {
-    // Validação antes de salvar
     if (!isValidSensorAddress(sensorAddress)) {
         #if DEBUG_SENSORES
-        Serial.printf("❌ Endereço inválido (não é hex válido): %s\n", sensorAddress.c_str());
+        Serial.printf("❌ Endereço inválido: %s\n", sensorAddress.c_str());
         #endif
         return false;
     }
     
-    int addr = keyToEEPROMAddr(sensorKey);
-    if (addr < 0) {
+    const char* prefsKey = nullptr;
+    
+    if (strcmp(sensorKey, SENSOR1_NOME) == 0) {
+        prefsKey = KEY_SENSOR_FERM;
+    } else if (strcmp(sensorKey, SENSOR2_NOME) == 0) {
+        prefsKey = KEY_SENSOR_FRIDGE;
+    } else {
         #if DEBUG_SENSORES
         Serial.printf("❌ Sensor key inválida: %s\n", sensorKey);
         #endif
         return false;
     }
 
-    char buffer[SENSOR_ADDR_SIZE] = {0};
-    sensorAddress.toCharArray(buffer, SENSOR_ADDR_SIZE);
-
-    EEPROM.put(addr, buffer);
-    bool success = EEPROM.commit();
+    prefsSensors.begin(PREFS_NAMESPACE_SENSORS, false);
+    size_t written = prefsSensors.putString(prefsKey, sensorAddress);
+    prefsSensors.end();
+    
+    bool success = (written > 0);
     
     #if DEBUG_SENSORES
     if (success) {
-        Serial.printf("💾 Sensor salvo: %s -> %s (addr %d)\n", 
-                     sensorKey, sensorAddress.c_str(), addr);
+        Serial.printf("💾 Sensor salvo: %s -> %s\n", 
+                     sensorKey, sensorAddress.c_str());
     } else {
         Serial.printf("❌ Erro ao salvar sensor: %s\n", sensorKey);
     }
@@ -217,12 +182,19 @@ bool saveSensorToEEPROM(const char* sensorKey, const String& sensorAddress) {
 }
 
 bool removeSensorFromEEPROM(const char* sensorKey) {
-    int addr = keyToEEPROMAddr(sensorKey);
-    if (addr < 0) return false;
+    const char* prefsKey = nullptr;
+    
+    if (strcmp(sensorKey, SENSOR1_NOME) == 0) {
+        prefsKey = KEY_SENSOR_FERM;
+    } else if (strcmp(sensorKey, SENSOR2_NOME) == 0) {
+        prefsKey = KEY_SENSOR_FRIDGE;
+    } else {
+        return false;
+    }
 
-    char empty[SENSOR_ADDR_SIZE] = {0};
-    EEPROM.put(addr, empty);
-    bool success = EEPROM.commit();
+    prefsSensors.begin(PREFS_NAMESPACE_SENSORS, false);
+    bool success = prefsSensors.remove(prefsKey);
+    prefsSensors.end();
     
     #if DEBUG_SENSORES
     if (success) {
@@ -234,29 +206,30 @@ bool removeSensorFromEEPROM(const char* sensorKey) {
 }
 
 // =================================================
-// LER COM VALIDAÇÃO
+// LER COM VALIDAÇÃO (PREFERENCES)
 // =================================================
 String getSensorAddress(const char* sensorKey) {
-    int addr = keyToEEPROMAddr(sensorKey);
-    if (addr < 0) return "";
+    const char* prefsKey = nullptr;
+    
+    if (strcmp(sensorKey, SENSOR1_NOME) == 0) {
+        prefsKey = KEY_SENSOR_FERM;
+    } else if (strcmp(sensorKey, SENSOR2_NOME) == 0) {
+        prefsKey = KEY_SENSOR_FRIDGE;
+    } else {
+        return "";
+    }
 
-    char buffer[SENSOR_ADDR_SIZE];
-    EEPROM.get(addr, buffer);
-
-    // Verifica se está vazio ou corrompido
-    if (buffer[0] == '\0' || buffer[0] == 0xFF) {
+    prefsSensors.begin(PREFS_NAMESPACE_SENSORS, true);
+    String result = prefsSensors.getString(prefsKey, "");
+    prefsSensors.end();
+    
+    if (result.isEmpty()) {
         return "";
     }
     
-    // Garante que termina com null
-    buffer[SENSOR_ADDR_SIZE - 1] = '\0';
-    
-    String result = String(buffer);
-    
-    // Valida se é hex válido
     if (!isValidSensorAddress(result)) {
         #if DEBUG_SENSORES
-        Serial.printf("⚠️ Endereço corrompido na EEPROM: %s\n", sensorKey);
+        Serial.printf("⚠️ Endereço corrompido: %s\n", sensorKey);
         #endif
         return "";
     }
@@ -322,11 +295,9 @@ bool stringToDeviceAddress(const String& str, DeviceAddress addr) {
 // Lê temperaturas dos sensores configurados
 // =================================================
 bool readConfiguredTemperatures(float& tempFermenter, float& tempFridge) {
-    // Busca endereços salvos na EEPROM
     String addrFermenterStr = getSensorAddress(SENSOR1_NOME);
     String addrFridgeStr = getSensorAddress(SENSOR2_NOME);
     
-    // Verifica se ambos estão configurados
     if (addrFermenterStr.isEmpty()) {
         #if DEBUG_SENSORES
         Serial.println(F("⚠️ Sensor fermentador não configurado"));
@@ -341,7 +312,6 @@ bool readConfiguredTemperatures(float& tempFermenter, float& tempFridge) {
         return false;
     }
     
-    // Converte strings para DeviceAddress
     DeviceAddress addrFermenter, addrFridge;
     
     if (!stringToDeviceAddress(addrFermenterStr, addrFermenter)) {
@@ -358,17 +328,12 @@ bool readConfiguredTemperatures(float& tempFermenter, float& tempFridge) {
         return false;
     }
     
-    // Solicita leitura de temperatura
     sensors.requestTemperatures();
-    
-    // Aguarda conversão (750ms para resolução de 12 bits)
     delay(750);
     
-    // Lê temperaturas
     tempFermenter = sensors.getTempC(addrFermenter);
     tempFridge = sensors.getTempC(addrFridge);
     
-    // Verifica se as leituras são válidas
     if (tempFermenter == DEVICE_DISCONNECTED_C) {
         #if DEBUG_SENSORES
         Serial.println(F("❌ Erro: Sensor fermentador desconectado"));
@@ -383,7 +348,6 @@ bool readConfiguredTemperatures(float& tempFermenter, float& tempFridge) {
         return false;
     }
     
-    // Verifica temperaturas razoáveis (entre -10°C e 50°C)
     if (tempFermenter < -10 || tempFermenter > 50) {
         #if DEBUG_SENSORES
         Serial.printf("⚠️ Temperatura fermentador fora do esperado: %.2f°C\n", tempFermenter);
@@ -398,12 +362,11 @@ bool readConfiguredTemperatures(float& tempFermenter, float& tempFridge) {
         return false;
     }
     
-    // Log periódico (a cada 5 minutos) para não poluir o Serial
     #if DEBUG_SENSORES
     static unsigned long lastLog = 0;
     unsigned long now = millis();
     
-    if (now - lastLog >= 300000) {  // 5 minutos
+    if (now - lastLog >= 300000) {
         lastLog = now;
         Serial.printf("🌡️ Fermentador: %.2f°C | Geladeira: %.2f°C\n", tempFermenter, tempFridge);
     }

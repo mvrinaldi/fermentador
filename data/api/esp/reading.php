@@ -1,5 +1,5 @@
 <?php
-// api/esp/reading.php - COM LIMPEZA
+// api/esp/reading.php
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
@@ -17,7 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 require_once $_SERVER['DOCUMENT_ROOT'] . '/config/database.php';
-require_once $_SERVER['DOCUMENT_ROOT'] . '/classes/DatabaseCleanup.php'; // ✅ ADICIONAR
+require_once $_SERVER['DOCUMENT_ROOT'] . '/classes/DatabaseCleanup.php';
 
 $input = json_decode(file_get_contents('php://input'), true);
 
