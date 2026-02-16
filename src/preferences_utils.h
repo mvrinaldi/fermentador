@@ -12,7 +12,6 @@ extern "C" {
 
 void clearAllPreferencesUtil();
 void diagnosticPreferences();
-void checkSerialCommands();
 
 #ifdef __cplusplus
 }
@@ -43,35 +42,5 @@ void diagnosticPreferences() {
     debugPreferencesContents();
     
     LOG_EEPROM("==============================================");
-    #endif
-}
-
-void checkSerialCommands() {
-    #if DEBUG_EEPROM || defined(ENABLE_SERIAL_COMMANDS)
-    if (Serial.available()) {
-        String cmd = Serial.readStringUntil('\n');
-        cmd.trim();
-        
-        if (cmd.equalsIgnoreCase("CLEAR_EEPROM") || cmd.equalsIgnoreCase("CLEAR_PREFS")) {
-            clearAllPreferencesUtil();
-        } else if (cmd.equalsIgnoreCase("DIAG_EEPROM") || cmd.equalsIgnoreCase("DIAG_PREFS")) {
-            diagnosticPreferences();
-        } else if (cmd.equalsIgnoreCase("RESTART")) {
-            #if DEBUG_EEPROM
-            LOG_EEPROM("Reiniciando...");
-            #endif
-            delay(1000);
-            ESP.restart();
-        }
-        #if DEBUG_EEPROM
-        else if (cmd.equalsIgnoreCase("HELP")) {
-            Serial.println(F("\n📋 COMANDOS DISPONÍVEIS:"));
-            Serial.println(F("  CLEAR_PREFS  - Limpa todos os Preferences"));
-            Serial.println(F("  DIAG_PREFS   - Mostra diagnóstico"));
-            Serial.println(F("  RESTART      - Reinicia o ESP"));
-            Serial.println(F("  HELP         - Mostra esta ajuda\n"));
-        }
-        #endif
-    }
     #endif
 }

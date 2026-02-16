@@ -95,6 +95,7 @@ time_t getCurrentEpoch() {
         if (!epochInitialized) {
             prefsFerment.begin("ferment", true);  // read-only
             
+            // ✅ CORRIGIDO: Usa ULong64
             lastValidEpoch = (time_t)prefsFerment.getULong64("lastEpoch", 0);
             lastValidMillis = prefsFerment.getULong("lastMillis", 0);
             
@@ -103,7 +104,7 @@ time_t getCurrentEpoch() {
 
             #if DEBUG_FERMENTATION
             if (lastValidEpoch > 1577836800L) {
-                Serial.print(F("[NTP] Usando backup Preferences: "));
+                Serial.print(F("[NTP] ⚠️  Usando backup Preferences: "));
                 Serial.println(formatTime(lastValidEpoch));
             }
             #endif
@@ -114,7 +115,7 @@ time_t getCurrentEpoch() {
         }
         
         #if DEBUG_FERMENTATION
-        Serial.println(F("[NTP] Relógio não sincronizado!"));
+        Serial.println(F("[NTP] ⚠️  Relógio não sincronizado!"));
         #endif
 
         return 0;
@@ -127,6 +128,7 @@ time_t getCurrentEpoch() {
         
         prefsFerment.begin("ferment", false);  // read-write
         
+        // ✅ CORRIGIDO: Usa ULong64
         prefsFerment.putULong64("lastEpoch", (uint64_t)lastValidEpoch);
         prefsFerment.putULong("lastMillis", lastValidMillis);
         
@@ -148,6 +150,7 @@ void saveStateToPreferences() {
     prefsFerment.putString("activeId", fermentacaoState.activeId);
     prefsFerment.putInt("stageIdx", fermentacaoState.currentStageIndex);
     prefsFerment.putULong64("stageStart", (uint64_t)fermentacaoState.stageStartEpoch);
+    
     prefsFerment.putBool("stageStrtd", stageStarted);
     prefsFerment.putBool("tgtReached", fermentacaoState.targetReachedSent);
     prefsFerment.putBool("cfgSaved", true);
@@ -389,6 +392,10 @@ void checkPauseOrComplete() {
     }
 }
 
+// =====================================================
+// VERIFICAÇÃO DE COMANDOS DO SITE E FERMENTAÇÃO ATIVA
+// =====================================================
+
 void getTargetFermentacao() {
     unsigned long now = millis();
 
@@ -462,6 +469,9 @@ void getTargetFermentacao() {
         LOG_FERMENTATION(F("  → Fermentação ATIVA detectada no servidor"));
         
         if (strcmp(id, lastActiveId) != 0) {
+            // =====================================================
+            // NOVA FERMENTAÇÃO DETECTADA
+            // =====================================================
             LOG_FERMENTATION(F("  → ID DIFERENTE do último conhecido"));
             LOG_FERMENTATION("     Anterior: '" + String(lastActiveId) + "'");
             LOG_FERMENTATION("     Novo:     '" + String(id) + "'");
@@ -480,6 +490,7 @@ void getTargetFermentacao() {
 
             loadConfigParameters(id);
 
+            // ✅ NOVA FERMENTAÇÃO: Reseta tudo
             stageStarted = false;
             fermentacaoState.targetReachedSent = false;
             fermentacaoState.stageStartEpoch = 0;
@@ -490,7 +501,11 @@ void getTargetFermentacao() {
             LOG_FERMENTATION("  activeId: '" + String(fermentacaoState.activeId) + "'");
             LOG_FERMENTATION("  tempTarget: " + String(fermentacaoState.tempTarget, 1) + "°C");
             LOG_FERMENTATION("  totalStages: " + String(fermentacaoState.totalStages));
+            
         } else {
+            // =====================================================
+            // MESMA FERMENTAÇÃO - VERIFICAR SINCRONIZAÇÃO DE ETAPA
+            // =====================================================
             LOG_FERMENTATION(F("  → MESMO ID do último conhecido"));
             LOG_FERMENTATION(F("  → Fermentação já configurada"));
             
@@ -499,10 +514,14 @@ void getTargetFermentacao() {
                 LOG_FERMENTATION("     Local:    " + String(fermentacaoState.currentStageIndex));
                 LOG_FERMENTATION("     Servidor: " + String(serverStageIndex));
                 
+                // ✅ CORREÇÃO: Só aceita índice do servidor se for MAIOR que o local
                 if (serverStageIndex > fermentacaoState.currentStageIndex) {
                     LOG_FERMENTATION(F("  → Servidor à frente - aceitando mudança externa"));
                     
+                    // Atualiza para o índice do servidor
                     fermentacaoState.currentStageIndex = serverStageIndex;
+                    
+                    // ✅ Reset para NOVA etapa (mudança forçada pelo servidor)
                     stageStarted = false;
                     fermentacaoState.stageStartEpoch = 0;
                     fermentacaoState.targetReachedSent = false;
@@ -511,10 +530,13 @@ void getTargetFermentacao() {
                     saveStateToPreferences();
                     
                     LOG_FERMENTATION("  → Etapa atualizada para " + String(serverStageIndex));
-                } else {
+                    
+                } else if (serverStageIndex < fermentacaoState.currentStageIndex) {
+                    // ✅ Local está à frente do servidor - servidor desatualizado
                     LOG_FERMENTATION(F("  → Local à frente - servidor desatualizado"));
                     LOG_FERMENTATION(F("  → Mantendo estado local e notificando servidor"));
                     
+                    // ✅ Tenta atualizar o servidor com o índice correto
                     if (httpClient.isConnected()) {
                         bool updated = httpClient.updateStageIndex(
                             fermentacaoState.activeId, 
@@ -528,9 +550,18 @@ void getTargetFermentacao() {
                         }
                     }
                 }
+                // Se serverStageIndex == fermentacaoState.currentStageIndex, não faz nada
+                
+            } else {
+                // ✅ Etapas sincronizadas - tudo OK
+                LOG_FERMENTATION(F("  → Etapas sincronizadas (local == servidor)"));
             }
         }
+        
     } else if (fermentacaoState.active && !active) {
+        // =====================================================
+        // FERMENTAÇÃO LOCAL ATIVA, SERVIDOR INATIVO
+        // =====================================================
         if (fermentacaoState.concluidaMantendoTemp) {
             LOG_FERMENTATION(F("  → Concluída localmente, mantendo temperatura (servidor offline)"));
         } else {
@@ -539,7 +570,11 @@ void getTargetFermentacao() {
             LOG_FERMENTATION(F("  → DESATIVANDO"));
             deactivateCurrentFermentation();
         }
+        
     } else if (!active && !fermentacaoState.active) {
+        // =====================================================
+        // NENHUMA FERMENTAÇÃO ATIVA
+        // =====================================================
         LOG_FERMENTATION(F("  → Nenhuma fermentação ativa"));
         LOG_FERMENTATION(F("  → Sistema em STANDBY"));
         
@@ -547,7 +582,11 @@ void getTargetFermentacao() {
             brewPiControl.reset();
             LOG_FERMENTATION(F("[BrewPi] Sistema resetado em modo standby"));
         }
+        
     } else if (!active && fermentacaoState.active) {
+        // =====================================================
+        // SERVIDOR OFFLINE MAS TEMOS ESTADO LOCAL
+        // =====================================================
         LOG_FERMENTATION(F("  → Servidor offline mas temos estado local"));
         LOG_FERMENTATION(F("  → MANTENDO fermentação local"));
     }
@@ -715,17 +754,62 @@ void verificarTrocaDeFase() {
         return;
     }
     
+    // =====================================================
+    // ✅ INÍCIO DE ETAPA - CORRIGIDO COM DETECÇÃO DE RESTAURAÇÃO
+    // =====================================================
     if (!stageStarted) {
+        // ✅ VERIFICA SE É RESTAURAÇÃO (já tinha começado antes do reinício)
+        bool isRestoration = (fermentacaoState.stageStartEpoch > 0 && 
+                             fermentacaoState.targetReachedSent);
+        
         stageStarted = true;
-        fermentacaoState.targetReachedSent = false;
-        fermentacaoState.stageStartEpoch = 0;
         
-        brewPiControl.reset();
+        if (isRestoration) {
+            // =====================================================
+            // ✅ RESTAURAÇÃO: Mantém tudo que foi salvo
+            // =====================================================
+            #if DEBUG_FERMENTATION
+            Serial.println(F("\n╔════════════════════════════════════════════╗"));
+            Serial.println(F("║     🔄 RESTAURAÇÃO APÓS REINÍCIO          ║"));
+            Serial.println(F("╠════════════════════════════════════════════╣"));
+            Serial.printf("║ Etapa:        %d/%d                        ║\n",
+                         fermentacaoState.currentStageIndex + 1,
+                         fermentacaoState.totalStages);
+            Serial.print(F("║ Início:       "));
+            Serial.print(formatTime(fermentacaoState.stageStartEpoch).substring(0, 19));
+            Serial.println(F(" ║"));
+            
+            time_t elapsed = nowEpoch - fermentacaoState.stageStartEpoch;
+            Serial.printf("║ Decorrido:    %.1f horas (%.2f dias)      ║\n", 
+                         elapsed / 3600.0f, elapsed / 86400.0f);
+            
+            if (stage.type == STAGE_TEMPERATURE) {
+                float remaining = stage.holdTimeHours - (elapsed / 3600.0f);
+                if (remaining < 0) remaining = 0;
+                Serial.printf("║ Restante:     %.1f horas (%.2f dias)      ║\n", 
+                             remaining, remaining / 24.0f);
+            }
+            Serial.println(F("╚════════════════════════════════════════════╝\n"));
+            #endif
+            
+            // ✅ NÃO reseta targetReachedSent nem stageStartEpoch!
+            // ✅ NÃO reseta PID (mantém estado de controle)
+            
+        } else {
+            // =====================================================
+            // ✅ NOVA ETAPA: Reseta tudo
+            // =====================================================
+            fermentacaoState.targetReachedSent = false;
+            fermentacaoState.stageStartEpoch = 0;
+            
+            brewPiControl.reset();
 
-        #if DEBUG_FERMENTATION
-        Serial.println(F("[BrewPi] ✅ Sistema resetado para nova etapa"));
-        #endif
+            #if DEBUG_FERMENTATION
+            Serial.println(F("[BrewPi] ✅ Sistema resetado para nova etapa"));
+            #endif
+        }
         
+        // Define temperatura alvo
         float newTargetTemp;
         if (stage.type == STAGE_RAMP) {
             newTargetTemp = stage.startTemp;
@@ -737,30 +821,35 @@ void verificarTrocaDeFase() {
         saveStateToPreferences();
         
         #if DEBUG_FERMENTATION
-        Serial.printf("[Fase] ▶️  Etapa %d/%d iniciada - Alvo: %.1f°C (tipo: ", 
-                    fermentacaoState.currentStageIndex + 1,
-                    fermentacaoState.totalStages,
-                    newTargetTemp);
-                    
-        switch (stage.type) {
-            case STAGE_TEMPERATURE:
-                Serial.printf("TEMPERATURE, duração: %.2f dias / %.1f horas)\n", 
-                             stage.durationDays, stage.holdTimeHours);
-                break;
-            case STAGE_RAMP:
-                Serial.printf("RAMP, tempo: %d horas)\n", stage.rampTimeHours);
-                break;
-            case STAGE_GRAVITY:
-                Serial.printf("GRAVITY, alvo: %.3f)\n", stage.targetGravity);
-                break;
-            case STAGE_GRAVITY_TIME:
-                Serial.printf("GRAVITY_TIME, timeout: %.2f dias / %.1f horas)\n", 
-                             stage.timeoutDays, stage.maxTimeHours);
-                break;
+        if (!isRestoration) {
+            Serial.printf("[Fase] ▶️  Etapa %d/%d iniciada - Alvo: %.1f°C (tipo: ", 
+                        fermentacaoState.currentStageIndex + 1,
+                        fermentacaoState.totalStages,
+                        newTargetTemp);
+                        
+            switch (stage.type) {
+                case STAGE_TEMPERATURE:
+                    Serial.printf("TEMPERATURE, duração: %.2f dias / %.1f horas)\n", 
+                                 stage.durationDays, stage.holdTimeHours);
+                    break;
+                case STAGE_RAMP:
+                    Serial.printf("RAMP, tempo: %d horas)\n", stage.rampTimeHours);
+                    break;
+                case STAGE_GRAVITY:
+                    Serial.printf("GRAVITY, alvo: %.3f)\n", stage.targetGravity);
+                    break;
+                case STAGE_GRAVITY_TIME:
+                    Serial.printf("GRAVITY_TIME, timeout: %.2f dias / %.1f horas)\n", 
+                                 stage.timeoutDays, stage.maxTimeHours);
+                    break;
+            }
         }
         #endif
     }
 
+    // =====================================================
+    // VERIFICAÇÃO DE TEMPERATURA ALVO ATINGIDA
+    // =====================================================
     bool targetReached = false;
     bool needsTemperature = (stage.type == STAGE_TEMPERATURE || 
                             stage.type == STAGE_GRAVITY || 
@@ -782,18 +871,20 @@ void verificarTrocaDeFase() {
         }
         #endif
         
+        // ✅ CORRIGIDO: Salva atomicamente (define tudo primeiro, depois salva)
         if (targetReached) {
             if (!fermentacaoState.targetReachedSent) {
-
-                time_t timestampToSave = getCurrentEpoch();
+                // Captura timestamp ANTES de modificar variáveis
+                time_t timestampToSave = nowEpoch;
                 
+                // Define todas as variáveis
                 fermentacaoState.targetReachedSent = true;
                 
                 if (fermentacaoState.stageStartEpoch == 0) {
                     fermentacaoState.stageStartEpoch = timestampToSave;
                 }
                 
-                // ✅ SALVA TUDO de uma vez (operação atômica da biblioteca Preferences)
+                // ✅ SALVA TUDO de uma vez (operação atômica)
                 saveStateToPreferences();
                 
                 #if DEBUG_FERMENTATION
@@ -808,7 +899,7 @@ void verificarTrocaDeFase() {
                 Serial.println(F("[Fase] ⚠️ Definindo stageStartEpoch com timestamp atual"));
                 #endif
                 
-                fermentacaoState.stageStartEpoch = getCurrentEpoch();
+                fermentacaoState.stageStartEpoch = nowEpoch;
                 saveStateToPreferences();
             }
         }
@@ -826,6 +917,9 @@ void verificarTrocaDeFase() {
         }
     }
 
+    // =====================================================
+    // CÁLCULO DO TEMPO DECORRIDO
+    // =====================================================
     float elapsedH = 0;
     
     if (fermentacaoState.stageStartEpoch > 0) {
@@ -867,6 +961,9 @@ void verificarTrocaDeFase() {
     }
     #endif
 
+    // =====================================================
+    // CONTROLE DE RAMPA
+    // =====================================================
     if (stage.type == STAGE_RAMP) {
         float progress = elapsedH / (float)stage.rampTimeHours;
         if (progress < 0) progress = 0;
@@ -885,6 +982,9 @@ void verificarTrocaDeFase() {
         #endif
     }
 
+    // =====================================================
+    // VERIFICAÇÃO DE CONCLUSÃO DA ETAPA
+    // =====================================================
     bool stageCompleted = false;
 
     switch (stage.type) {
@@ -924,15 +1024,20 @@ void verificarTrocaDeFase() {
             break;
     }
 
+    // =====================================================
+    // TRANSIÇÃO PARA PRÓXIMA ETAPA
+    // =====================================================
     if (stageCompleted) {
         
         int nextStageIndex = fermentacaoState.currentStageIndex + 1;
         
         if (nextStageIndex < fermentacaoState.totalStages) {
+            // Notifica servidor
             if (httpClient.isConnected()) {
                 httpClient.updateStageIndex(fermentacaoState.activeId, nextStageIndex);
             }
             
+            // Atualiza estado local
             fermentacaoState.currentStageIndex = nextStageIndex;
             stageStarted = false;
             fermentacaoState.stageStartEpoch = 0;
