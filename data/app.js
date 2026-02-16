@@ -1,8 +1,8 @@
-// app.js - Monitor Passivo (COM visualização de Cooler/Heater)
+// app.js - Monitor Passivo (COM visualização de Cooler/Heater) - VERSÃO CORRIGIDA
 const API_BASE_URL = '/api.php?path=';
 
 // ========== CONFIGURAÇÃO DE DEBUG ==========
-const DEBUG_MODE = true; // false para produção, true para debug
+const DEBUG_MODE = false; // false para produção, true para debug
 
 // ========== VARIÁVEIS GLOBAIS ==========
 let chart = null;
@@ -724,7 +724,7 @@ function updateHeapStatus() {
     // Busca free_heap do heartbeat
     const freeHeap = appState.heartbeat?.free_heap;
     
-    // **CORREÇÃO AQUI**: Alerta deve aparecer APENAS quando freeHeap for BAIXO
+    // Alerta deve aparecer APENAS quando freeHeap for BAIXO
     // Se não tem dado ou está saudável (> 30KB), esconde o alerta
     if (!freeHeap || freeHeap > HEAP_WARNING_THRESHOLD) {
         if (existingHeapAlert) {
@@ -733,7 +733,7 @@ function updateHeapStatus() {
         return;
     }
     
-    // **CORREÇÃO AQUI**: Cria/mostra alerta APENAS quando a memória está baixa
+    // Cria/mostra alerta APENAS quando a memória está baixa
     if (freeHeap <= HEAP_WARNING_THRESHOLD) {
         // Cria o elemento se não existir
         if (!existingHeapAlert) {
@@ -773,13 +773,14 @@ function updateHeapStatus() {
             console.log(`⚠️ Heap ${isCritical ? 'CRÍTICO' : 'baixo'}: ${heapKB}KB (${freeHeap} bytes)`);
         }
     } else {
-        // **CORREÇÃO AQUI**: Se a memória estiver OK (> 30KB), esconde o alerta
+        // Se a memória estiver OK (> 30KB), esconde o alerta
         if (existingHeapAlert) {
             existingHeapAlert.classList.add('hidden');
         }
     }
 }
 
+// ========== STATUS RELÉS (CORRIGIDO) ==========
 function updateRelayStatus() {
     const coolerStatusDiv = document.getElementById('cooler-status');
     const heaterStatusDiv = document.getElementById('heater-status');
@@ -790,6 +791,7 @@ function updateRelayStatus() {
     let coolerActive = false;
     let heaterActive = false;
     let waitingStatus = null;
+    let isWaiting = false;
     
     // ✅ Fonte 1: espState (fermentation_states) - dados mais completos do ESP
     // O ESP envia cooling/heating no estado completo a cada 30s
@@ -800,6 +802,7 @@ function updateRelayStatus() {
         if (appState.espState.control_status) {
             const cs = appState.espState.control_status;
             if (cs.is_waiting && cs.wait_reason) {
+                isWaiting = true;
                 waitingStatus = {
                     reason: cs.wait_reason,
                     display: cs.wait_display || 'aguardando'
@@ -818,29 +821,42 @@ function updateRelayStatus() {
     if (appState.heartbeat && appState.heartbeat.control_status) {
         const cs = appState.heartbeat.control_status;
         
-        if (!waitingStatus && cs.is_waiting && cs.wait_reason) {
-            waitingStatus = {
-                reason: cs.wait_reason,
-                display: cs.wait_display || 'aguardando'
-            };
+        if (cs.is_waiting && cs.wait_reason) {
+            isWaiting = true;
+            if (!waitingStatus) {
+                waitingStatus = {
+                    reason: cs.wait_reason,
+                    display: cs.wait_display || 'aguardando'
+                };
+            }
         }
     }
     
-    if (coolerActive) {
-        coolerStatusDiv.classList.remove('hidden');
-    } else {
+    // ✅ LÓGICA CORRIGIDA: Se está aguardando, NÃO mostra cooler/heater
+    // Aguardando = o sistema QUER ligar mas NÃO PODE ainda (tempo mínimo, etc)
+    if (isWaiting) {
+        // Esconde cooler/heater quando está aguardando
         coolerStatusDiv.classList.add('hidden');
-    }
-    
-    if (heaterActive) {
-        heaterStatusDiv.classList.remove('hidden');
-    } else {
         heaterStatusDiv.classList.add('hidden');
+    } else {
+        // Mostra cooler/heater apenas se realmente estiverem ativos E não estiver aguardando
+        if (coolerActive) {
+            coolerStatusDiv.classList.remove('hidden');
+        } else {
+            coolerStatusDiv.classList.add('hidden');
+        }
+        
+        if (heaterActive) {
+            heaterStatusDiv.classList.remove('hidden');
+        } else {
+            heaterStatusDiv.classList.add('hidden');
+        }
     }
     
+    // Mostra waiting status
     let existingWaitDiv = document.getElementById('waiting-status');
     
-    if (waitingStatus) {
+    if (waitingStatus && isWaiting) {
         if (!existingWaitDiv) {
             existingWaitDiv = document.createElement('div');
             existingWaitDiv.id = 'waiting-status';
