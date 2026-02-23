@@ -1,7 +1,7 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "1.0.4"
-#define IMPLEMENTACAO "Corrigido problema reinício incorreto"
+#define FIRMWARE_VERSION "1.0.5"
+#define IMPLEMENTACAO "Correção de restauração após reboot"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -307,6 +307,7 @@ void setup() {
         if (fermentacaoState.active) {
             getTargetFermentacao();
         }
+        sendHeartbeatMySQL(fermentacaoState.activeId ? atoi(fermentacaoState.activeId) : 0);
     }
     
     setupSpindelRoutes(server);
@@ -580,6 +581,113 @@ void loop() {
         }
         
         lastSensorCheck = now;
+    }
+
+        // ✅ VERIFICAÇÃO DE INTEGRIDADE DO PREFERENCES (a cada 5 minutos)
+    static unsigned long lastIntegrityCheck = 0;
+        if (now - lastIntegrityCheck > 300000) { // 5 minutos
+            lastIntegrityCheck = now;
+            
+            // ✅ LOG ANTES DE VERIFICAR fermentacaoState.active
+    #ifdef DEBUG_EEPROM
+            char buf[128];
+            snprintf(buf, sizeof(buf), 
+                    "[Integrity] Check disparado! active=%s, activeId='%s'", 
+                    fermentacaoState.active ? "TRUE" : "FALSE",
+                    fermentacaoState.activeId);
+            Serial.println(buf);
+    #endif
+
+            if (fermentacaoState.active) {
+                Preferences p;
+                p.begin("ferment", true);
+                
+                String savedId = p.getString("activeId", "");
+                int savedCfg = p.getInt("cfgSaved", 0);
+                int savedIdx = p.getInt("stageIdx", -1);
+                unsigned long savedEpoch = (unsigned long)p.getULong64("stageStart", 0);
+                int savedReached = p.getInt("tgtReached", 0);
+                
+                p.end();
+                
+                char buf[128];
+                snprintf(buf, sizeof(buf), "[Integrity] RAM activeId='%s', Prefs='%s'", 
+                        fermentacaoState.activeId, savedId.c_str());
+                #ifdef DEBUG_EEPROM
+                            Serial.println(buf);
+                #endif
+                            
+                            snprintf(buf, sizeof(buf), "[Integrity] RAM stageStart=%lu, Prefs=%lu", 
+                                    (unsigned long)fermentacaoState.stageStartEpoch, savedEpoch);
+                #ifdef DEBUG_EEPROM
+                            Serial.println(buf);
+                #endif
+                            
+                            snprintf(buf, sizeof(buf), "[Integrity] RAM stageIdx=%d, Prefs=%d", 
+                                    fermentacaoState.currentStageIndex, savedIdx);
+                #ifdef DEBUG_EEPROM
+                            Serial.println(buf);
+                #endif
+                            
+                            snprintf(buf, sizeof(buf), "[Integrity] RAM targetReached=%s, Prefs=%d", 
+                                    fermentacaoState.targetReachedSent ? "true" : "false", savedReached);
+                #ifdef DEBUG_EEPROM
+                            Serial.println(buf);
+                #endif
+                            
+                            snprintf(buf, sizeof(buf), "[Integrity] cfgSaved=%d", savedCfg);
+                #ifdef DEBUG_EEPROM
+                            Serial.println(buf);
+                #endif
+                            
+                            // Verifica corrupção
+                            bool corrupted = false;
+                            
+                            if (savedCfg != 1) {
+                #ifdef DEBUG_EEPROM
+                                Serial.println(F("cfgSaved != 1 (dados não salvos ou corrompidos)"));
+                #endif
+                                corrupted = true;
+                            }
+                            
+                            if (savedId != String(fermentacaoState.activeId)) {
+                #ifdef DEBUG_EEPROM
+                                Serial.println(F("activeId não corresponde"));
+                #endif
+                                corrupted = true;
+                            }
+                            
+                            if (savedIdx != fermentacaoState.currentStageIndex) {
+                #ifdef DEBUG_EEPROM
+                                Serial.println(F("stageIdx não corresponde"));
+                #endif
+                                corrupted = true;
+                            }
+                            
+                            if (fermentacaoState.targetReachedSent && savedEpoch == 0) {
+                #ifdef DEBUG_EEPROM
+                                Serial.println(F("targetReached=true mas stageStart=0"));
+                #endif
+                                corrupted = true;
+                            }
+                            
+                            if (corrupted) {
+                #ifdef DEBUG_EEPROM
+                                Serial.println(F(""));
+                                Serial.println(F("╔════════════════════════════════════════════╗"));
+                                Serial.println(F("║         CORRUPÇÃO DETECTADA!               ║"));
+                                Serial.println(F("╠════════════════════════════════════════════╣"));
+                                Serial.println(F("║  Tentando salvar novamente...              ║"));
+                                Serial.println(F("╚════════════════════════════════════════════╝"));
+                                Serial.println(F(""));
+                #endif
+                                saveStateToPreferences();
+                            } else {
+                #ifdef DEBUG_EEPROM
+                                Serial.println(F("✅ Integridade OK\n"));
+                #endif
+            }
+        }
     }
 
     yield();

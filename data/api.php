@@ -1065,13 +1065,49 @@ if ($path === 'fermentation-state' && $method === 'POST') {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
     
+    // ✅ DESCOMPRIME PRIMEIRO
     decompressStateData($input);
     
+    // ✅ DEPOIS captura os valores (com fallback para nomes comprimidos)
+    $stageStartEpoch = null;
+    if (isset($input['stageStartEpoch'])) {
+        $stageStartEpoch = (int)$input['stageStartEpoch'];
+    } elseif (isset($input['stageStart'])) {
+        $stageStartEpoch = (int)$input['stageStart'];
+    } elseif (isset($input['sst'])) {  // nome comprimido possível
+        $stageStartEpoch = (int)$input['sst'];
+    }
+    
+    $targetReached = null;
+    if (isset($input['targetReached'])) {
+        $targetReached = $input['targetReached'] ? 1 : 0;
+    } elseif (isset($input['tr'])) {
+        // tr pode ser array [dias, horas, min, status] ou boolean
+        if (is_bool($input['tr'])) {
+            $targetReached = $input['tr'] ? 1 : 0;
+        } elseif (is_array($input['tr'])) {
+            $targetReached = 1;  // Se tem array de timeRemaining, alvo foi atingido
+        }
+    }
+    
+    // Log para debug
+    error_log("Salvando estado - stageStartEpoch: " . ($stageStartEpoch ?? 'NULL') . 
+              ", targetReached: " . ($targetReached ?? 'NULL'));
+    
     $stmt = $pdo->prepare("
-        INSERT INTO fermentation_states (config_id, state_data)
-        VALUES (?, ?)
+        INSERT INTO fermentation_states (
+            config_id, 
+            state_data, 
+            stage_started_epoch, 
+            target_reached
+        ) VALUES (?, ?, ?, ?)
     ");
-    $stmt->execute([$configId, json_encode($input)]);
+    $stmt->execute([
+        $configId, 
+        json_encode($input),
+        $stageStartEpoch,
+        $targetReached
+    ]);
     
     DatabaseCleanup::cleanupTable($pdo, 'fermentation_states', $configId);
     

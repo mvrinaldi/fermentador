@@ -47,6 +47,7 @@ public:
     bool sendSensorsData(const JsonDocument& sensorsDoc);
     bool getAssignedSensors(String& fermenterAddr, String& fridgeAddr);
     bool updateCurrentTemperatures(float tempFermenter, float tempFridge);
+    bool sendSensorError(const char* configId, float tempTarget);
     
     // ==================== ISPINDEL ====================
     bool sendSpindelData(const String& spindelJson);

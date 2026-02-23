@@ -294,6 +294,8 @@ void enviarEstadoCompletoMySQL() {
     doc["config_name"] = fermentacaoState.configName;
     doc["currentStageIndex"] = fermentacaoState.currentStageIndex;
     doc["totalStages"] = fermentacaoState.totalStages;
+    doc["stageStartEpoch"] = (unsigned long)fermentacaoState.stageStartEpoch;
+    doc["targetReached"] = fermentacaoState.targetReachedSent;
     
     if (fermentacaoState.concluidaMantendoTemp) {
         doc["status"] = "completed_holding_temp";
@@ -506,6 +508,7 @@ void enviarEstadoCompletoMySQL() {
 void enviarLeiturasSensoresMySQL() {
     if (!fermentacaoState.active && !fermentacaoState.concluidaMantendoTemp) {
         LOG_ENVIODADOS("[Leituras] Skip: fermentacao nao ativa");
+
         return;
     }
 

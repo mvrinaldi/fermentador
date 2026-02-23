@@ -548,6 +548,44 @@ function getIspindelData() {
     };
 }
 
+function checkSensorStatus() {
+    const alertDiv = document.getElementById('sensor-alert');
+    const alertList = document.getElementById('sensor-alert-list');
+    if (!alertDiv || !alertList) return;
+    const problems = [];
+    const lastReading = appState.readings?.[appState.readings.length - 1];
+    if (lastReading) {
+        // Verifica flag explícito do ESP
+        if (lastReading.sensor_error == 1) {
+            if (lastReading.temp_fermenter === null) {
+                problems.push('Sensor do fermentador desconectado ou com falha');
+            }
+            if (lastReading.temp_fridge === null) {
+                problems.push('Sensor da geladeira desconectado ou com falha');
+            }
+            if (problems.length === 0) {
+                problems.push('Falha de leitura em sensor');
+            }
+        }
+        // Fallback: valores impossíveis do DS18B20
+        else {
+            const isBad = v => v !== null && (parseFloat(v) <= -50 || parseFloat(v) >= 84);
+            if (isBad(lastReading.temp_fermenter)) {
+                problems.push(`Sensor do fermentador com leitura inválida (${lastReading.temp_fermenter}°C)`);
+            }
+            if (isBad(lastReading.temp_fridge)) {
+                problems.push(`Sensor da geladeira com leitura inválida (${lastReading.temp_fridge}°C)`);
+            }
+        }
+    }
+    if (problems.length > 0) {
+        alertList.innerHTML = problems.map(p => `<li>${p}</li>`).join('');
+        alertDiv.classList.remove('hidden');
+    } else {
+        alertDiv.classList.add('hidden');
+    }
+}
+
 // ========== CARREGAMENTO ==========
 async function loadCompleteState() {
     try {
@@ -664,6 +702,7 @@ function checkESPStatus() {
     
     updateRelayStatus();
     updateHeapStatus();
+    checkSensorStatus();
     
     if (appState.heartbeat && appState.heartbeat.heartbeat_timestamp) {
         const lastTimestamp = appState.heartbeat.heartbeat_timestamp;
@@ -1116,7 +1155,7 @@ function renderInfoCards() {
     
     if (!isNaN(currentTemp) && !isNaN(targetTemp) && currentTemp !== null && targetTemp !== null) {
         const diff = Math.abs(currentTemp - targetTemp);
-        if (diff <= 0.5) {
+        if (diff <= 0.3) {
             tempStatus = '✅ No alvo';
             tempColor = '#10b981';
         } else if (currentTemp < targetTemp) {

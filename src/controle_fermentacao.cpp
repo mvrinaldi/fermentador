@@ -30,6 +30,7 @@ unsigned long lastActiveCheck = 0;
 char lastActiveId[64] = "";
 bool isFirstCheck = true;
 bool stageStarted = false;
+bool justBootedWithState = false;
 
 // =====================================================
 // FUNÇÕES AUXILIARES LOCAIS
@@ -166,60 +167,198 @@ void saveStateToPreferences() {
 }
 
 void loadStateFromPreferences() {
-    prefsFerment.begin("ferment", true);  // read-only
+#ifdef DEBUG_EEPROM
+    Serial.println(F("\n╔════════════════════════════════════════════╗"));
+    Serial.println(F("║   loadStateFromPreferences() CHAMADO      ║"));
+    Serial.println(F("╚════════════════════════════════════════════╝"));
+    Serial.println(F("Abrindo namespace 'ferment'..."));
+#endif
 
-    if (!prefsFerment.getBool("cfgSaved", false)) {
-        prefsFerment.end();
-        #if DEBUG_FERMENTATION
-        Serial.println(F("[Prefs] Nenhum estado salvo"));
-        #endif
+    if (!prefsFerment.begin("ferment", true)) {
+#ifdef DEBUG_EEPROM
+        Serial.println(F("❌ ERRO: prefsFerment.begin() falhou!"));
+#endif
         return;
     }
 
+#ifdef DEBUG_EEPROM
+    Serial.println(F("✅ Namespace aberto com sucesso"));
+#endif
+
+bool cfgSaved = prefsFerment.getBool("cfgSaved", false);
+
+#ifdef DEBUG_EEPROM
+    Serial.print(F("cfgSaved lido: "));
+    Serial.println(cfgSaved ? "true" : "false");
+#endif
+
+if (!cfgSaved) {
+        prefsFerment.end();
+#ifdef DEBUG_EEPROM
+        Serial.println(F("❌ cfgSaved = 0, nenhum estado salvo"));
+        Serial.println(F("╚════════════════════════════════════════════╝\n"));
+#endif
+        return;
+    }
+
+#ifdef DEBUG_EEPROM
+    Serial.println(F("✅ cfgSaved OK, carregando dados..."));
+#endif
+
     String activeIdStr = prefsFerment.getString("activeId", "");
-    safe_strcpy(fermentacaoState.activeId, activeIdStr.c_str(), 
+    
+#ifdef DEBUG_EEPROM
+    Serial.print(F("activeId lido: '"));
+    Serial.print(activeIdStr);
+    Serial.println(F("'"));
+#endif
+
+    safe_strcpy(fermentacaoState.activeId, activeIdStr.c_str(),
                 sizeof(fermentacaoState.activeId));
 
     if (!isValidString(fermentacaoState.activeId)) {
         prefsFerment.end();
-        #if DEBUG_FERMENTATION
-        Serial.println(F("[Prefs] ⚠️  ID inválido, limpando..."));
-        #endif
+#ifdef DEBUG_EEPROM
+        Serial.println(F("❌ activeId inválido, limpando..."));
+#endif
         clearPreferences();
         fermentacaoState.clear();
+#ifdef DEBUG_EEPROM
+        Serial.println(F("╚════════════════════════════════════════════╝\n"));
+#endif
         return;
     }
 
+#ifdef DEBUG_EEPROM
+    Serial.println(F("✅ activeId válido"));
+#endif
+
     fermentacaoState.currentStageIndex = prefsFerment.getInt("stageIdx", 0);
-    
+#ifdef DEBUG_EEPROM
+    Serial.print(F("stageIdx lido: "));
+    Serial.println(fermentacaoState.currentStageIndex);
+#endif
+
     fermentacaoState.stageStartEpoch = (time_t)prefsFerment.getULong64("stageStart", 0);
-    
-    stageStarted = prefsFerment.getBool("stageStrtd", false);
-    fermentacaoState.targetReachedSent = prefsFerment.getBool("tgtReached", false);
+#ifdef DEBUG_EEPROM
+    Serial.print(F("stageStart lido: "));
+    Serial.println((unsigned long)fermentacaoState.stageStartEpoch);
+#endif
+
+stageStarted = prefsFerment.getBool("stageStrtd", false);
+#ifdef DEBUG_EEPROM
+    Serial.print(F("stageStrtd lido: "));
+    Serial.println(stageStarted ? F("true") : F("false"));
+#endif
+
+fermentacaoState.targetReachedSent = prefsFerment.getBool("tgtReached", false);
+#ifdef DEBUG_EEPROM
+    Serial.print(F("tgtReached lido: "));
+    Serial.println(fermentacaoState.targetReachedSent ? F("true") : F("false"));
+#endif
 
     prefsFerment.end();
+#ifdef DEBUG_EEPROM
+    Serial.println(F("✅ Namespace fechado"));
+#endif
 
     fermentacaoState.active = isValidString(fermentacaoState.activeId);
+#ifdef DEBUG_EEPROM
+    Serial.print(F("fermentacaoState.active definido: "));
+    Serial.println(fermentacaoState.active ? F("true") : F("false"));
+#endif
 
     if (fermentacaoState.active && !isValidString(fermentacaoState.activeId)) {
-        #if DEBUG_FERMENTATION
-        Serial.println(F("[Prefs] ⚠️  Estado inconsistente, limpando..."));
-        #endif
+#ifdef DEBUG_EEPROM
+        Serial.println(F("❌ Estado inconsistente detectado!"));
+#endif
         clearPreferences();
         fermentacaoState.clear();
         fermentacaoState.tempTarget = 20.0;
         state.targetTemp = 20.0;
+#ifdef DEBUG_EEPROM
+        Serial.println(F("╚════════════════════════════════════════════╝\n"));
+#endif
         return;
     }
 
-    #if DEBUG_FERMENTATION
-    Serial.print(F("[Prefs] Estado restaurado: ID="));
-    Serial.print(fermentacaoState.activeId);
-    Serial.print(", início=");
-    Serial.print(formatTime(fermentacaoState.stageStartEpoch));
-    Serial.printf(", targetReached=%s\n", 
-                 fermentacaoState.targetReachedSent ? "true" : "false");
+if (isValidString(fermentacaoState.activeId)) {
+    safe_strcpy(lastActiveId, fermentacaoState.activeId, sizeof(lastActiveId));
+    
+    // ✅ Ativa proteção se restaurou estado válido
+    if (fermentacaoState.active && fermentacaoState.stageStartEpoch > 0) {
+        justBootedWithState = true;
+        
+        #ifdef DEBUG_EEPROM
+        Serial.println(F("🔄 MODO RESTAURAÇÃO ATIVADO"));
+        Serial.print(F("   stageStartEpoch: "));
+        Serial.println((unsigned long)fermentacaoState.stageStartEpoch);
+        Serial.println(F("   Proteção ativa por 60 segundos"));
+        #endif
+    }
+
+    #ifdef DEBUG_EEPROM
+    Serial.print(F("✅ lastActiveId restaurado: '"));
+    Serial.print(lastActiveId);
+    Serial.println(F("'"));
     #endif
+}
+
+#ifdef DEBUG_EEPROM
+    Serial.println(F("\n╔════════════════════════════════════════════╗"));
+    Serial.println(F("║   ✅ ESTADO RESTAURADO COM SUCESSO        ║"));
+    Serial.println(F("╠════════════════════════════════════════════╣"));
+
+    Serial.print(F("║ ID:              "));
+    Serial.print(fermentacaoState.activeId);
+    for (int i = strlen(fermentacaoState.activeId); i < 24; i++) Serial.print(' ');
+    Serial.println(F(" ║"));
+
+    Serial.print(F("║ Etapa:           "));
+    Serial.print(fermentacaoState.currentStageIndex + 1);
+    for (int i = (fermentacaoState.currentStageIndex + 1 < 10 ? 23 : 22); i < 24; i++) Serial.print(' ');
+    Serial.println(F(" ║"));
+
+    Serial.print(F("║ stageStartEpoch: "));
+    unsigned long epoch = (unsigned long)fermentacaoState.stageStartEpoch;
+    Serial.print(epoch);
+    int digits = epoch == 0 ? 1 : (int)log10(epoch) + 1;
+    for (int i = digits; i < 24; i++) Serial.print(' ');
+    Serial.println(F(" ║"));
+
+    Serial.print(F("║ targetReached:   "));
+    Serial.print(fermentacaoState.targetReachedSent ? F("true") : F("false"));
+    for (int i = (fermentacaoState.targetReachedSent ? 4 : 5); i < 24; i++) Serial.print(' ');
+    Serial.println(F(" ║"));
+
+    Serial.print(F("║ stageStarted:    "));
+    Serial.print(stageStarted ? F("true") : F("false"));
+    for (int i = (stageStarted ? 4 : 5); i < 24; i++) Serial.print(' ');
+    Serial.println(F(" ║"));
+
+    if (fermentacaoState.stageStartEpoch > 0) {
+        time_t now = time(nullptr);
+        if (now > 1577836800L) {
+            float elapsed = difftime(now, fermentacaoState.stageStartEpoch) / 3600.0f;
+
+            Serial.println(F("╠════════════════════════════════════════════╣"));
+            
+            Serial.print(F("║ ⏱️  Tempo decorrido: "));
+            Serial.print(elapsed, 1);
+            Serial.print(F(" horas"));
+            for (int i = 11; i < 18; i++) Serial.print(' ');
+            Serial.println(F(" ║"));
+            
+            Serial.print(F("║                    ("));
+            Serial.print(elapsed / 24.0f, 2);
+            Serial.print(F(" dias)"));
+            for (int i = 9; i < 17; i++) Serial.print(' ');
+            Serial.println(F(" ║"));
+        }
+    }
+
+    Serial.println(F("╚════════════════════════════════════════════╝\n"));
+#endif
 }
 
 void clearPreferences() {
@@ -469,7 +608,26 @@ void getTargetFermentacao() {
         LOG_FERMENTATION(F("  → Fermentação ATIVA detectada no servidor"));
         
         if (strcmp(id, lastActiveId) != 0) {
-            // =====================================================
+            // ✅ PROTEÇÃO DE BOOT: Se acabamos de restaurar do Preferences, não aceita mudança por 60s
+            if (justBootedWithState) {
+                LOG_FERMENTATION(F("\n⚠️ [PROTEÇÃO BOOT] ID diferente, mas acabamos de restaurar!"));
+                LOG_FERMENTATION("   Preferences: ID='" + String(fermentacaoState.activeId) + 
+                                "', stageStartEpoch=" + String((unsigned long)fermentacaoState.stageStartEpoch));
+                LOG_FERMENTATION("   Servidor:    ID='" + String(id) + "'");
+                
+                static unsigned long bootProtectionStart = millis();
+                unsigned long protectionDuration = 60000;  // 60 segundos
+                
+                if (millis() - bootProtectionStart < protectionDuration) {
+                    unsigned long remaining = (protectionDuration - (millis() - bootProtectionStart)) / 1000;
+                    LOG_FERMENTATION("   ⏸️  Ignorando por mais " + String(remaining) + " segundos");
+                    return;  // Mantém estado local
+                }
+                
+                LOG_FERMENTATION(F("   ✅ Período de proteção expirado, aceitando mudança"));
+                justBootedWithState = false;  // Desativa proteção
+            }
+                        // =====================================================
             // NOVA FERMENTAÇÃO DETECTADA
             // =====================================================
             LOG_FERMENTATION(F("  → ID DIFERENTE do último conhecido"));
@@ -496,6 +654,18 @@ void getTargetFermentacao() {
             fermentacaoState.stageStartEpoch = 0;
 
             saveStateToPreferences();
+
+        // ✅ Envia heartbeat imediato com temperaturas atuais
+        if (httpClient.isConnected()) {
+            temperature beerTemp = brewPiControl.getBeerTemp();
+            temperature fridgeTemp = brewPiControl.getFridgeTemp();
+            httpClient.sendHeartbeat(
+                atoi(fermentacaoState.activeId),
+                brewPiControl.getDetailedStatus(),
+                beerTemp,
+                fridgeTemp
+            );
+        }
             
             LOG_FERMENTATION(F("[MySQL] CONFIGURAÇÃO CONCLUÍDA"));
             LOG_FERMENTATION("  activeId: '" + String(fermentacaoState.activeId) + "'");
@@ -508,6 +678,43 @@ void getTargetFermentacao() {
             // =====================================================
             LOG_FERMENTATION(F("  → MESMO ID do último conhecido"));
             LOG_FERMENTATION(F("  → Fermentação já configurada"));
+            
+            // ✅ CRÍTICO: Verifica se totalStages foi perdido (após reboot)
+            if (fermentacaoState.totalStages == 0) {
+                LOG_FERMENTATION(F("  ⚠️ totalStages = 0 após reboot"));
+                LOG_FERMENTATION(F("  → Recarregando configuração do servidor"));
+                loadConfigParameters(id);
+                
+                if (fermentacaoState.totalStages > 0) {
+                    LOG_FERMENTATION("  ✅ Configuração recarregada: " + 
+                                   String(fermentacaoState.totalStages) + " etapas");
+                } else {
+                    LOG_FERMENTATION(F("  ❌ Falha ao recarregar configuração!"));
+                }
+            }
+
+            // ✅ SINCRONIZAÇÃO: Verifica timestamp do servidor
+            unsigned long serverStageStartEpoch = doc["stageStartEpoch"] | 0;
+            bool serverTargetReached = doc["targetReached"] | false;
+            
+            if (serverStageStartEpoch > 0 && serverStageStartEpoch != fermentacaoState.stageStartEpoch) {
+                LOG_FERMENTATION(F("  → Timestamp diferente - sincronizando com servidor"));
+                LOG_FERMENTATION("     Local:    " + String((unsigned long)fermentacaoState.stageStartEpoch));
+                LOG_FERMENTATION("     Servidor: " + String(serverStageStartEpoch));
+                
+                fermentacaoState.stageStartEpoch = (time_t)serverStageStartEpoch;
+                fermentacaoState.targetReachedSent = serverTargetReached;
+                stageStarted = true;
+                
+                saveStateToPreferences();
+                LOG_FERMENTATION(F("  → Timestamp sincronizado!"));
+                
+                // ✅ Desativa proteção após sincronização bem-sucedida
+                if (justBootedWithState) {
+                    justBootedWithState = false;
+                    LOG_FERMENTATION(F("  ✅ Proteção de boot desativada - sincronização completa"));
+                }
+            }
             
             if (serverStageIndex != fermentacaoState.currentStageIndex) {
                 LOG_FERMENTATION(F("  → Diferença de etapa detectada!"));
@@ -761,6 +968,18 @@ void verificarTrocaDeFase() {
         // ✅ VERIFICA SE É RESTAURAÇÃO (já tinha começado antes do reinício)
         bool isRestoration = (fermentacaoState.stageStartEpoch > 0 && 
                              fermentacaoState.targetReachedSent);
+        
+        #if DEBUG_FERMENTATION
+            Serial.println(F("\n═══════════════════════════════════════════════"));
+            Serial.print(F("DEBUG RESTAURAÇÃO:\n"));
+            Serial.print(F("  stageStartEpoch = "));
+            Serial.println((unsigned long)fermentacaoState.stageStartEpoch);
+            Serial.print(F("  targetReachedSent = "));
+            Serial.println(fermentacaoState.targetReachedSent ? "TRUE" : "FALSE");
+            Serial.print(F("  isRestoration = "));
+            Serial.println(isRestoration ? "TRUE" : "FALSE");
+            Serial.println(F("═══════════════════════════════════════════════\n"));
+        #endif
         
         stageStarted = true;
         

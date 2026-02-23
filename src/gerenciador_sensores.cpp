@@ -335,30 +335,33 @@ bool readConfiguredTemperatures(float& tempFermenter, float& tempFridge) {
     tempFridge = sensors.getTempC(addrFridge);
     
     if (tempFermenter == DEVICE_DISCONNECTED_C) {
-        #if DEBUG_SENSORES
-        Serial.println(F("❌ Erro: Sensor fermentador desconectado"));
-        #endif
+        LOG_SENSORES("Erro: Sensor fermentador desconectado");
+        if (httpClient.isConnected()) {
+            httpClient.sendSensorError(nullptr, 0);
+        }
         return false;
     }
     
     if (tempFridge == DEVICE_DISCONNECTED_C) {
-        #if DEBUG_SENSORES
-        Serial.println(F("❌ Erro: Sensor geladeira desconectado"));
-        #endif
+        LOG_SENSORES("Erro: Sensor geladeira desconectado");
+        if (httpClient.isConnected()) {
+            httpClient.sendSensorError(nullptr, 0);
+        }
         return false;
     }
     
     if (tempFermenter < -10 || tempFermenter > 50) {
-        #if DEBUG_SENSORES
-        Serial.printf("⚠️ Temperatura fermentador fora do esperado: %.2f°C\n", tempFermenter);
-        #endif
+        if (httpClient.isConnected()) {
+            httpClient.sendSensorError(nullptr, 0);
+        }
         return false;
     }
     
     if (tempFridge < -10 || tempFridge > 50) {
-        #if DEBUG_SENSORES
-        Serial.printf("⚠️ Temperatura geladeira fora do esperado: %.2f°C\n", tempFridge);
-        #endif
+        LOG_SENSORES("Erro: Temperatura geladeira fora do esperado");
+        if (httpClient.isConnected()) {
+            httpClient.sendSensorError(nullptr, 0);
+        }
         return false;
     }
     

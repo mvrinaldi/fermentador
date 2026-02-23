@@ -211,6 +211,19 @@ bool FermentadorHTTPClient::updateStageIndex(const char* configId, int newStageI
     return result;
 }
 
+bool FermentadorHTTPClient::sendSensorError(const char* configId, float tempTarget) {
+    JsonDocument doc;
+    if (configId && strlen(configId) > 0) {
+        doc["cid"] = configId;
+    }
+    doc["sensor_error"] = true;
+    doc["tt"] = tempTarget;
+    // tf e tb ausentes = null implícito
+    
+    String response;
+    return makeRequest("api.php?path=readings", "POST", &doc, response);
+}
+
 // =====================================================
 // SENSORES E ISPINDEL
 // =====================================================

@@ -157,7 +157,6 @@ void networkLoop() {
                 
                 // Processa scan imediatamente
                 if (!sensorsScanned) {
-                    Serial.println(F("🔍 Scan automático de sensores"));
                     scanAndSendSensors();
                     sensorsScanned = true;
                 }
@@ -175,7 +174,6 @@ void networkLoop() {
     // 3. SCAN AUTOMÁTICO DE SENSORES (SE NÃO FEITO)
     // =============================================
     if (httpOnline && !sensorsScanned) {
-        Serial.println(F("🔍 Scan automático de sensores"));
         scanAndSendSensors();
         sensorsScanned = true;
     }

@@ -13,14 +13,14 @@
 
 // FLAGS POR MÓDULO
 #define DEBUG_HTTP          0
-#define DEBUG_FERMENTATION  0
+#define DEBUG_FERMENTATION  1
 #define DEBUG_SENSORES      0
 #define DEBUG_SENSORES_MAIN 0
 #define DEBUG_BREWPI        0
-#define DEBUG_EEPROM        0
-#define DEBUG_MAIN          1
+#define DEBUG_EEPROM        1
+#define DEBUG_MAIN          0
 #define DEBUG_HEARTBEAT     0
-#define DEBUG_ENVIODADOS    1
+#define DEBUG_ENVIODADOS    0
 #define DEBUG_ESTADO        0 // Envia logs do State: AGUARDANDO, Cooler: OFF, Heater: OFF ou Wait: Proteção: intervalo mínimo resfriamento
 #define DEBUG_ISPINDEL      0
 #define DEBUG_TELNET        1 //TELNET SÓ FUNCIONA COM ESSE HABILITADO
