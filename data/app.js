@@ -18,6 +18,18 @@ const SAO_PAULO_UTC_OFFSET = -3 * 60 * 60 * 1000;
 const HEAP_WARNING_THRESHOLD = 30000;  // Abaixo disso: atenção (amarelo)
 const HEAP_CRITICAL_THRESHOLD = 15000; // Abaixo disso: crítico (vermelho)
 
+// ========== CONFIGURAÇÃO DO GRÁFICO ==========
+let selectedPeriod = 24; // horas (padrão 24)
+const PERIOD_OPTIONS = {
+    6: 6 * 60 * 60 * 1000,
+    12: 12 * 60 * 60 * 1000,
+    24: 24 * 60 * 60 * 1000,
+    48: 48 * 60 * 60 * 1000,
+    72: 72 * 60 * 60 * 1000,
+    168: 168 * 60 * 60 * 1000,
+    'all': Infinity
+};
+
 // ========== ESTADO DA APLICAÇÃO ==========
 let appState = {
     config: null,
@@ -53,6 +65,114 @@ async function apiRequest(endpoint, options = {}) {
     } catch (error) {
         throw error;
     }
+}
+
+// ========== FILTRO DE DADOS DO GRÁFICO ==========
+function filterReadingsByPeriod(readings, period) {
+    if (!readings || readings.length === 0) return [];
+    
+    if (period === 'all') {
+        return readings; // Retorna todos os dados
+    }
+    
+    const now = new Date();
+    const periodMs = period * 60 * 60 * 1000; // Converte horas para milissegundos
+    const cutoffTime = new Date(now.getTime() - periodMs);
+    
+    return readings.filter(reading => {
+        // Converte o timestamp da leitura para objeto Date
+        let readingDate;
+        if (reading.reading_timestamp) {
+            // Normaliza o timestamp (adiciona Z se necessário)
+            let timestamp = reading.reading_timestamp;
+            if (typeof timestamp === 'string') {
+                // Se vier no formato "2026-02-15 21:58:57"
+                timestamp = timestamp.replace(' ', 'T');
+                if (!timestamp.endsWith('Z') && !timestamp.includes('+')) {
+                    timestamp += 'Z';
+                }
+            }
+            readingDate = new Date(timestamp);
+        } else {
+            return false;
+        }
+        
+        // ✅ CORREÇÃO: Comparação direta de timestamps
+        return readingDate >= cutoffTime;
+    });
+}
+
+// Função para filtrar histórico do controlador pelo mesmo período
+function filterControllerHistoryByPeriod(history, readings, period) {
+    if (!history || history.length === 0 || !readings || readings.length === 0) return [];
+    
+    if (period === 'all') {
+        return history;
+    }
+    
+    // Pega o timestamp da leitura mais antiga no período filtrado
+    const oldestReading = readings[0];
+    if (!oldestReading) return [];
+    
+    // Converte o timestamp da leitura mais antiga
+    let oldestTimestamp = oldestReading.reading_timestamp;
+    if (typeof oldestTimestamp === 'string') {
+        oldestTimestamp = oldestTimestamp.replace(' ', 'T');
+        if (!oldestTimestamp.endsWith('Z') && !oldestTimestamp.includes('+')) {
+            oldestTimestamp += 'Z';
+        }
+    }
+    const cutoffTime = new Date(oldestTimestamp);
+    
+    return history.filter(state => {
+        if (!state.state_timestamp) return false;
+        
+        let stateTime = state.state_timestamp;
+        if (typeof stateTime === 'string') {
+            stateTime = stateTime.replace(' ', 'T');
+            if (!stateTime.endsWith('Z') && !stateTime.includes('+')) {
+                stateTime += 'Z';
+            }
+        }
+        const stateDate = new Date(stateTime);
+        return stateDate >= cutoffTime;
+    });
+}
+
+// Função para filtrar leituras do iSpindel
+function filterIspindelReadingsByPeriod(ispindelReadings, readings, period) {
+    if (!ispindelReadings || ispindelReadings.length === 0 || !readings || readings.length === 0) return [];
+    
+    if (period === 'all') {
+        return ispindelReadings;
+    }
+    
+    const oldestReading = readings[0];
+    if (!oldestReading) return [];
+    
+    // Converte o timestamp da leitura mais antiga
+    let oldestTimestamp = oldestReading.reading_timestamp;
+    if (typeof oldestTimestamp === 'string') {
+        oldestTimestamp = oldestTimestamp.replace(' ', 'T');
+        if (!oldestTimestamp.endsWith('Z') && !oldestTimestamp.includes('+')) {
+            oldestTimestamp += 'Z';
+        }
+    }
+    const cutoffTime = new Date(oldestTimestamp);
+    
+    return ispindelReadings.filter(ir => {
+        if (!ir.reading_timestamp) return false;
+        
+        let irTime = ir.reading_timestamp;
+        if (typeof irTime === 'string') {
+            irTime = irTime.replace(' ', 'T');
+            if (!irTime.endsWith('Z') && !irTime.includes('+')) {
+                irTime += 'Z';
+            }
+        }
+        const irDate = new Date(irTime);
+        return irDate >= cutoffTime;
+    });
 }
 
 // ========== AUTENTICAÇÃO ==========
@@ -1306,15 +1426,29 @@ function renderStagesList() {
         .join('');
 }
 
-// ========== GRÁFICO ==========
+// ========== GRÁFICO (MODIFICADO) ==========
 function renderChart() {
     const canvas = document.getElementById('fermentation-chart');
     const ctx = canvas ? canvas.getContext('2d') : null;
     const noDataMsg = document.getElementById('no-data-message');
+    const periodSelector = document.getElementById('period-selector');
 
     if (!ctx || !appState.config || appState.readings.length === 0) {
         if (canvas) canvas.style.display = 'none';
         if (noDataMsg) noDataMsg.style.display = 'block';
+        return;
+    }
+
+    // Filtra as leituras pelo período selecionado
+    const filteredReadings = filterReadingsByPeriod(appState.readings, selectedPeriod);
+    
+    // Se não houver dados no período, mostra mensagem
+    if (filteredReadings.length === 0) {
+        if (canvas) canvas.style.display = 'none';
+        if (noDataMsg) {
+            noDataMsg.style.display = 'block';
+            noDataMsg.innerHTML = `Sem dados para o período selecionado (${selectedPeriod === 'all' ? 'todos os dados' : `últimas ${selectedPeriod} horas`})`;
+        }
         return;
     }
 
@@ -1325,7 +1459,7 @@ function renderChart() {
         chart.destroy();
     }
 
-    const labels = appState.readings.map(r => {
+    const labels = filteredReadings.map(r => {
         const date = utcToSaoPaulo(r.reading_timestamp);
         const day = date.getDate().toString().padStart(2, '0');
         const month = (date.getMonth() + 1).toString().padStart(2, '0');
@@ -1334,17 +1468,24 @@ function renderChart() {
         return `${day}/${month} ${hour}:${minute}`;
     });
 
+    // Filtra o histórico do controlador para o mesmo período
+    const filteredControllerHistory = filterControllerHistoryByPeriod(
+        appState.controllerHistory, 
+        filteredReadings, 
+        selectedPeriod
+    );
+
     const coolerData = [];
     const heaterData = [];
     
-    if (appState.controllerHistory && appState.controllerHistory.length > 0) {
-        appState.readings.forEach((reading, idx) => {
+    if (filteredControllerHistory && filteredControllerHistory.length > 0) {
+        filteredReadings.forEach((reading, idx) => {
             const readingTime = new Date(reading.reading_timestamp).getTime();
             
-            const controllerState = appState.controllerHistory.find(cs => {
+            const controllerState = filteredControllerHistory.find(cs => {
                 const stateTime = new Date(cs.state_timestamp).getTime();
                 const diff = Math.abs(stateTime - readingTime);
-                return diff < 300000;
+                return diff < 300000; // 5 minutos de tolerância
             });
             
             if (controllerState) {
@@ -1360,15 +1501,22 @@ function renderChart() {
         });
     }
 
+    // Filtra leituras do iSpindel
+    const filteredIspindelReadings = filterIspindelReadingsByPeriod(
+        appState.ispindelReadings,
+        filteredReadings,
+        selectedPeriod
+    );
+
     const gravityMap = new Map();
-    if (appState.ispindelReadings && appState.ispindelReadings.length > 0) {
-        appState.ispindelReadings.forEach(ir => {
+    if (filteredIspindelReadings && filteredIspindelReadings.length > 0) {
+        filteredIspindelReadings.forEach(ir => {
             const timestamp = new Date(ir.reading_timestamp).getTime();
             gravityMap.set(timestamp, parseFloat(ir.gravity));
         });
     }
     
-    const gravityData = appState.readings.map(r => {
+    const gravityData = filteredReadings.map(r => {
         const readingTime = new Date(r.reading_timestamp).getTime();
         
         let closestGravity = null;
@@ -1376,7 +1524,7 @@ function renderChart() {
         
         gravityMap.forEach((gravity, timestamp) => {
             const diff = Math.abs(timestamp - readingTime);
-            if (diff < closestDiff && diff < 1800000) {
+            if (diff < closestDiff && diff < 1800000) { // 30 minutos
                 closestDiff = diff;
                 closestGravity = gravity;
             }
@@ -1388,7 +1536,7 @@ function renderChart() {
     const datasets = [
         {
             label: 'Temp. Geladeira',
-            data: appState.readings.map(r => parseFloat(r.temp_fridge)),
+            data: filteredReadings.map(r => parseFloat(r.temp_fridge)),
             borderColor: '#3b82f6',
             backgroundColor: 'rgba(59, 130, 246, 0.1)',
             tension: 0.4,
@@ -1397,7 +1545,7 @@ function renderChart() {
         },
         {
             label: 'Temp. Fermentador',
-            data: appState.readings.map(r => parseFloat(r.temp_fermenter)),
+            data: filteredReadings.map(r => parseFloat(r.temp_fermenter)),
             borderColor: '#1e40af',
             backgroundColor: 'rgba(30, 64, 175, 0.1)',
             tension: 0.4,
@@ -1406,7 +1554,7 @@ function renderChart() {
         },
         {
             label: 'Temperatura Alvo',
-            data: appState.readings.map(r => parseFloat(r.temp_target)),
+            data: filteredReadings.map(r => parseFloat(r.temp_target)),
             borderColor: '#ef4444',
             borderDash: [5, 5],
             backgroundColor: 'rgba(239, 68, 68, 0.1)',
@@ -1499,6 +1647,13 @@ function renderChart() {
                             return label;
                         }
                     }
+                },
+                title: {
+                    display: selectedPeriod !== 'all',
+                    text: `Mostrando ${filteredReadings.length} leituras das últimas ${selectedPeriod} horas`,
+                    position: 'bottom',
+                    font: { size: 12, style: 'italic' },
+                    color: '#666'
                 }
             },
             scales: {
@@ -1524,6 +1679,51 @@ function renderChart() {
         }
     });
 }
+
+// ========== EVENT LISTENER DO SELETOR DE PERÍODO ==========
+function setupPeriodSelector() {
+    const periodSelector = document.getElementById('period-selector');
+    if (periodSelector) {
+        periodSelector.addEventListener('change', (e) => {
+            const value = e.target.value;
+            selectedPeriod = value === 'all' ? 'all' : parseInt(value);
+            
+            // Re-renderiza o gráfico com o novo período
+            if (appState.config && appState.config.stages && appState.config.stages.length > 0) {
+                renderChart();
+            } else {
+                // Se não tem fermentação ativa, usa os dados que temos
+                renderNoActiveFermentation();
+            }
+            
+            // Feedback visual (opcional)
+            console.log(`Período alterado para: ${selectedPeriod === 'all' ? 'todos os dados' : `últimas ${selectedPeriod} horas`}`);
+        });
+    }
+}
+
+// Modifique o DOMContentLoaded para incluir o setup:
+document.addEventListener('DOMContentLoaded', async () => {
+    const emailInput = document.getElementById('login-email');
+    const passwordInput = document.getElementById('login-password');
+    
+    if (emailInput && passwordInput) {
+        const handleEnterKey = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                login();
+            }
+        };
+        
+        emailInput.addEventListener('keypress', handleEnterKey);
+        passwordInput.addEventListener('keypress', handleEnterKey);
+    }
+    
+    // Setup do seletor de período
+    setupPeriodSelector();
+    
+    await checkAuthStatus();
+});
 
 function renderNoActiveFermentation() {
     const nameElement = document.getElementById('fermentation-name');
@@ -1677,22 +1877,3 @@ async function initAppAfterAuth() {
 window.login = login;
 window.logout = logout;
 window.refreshData = loadCompleteState;
-
-document.addEventListener('DOMContentLoaded', async () => {
-    const emailInput = document.getElementById('login-email');
-    const passwordInput = document.getElementById('login-password');
-    
-    if (emailInput && passwordInput) {
-        const handleEnterKey = (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                login();
-            }
-        };
-        
-        emailInput.addEventListener('keypress', handleEnterKey);
-        passwordInput.addEventListener('keypress', handleEnterKey);
-    }
-    
-    await checkAuthStatus();
-});

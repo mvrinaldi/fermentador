@@ -185,7 +185,24 @@
     
     <!-- Gráfico -->
     <div class="card mb-6">
-        <h2 class="text-xl mb-4">Histórico de Leituras</h2>
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xl">Histórico de Leituras</h2>
+            
+            <!-- SELETOR DE PERÍODO -->
+            <div class="flex items-center gap-2">
+                <label for="period-selector" class="text-sm text-gray-600">Período:</label>
+                <select id="period-selector" class="border rounded-lg px-3 py-1.5 text-sm bg-white focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
+                    <option value="6">Últimas 6 horas</option>
+                    <option value="12">Últimas 12 horas</option>
+                    <option value="24" selected>Últimas 24 horas</option>
+                    <option value="48">Últimas 48 horas</option>
+                    <option value="72">Últimas 72 horas</option>
+                    <option value="168">Últimos 7 dias</option>
+                    <option value="all">Todos os dados</option>
+                </select>
+            </div>
+        </div>
+        
         <div class="relative h-96">
             <canvas id="fermentation-chart"></canvas>
         </div>
