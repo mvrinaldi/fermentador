@@ -34,6 +34,9 @@ public:
     bool notifyTargetReached(const char* configId);
     bool updateStageIndex(const char* configId, int newStageIndex);
 
+    // ==================== COMANDOS ====================
+    String getPendingCommand(int configId);
+
     // ==================== LEITURAS ====================
     bool sendReading(const char* configId, float tempFridge, 
                     float tempFermenter, float tempTarget);

@@ -41,7 +41,8 @@ let appState = {
     controllerHistory: [],
     heartbeat: null,
     lastUpdate: null,
-    latestReading: null
+    latestReading: null,
+    isPaused: false
 };
 
 // ========== FUNÇÕES DE API ==========
@@ -713,6 +714,7 @@ async function loadCompleteState() {
         
         if (!activeData.active || !activeData.id) {
             // Mesmo sem fermentação ativa, busca últimos dados dos sensores
+            appState.isPaused = false;
             appState.config = null;
             appState.espState = {};
             appState.readings = [];
@@ -773,6 +775,7 @@ async function loadCompleteState() {
         appState.controllerHistory = completeState.controller_history || [];
         appState.lastUpdate = completeState.timestamp;
         appState.heartbeat = completeState.heartbeat;
+        appState.isPaused = activeData.paused === true;
         appState.latestReading = null;
         
         checkESPStatus();
@@ -1055,7 +1058,7 @@ const stageTemplate = (stage, index, isCurrent, isCompleted) => {
     let borderColor = 'border-gray-200';
     let bgColor = 'bg-gray-50';
     let statusText = 'Aguardando';
-    
+
     if (isCurrent) {
         borderColor = 'border-blue-500';
         bgColor = 'bg-blue-50';
@@ -1065,11 +1068,17 @@ const stageTemplate = (stage, index, isCurrent, isCompleted) => {
         bgColor = 'bg-green-50';
         statusText = 'Concluída';
     }
+
+    const totalStages = appState.config?.stages?.length ?? 0;
+    const isLast = index === totalStages - 1;
     
+    // ✅ NOVO: Verifica se é etapa de rampa
+    const isRampStage = stage.type === 'ramp';
+
     return `
     <div class="p-4 rounded-lg border-2 ${borderColor} ${bgColor}">
         <div class="flex justify-between items-start">
-            <div>
+            <div class="flex-1">
                 <h3 class="font-semibold text-gray-800">
                     ${stage.type === 'ramp' ? '<i class="fas fa-chart-line text-blue-600 mr-2"></i>' : ''}
                     Etapa ${index + 1}
@@ -1080,6 +1089,50 @@ const stageTemplate = (stage, index, isCurrent, isCompleted) => {
                     ${getStageDescription(stage)}
                 </p>
             </div>
+
+${isCurrent ? `
+            <div class="flex gap-2 ml-4 flex-shrink-0">
+                ${appState.isPaused ? `
+                <button
+                    onclick="resumeFermentation()"
+                    id="btn-resume-stage"
+                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
+                           bg-green-100 text-green-800 border border-green-300
+                           hover:bg-green-200 transition-colors"
+                    title="Retomar fermentação">
+                    <i class="fas fa-play"></i>
+                    <span>Retomar</span>
+                </button>
+                ` : `
+                <!-- ✅ MODIFICADO: Botão Pausar NÃO aparece em etapas de rampa -->
+                ${!isRampStage ? `
+                <button
+                    onclick="pauseFermentationFromMonitor()"
+                    id="btn-pause-stage"
+                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
+                           bg-yellow-100 text-yellow-800 border border-yellow-300
+                           hover:bg-yellow-200 transition-colors"
+                    title="Pausar fermentação mantendo temperatura">
+                    <i class="fas fa-pause"></i>
+                    <span>Pausar</span>
+                </button>
+                ` : ''}
+
+                ${!isLast ? `
+                <button
+                    onclick="advanceStage()"
+                    id="btn-advance-stage"
+                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
+                           bg-blue-100 text-blue-800 border border-blue-300
+                           hover:bg-blue-200 transition-colors"
+                    title="Avançar para a próxima etapa">
+                    <i class="fas fa-forward"></i>
+                    <span>Avançar</span>
+                </button>
+                ` : ''}
+                `}
+            </div>
+            ` : ''}
         </div>
     </div>
     `;
@@ -1139,6 +1192,122 @@ function getStageDescription(stage) {
             return `${direction} ${stage.start_temp}°C → ${stage.target_temp}°C em ${rampTimeDisplay}`;
         default:
             return '';
+    }
+}
+
+// ========== AÇÕES DA ETAPA EM ANDAMENTO ==========
+
+async function pauseFermentationFromMonitor() {
+    const configId = appState.config?.id;
+    if (!configId) {
+        alert('Nenhuma fermentação ativa encontrada.');
+        return;
+    }
+
+    if (!confirm('Pausar a fermentação?\n\nA temperatura será mantida e a contagem da etapa ficará suspensa até a retomada.')) {
+        return;
+    }
+
+    const btnPause = document.getElementById('btn-pause-stage');
+    const btnAdvance = document.getElementById('btn-advance-stage');
+
+    try {
+        if (btnPause) { btnPause.disabled = true; btnPause.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pausando...'; }
+        if (btnAdvance) btnAdvance.disabled = true;
+
+        await apiRequest('configurations/status', {
+            method: 'PUT',
+            body: JSON.stringify({ config_id: configId, status: 'paused' })
+        });
+
+        await apiRequest('active/deactivate', { method: 'POST' });
+
+        alert('⏸️ Fermentação pausada!\n\nO ESP manterá a temperatura atual até ser retomada.');
+
+        setTimeout(() => loadCompleteState(), 3000);
+
+    } catch (error) {
+        alert('Erro ao pausar: ' + error.message);
+    } finally {
+        if (btnPause) { btnPause.disabled = false; btnPause.innerHTML = '<i class="fas fa-pause"></i> <span>Pausar</span>'; }
+        if (btnAdvance) { btnAdvance.disabled = false; }
+    }
+}
+
+async function resumeFermentation() {
+    const configId = appState.config?.id;
+    if (!configId) {
+        alert('Nenhuma fermentação pausada encontrada.');
+        return;
+    }
+
+    if (!confirm('Retomar a fermentação?\n\nA contagem da etapa será ajustada para excluir o tempo pausado.')) {
+        return;
+    }
+
+    const btnResume = document.getElementById('btn-resume-stage');
+
+    try {
+        if (btnResume) { btnResume.disabled = true; btnResume.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Retomando...'; }
+
+        await apiRequest('configurations/status', {
+            method: 'PUT',
+            body: JSON.stringify({ config_id: configId, status: 'active' })
+        });
+
+        await apiRequest('active/activate', {
+            method: 'POST',
+            body: JSON.stringify({ config_id: configId })
+        });
+
+        alert('▶️ Fermentação retomada!\n\nO ESP continuará a partir de onde parou.');
+
+        setTimeout(() => loadCompleteState(), 3000);
+
+    } catch (error) {
+        alert('Erro ao retomar: ' + error.message);
+    } finally {
+        if (btnResume) { btnResume.disabled = false; btnResume.innerHTML = '<i class="fas fa-play"></i> <span>Retomar</span>'; }
+    }
+}
+
+async function advanceStage() {
+    const currentIdx = appState.config?.current_stage_index ?? 0;
+    const totalStages = appState.config?.stages?.length ?? 0;
+
+    if (currentIdx >= totalStages - 1) {
+        alert('Já está na última etapa.');
+        return;
+    }
+
+    const currentNum = currentIdx + 1;
+    const nextNum = currentIdx + 2;
+
+    if (!confirm(`Avançar da etapa ${currentNum} para a etapa ${nextNum}?\n\nO tempo restante da etapa atual será descartado.`)) {
+        return;
+    }
+
+    const btnAdvance = document.getElementById('btn-advance-stage');
+    const btnPause = document.getElementById('btn-pause-stage');
+
+    try {
+        if (btnAdvance) { btnAdvance.disabled = true; btnAdvance.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Enviando...'; }
+        if (btnPause) btnPause.disabled = true;
+
+        await apiRequest('commands', {
+            method: 'POST',
+            body: JSON.stringify({ command: 'ADVANCE_STAGE' })
+        });
+
+        alert(`✅ Comando enviado!\n\nO ESP avançará para a etapa ${nextNum} na próxima verificação (até 10s).`);
+
+        setTimeout(() => loadCompleteState(), 12000);
+
+    } catch (error) {
+        alert('Erro ao avançar etapa: ' + error.message);
+    } finally {
+        if (btnAdvance) { btnAdvance.disabled = false; btnAdvance.innerHTML = '<i class="fas fa-forward"></i> <span>Avançar</span>'; }
+        if (btnPause) { btnPause.disabled = false; }
     }
 }
 
@@ -1250,7 +1419,29 @@ function renderUI() {
             timeElement.style.display = 'none';
         }
     }
-    
+    // Banner de pausa
+    let pausedBanner = document.getElementById('paused-banner');
+    if (appState.isPaused) {
+        if (!pausedBanner) {
+            pausedBanner = document.createElement('div');
+            pausedBanner.id = 'paused-banner';
+            pausedBanner.className = 'flex items-center gap-3 px-4 py-3 mb-4 rounded-lg bg-yellow-50 border border-yellow-300 text-yellow-800';
+            const header = document.getElementById('fermentation-name')?.closest('.card') 
+                        || document.getElementById('time-remaining')?.parentElement;
+            if (header) header.insertAdjacentElement('afterend', pausedBanner);
+        }
+        pausedBanner.innerHTML = `
+            <i class="fas fa-pause-circle text-yellow-500 text-xl"></i>
+            <div>
+                <span class="font-semibold">Fermentação pausada</span>
+                <span class="ml-2 text-sm">— temperatura mantida, contagem suspensa</span>
+            </div>
+        `;
+        pausedBanner.classList.remove('hidden');
+    } else {
+        if (pausedBanner) pausedBanner.classList.add('hidden');
+    }
+
     checkESPStatus();
     renderInfoCards();
     renderChart();
@@ -1877,3 +2068,6 @@ async function initAppAfterAuth() {
 window.login = login;
 window.logout = logout;
 window.refreshData = loadCompleteState;
+window.pauseFermentationFromMonitor = pauseFermentationFromMonitor;
+window.advanceStage = advanceStage;
+window.resumeFermentation = resumeFermentation;

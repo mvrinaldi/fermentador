@@ -111,6 +111,9 @@ struct FermentacaoState {
     FermentationStage stages[MAX_STAGES];
     unsigned long lastUpdate;
     time_t stageStartEpoch;
+    bool paused = false;
+    time_t pausedAtEpoch = 0;      // quando foi pausado
+    time_t elapsedBeforePause = 0; // segundos decorridos na etapa antes da pausa
     
     FermentacaoState() : 
         active(false),

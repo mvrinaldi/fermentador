@@ -6,8 +6,8 @@
  * e DatabaseCleanup centralizado
  * 
  * @author Marcos Rinaldi
- * @version 2.2 - Correção integração alertas + limpeza código redundante
- * @date Fevereiro 2026
+ * @version 2.3 - Adicionado endpoint de comandos ESP (ADVANCE_STAGE, CLEAR_EEPROM)
+ * @date Março 2026
  */
 
 header('Access-Control-Allow-Origin: *');
@@ -125,11 +125,11 @@ function decompressStateData(&$data) {
     ];
     
     $unitMap = [
-        'h' => 'hours',
-        'd' => 'days',
-        'm' => 'minutes',
+        'h'   => 'hours',
+        'd'   => 'days',
+        'm'   => 'minutes',
         'ind' => 'indefinite',
-        'tc' => 'completed'
+        'tc'  => 'completed'
     ];
     
     $statusMap = [
@@ -175,31 +175,31 @@ function decompressStateData(&$data) {
             
             if (count($tr) == 1 && $tr[0] === 'tc') {
                 $data['timeRemaining'] = [
-                    'value' => 0,
-                    'unit' => 'completed',
-                    'status' => 'completed',
+                    'value'   => 0,
+                    'unit'    => 'completed',
+                    'status'  => 'completed',
                     'display' => 'Fermentação concluída'
                 ];
-                $data['targetReached'] = true;
+                $data['targetReached']        = true;
                 $data['fermentationCompleted'] = true;
             }
             elseif (count($tr) == 4 && is_numeric($tr[0]) && is_numeric($tr[1]) && is_numeric($tr[2])) {
                 $data['timeRemaining'] = [
-                    'days' => (int)$tr[0],
-                    'hours' => (int)$tr[1],
+                    'days'    => (int)$tr[0],
+                    'hours'   => (int)$tr[1],
                     'minutes' => (int)$tr[2],
-                    'status' => isset($statusMap[$tr[3]]) ? $statusMap[$tr[3]] : 
-                              (isset($messageMap[$tr[3]]) ? $messageMap[$tr[3]] : $tr[3]),
-                    'unit' => 'detailed'
+                    'status'  => isset($statusMap[$tr[3]]) ? $statusMap[$tr[3]] :
+                                 (isset($messageMap[$tr[3]]) ? $messageMap[$tr[3]] : $tr[3]),
+                    'unit'    => 'detailed'
                 ];
                 $data['targetReached'] = true;
             }
             elseif (count($tr) == 3) {
                 $data['timeRemaining'] = [
-                    'value' => $tr[0],
-                    'unit' => isset($unitMap[$tr[1]]) ? $unitMap[$tr[1]] : $tr[1],
-                    'status' => isset($statusMap[$tr[2]]) ? $statusMap[$tr[2]] : 
-                              (isset($messageMap[$tr[2]]) ? $messageMap[$tr[2]] : $tr[2])
+                    'value'  => $tr[0],
+                    'unit'   => isset($unitMap[$tr[1]]) ? $unitMap[$tr[1]] : $tr[1],
+                    'status' => isset($statusMap[$tr[2]]) ? $statusMap[$tr[2]] :
+                                (isset($messageMap[$tr[2]]) ? $messageMap[$tr[2]] : $tr[2])
                 ];
                 $data['targetReached'] = true;
             }
@@ -211,12 +211,12 @@ function decompressStateData(&$data) {
             unset($data['tr']);
         } elseif (is_string($data['tr']) && $data['tr'] === 'tc') {
             $data['timeRemaining'] = [
-                'value' => 0,
-                'unit' => 'completed',
-                'status' => 'completed',
+                'value'   => 0,
+                'unit'    => 'completed',
+                'status'  => 'completed',
                 'display' => 'Fermentação concluída'
             ];
-            $data['targetReached'] = true;
+            $data['targetReached']        = true;
             $data['fermentationCompleted'] = true;
             unset($data['tr']);
         }
@@ -337,20 +337,15 @@ function checkAlertsIfEnabled($pdo, $configId) {
 }
 
 /**
- * ✅ Dispara alerta de etapa concluída
+ * Dispara alerta de etapa concluída
  */
 function triggerStageCompletedAlert($pdo, $configId, $stageIndex, $stageName, $nextStageName = null) {
     global $alertSystemAvailable;
     
     error_log("[API] triggerStageCompletedAlert() chamado: available={$alertSystemAvailable}, configId={$configId}, stage={$stageIndex}");
     
-    if (!$alertSystemAvailable) {
-        error_log("[API] ❌ Sistema de alertas NÃO disponível!");
-        return;
-    }
-    
-    if (!$configId) {
-        error_log("[API] ❌ configId vazio!");
+    if (!$alertSystemAvailable || !$configId) {
+        error_log("[API] ❌ Sistema de alertas NÃO disponível ou configId vazio!");
         return;
     }
     
@@ -363,20 +358,15 @@ function triggerStageCompletedAlert($pdo, $configId, $stageIndex, $stageName, $n
 }
 
 /**
- * ✅ Dispara alerta de fermentação concluída
+ * Dispara alerta de fermentação concluída
  */
 function triggerFermentationCompletedAlert($pdo, $configId, $configName) {
     global $alertSystemAvailable;
     
     error_log("[API] triggerFermentationCompletedAlert() chamado: available={$alertSystemAvailable}, configId={$configId}");
     
-    if (!$alertSystemAvailable) {
-        error_log("[API] ❌ Sistema de alertas NÃO disponível!");
-        return;
-    }
-    
-    if (!$configId) {
-        error_log("[API] ❌ configId vazio!");
+    if (!$alertSystemAvailable || !$configId) {
+        error_log("[API] ❌ Sistema de alertas NÃO disponível ou configId vazio!");
         return;
     }
     
@@ -389,18 +379,14 @@ function triggerFermentationCompletedAlert($pdo, $configId, $configName) {
 }
 
 /**
- * ✅ Dispara alerta de gravidade atingida
+ * Dispara alerta de gravidade atingida
  */
 function triggerGravityReachedAlert($pdo, $configId, $currentGravity, $targetGravity) {
     global $alertSystemAvailable;
     
     error_log("[API] triggerGravityReachedAlert() chamado: available={$alertSystemAvailable}, configId={$configId}");
     
-    if (!$alertSystemAvailable) {
-        return;
-    }
-    
-    if (!$configId) {
+    if (!$alertSystemAvailable || !$configId) {
         return;
     }
     
@@ -414,13 +400,13 @@ function triggerGravityReachedAlert($pdo, $configId, $currentGravity, $targetGra
 // ==================== ROTEAMENTO ====================
 
 $method = $_SERVER['REQUEST_METHOD'];
-$path = isset($_GET['path']) ? $_GET['path'] : '';
-$input = json_decode(file_get_contents('php://input'), true);
+$path   = isset($_GET['path']) ? $_GET['path'] : '';
+$input  = json_decode(file_get_contents('php://input'), true);
 
 // ==================== AUTENTICAÇÃO ====================
 
 if ($path === 'auth/login' && $method === 'POST') {
-    $email = $input['email'] ?? '';
+    $email    = $input['email']    ?? '';
     $password = $input['password'] ?? '';
     
     if (empty($email) || empty($password)) {
@@ -432,7 +418,7 @@ if ($path === 'auth/login' && $method === 'POST') {
     $user = $stmt->fetch();
     
     if ($user && password_verify($password, $user['password_hash'])) {
-        $_SESSION['user_id'] = (int)$user['id'];
+        $_SESSION['user_id']    = (int)$user['id'];
         $_SESSION['user_email'] = $email;
         
         $stmt = $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
@@ -455,8 +441,8 @@ if ($path === 'auth/logout' && $method === 'POST') {
 if ($path === 'auth/check' && $method === 'GET') {
     if (isset($_SESSION['user_id']) && is_numeric($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
         sendResponse([
-            'authenticated' => true, 
-            'user_id' => (int)$_SESSION['user_id']
+            'authenticated' => true,
+            'user_id'       => (int)$_SESSION['user_id']
         ]);
     } else {
         sendResponse(['authenticated' => false]);
@@ -490,7 +476,7 @@ if ($path === 'configurations' && $method === 'GET') {
 if ($path === 'configurations' && $method === 'POST') {
     $userId = requireAuth();
     
-    $name = $input['name'] ?? '';
+    $name   = $input['name']   ?? '';
     $stages = $input['stages'] ?? [];
     
     if (empty($name) || empty($stages)) {
@@ -517,8 +503,8 @@ if ($path === 'configurations' && $method === 'POST') {
             
             $stmt = $pdo->prepare("
                 INSERT INTO stages (
-                    config_id, stage_index, type, target_temp, duration, 
-                    target_gravity, max_duration, start_temp, ramp_time, 
+                    config_id, stage_index, type, target_temp, duration,
+                    target_gravity, max_duration, start_temp, ramp_time,
                     actual_rate, direction, status
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
             ");
@@ -551,7 +537,7 @@ if ($path === 'configurations/status' && $method === 'PUT') {
     $userId = requireAuth();
     
     $configId = $input['config_id'] ?? null;
-    $status = $input['status'] ?? null;
+    $status   = $input['status']    ?? null;
     
     if (!$configId || !$status) {
         sendResponse(['error' => 'ID e status são obrigatórios'], 400);
@@ -560,81 +546,102 @@ if ($path === 'configurations/status' && $method === 'PUT') {
     $pdo->beginTransaction();
     
     try {
+        // Busca status atual antes de qualquer mudança
+        $stmt = $pdo->prepare("SELECT status, current_stage_index FROM configurations WHERE id = ? AND user_id = ?");
+        $stmt->execute([$configId, $userId]);
+        $current = $stmt->fetch();
+        
+        if (!$current) {
+            $pdo->rollBack();
+            sendResponse(['error' => 'Configuração não encontrada'], 404);
+        }
+        
+        $previousStatus     = $current['status'];
+        $currentStageIndex  = $current['current_stage_index'];
+        $isResumingFromPause = ($status === 'active' && $previousStatus === 'paused');
+        
         $updateData = ['status' => $status];
         
         if ($status === 'active') {
-            $updateData['started_at'] = date('Y-m-d H:i:s');
-            $updateData['paused_at'] = null;
+            $updateData['paused_at']    = null;
             $updateData['completed_at'] = null;
-            $updateData['current_stage_index'] = 0;
             
-            // Resetar etapas
-            $stmt = $pdo->prepare("
-                UPDATE stages 
-                SET status = 'pending',
-                    start_time = NULL,
-                    end_time = NULL,
-                    target_reached_time = NULL
-                WHERE config_id = ?
-            ");
-            $stmt->execute([$configId]);
-            
-            // Ativar primeira etapa
-            $stmt = $pdo->prepare("
-                UPDATE stages 
-                SET status = 'running', start_time = NOW() 
-                WHERE config_id = ? AND stage_index = 0
-            ");
-            $stmt->execute([$configId]);
-            
-            // Incrementar contador de uso
-            $stmt = $pdo->prepare("UPDATE configurations SET times_used = times_used + 1 WHERE id = ?");
-            $stmt->execute([$configId]);
-            
-            // Limpar dados antigos (começar do zero)
-            $stmt = $pdo->prepare("DELETE FROM readings WHERE config_id = ?");
-            $stmt->execute([$configId]);
-            
-            $stmt = $pdo->prepare("DELETE FROM ispindel_readings WHERE config_id = ?");
-            $stmt->execute([$configId]);
-            
-            $stmt = $pdo->prepare("DELETE FROM controller_states WHERE config_id = ?");
-            $stmt->execute([$configId]);
-            
-            $stmt = $pdo->prepare("DELETE FROM fermentation_states WHERE config_id = ?");
-            $stmt->execute([$configId]);
-            
-            $stmt = $pdo->prepare("DELETE FROM esp_heartbeat WHERE config_id = ?");
-            $stmt->execute([$configId]);
-            
-            // Limpar alertas antigos também
-            $stmt = $pdo->prepare("DELETE FROM alerts WHERE config_id = ?");
-            $stmt->execute([$configId]);
+            if ($isResumingFromPause) {
+                // =====================================================
+                // RETOMADA DE PAUSA — preserva etapa e histórico
+                // =====================================================
+                error_log("[API] Retomando fermentação pausada: config_id={$configId}, stage={$currentStageIndex}");
+                
+                // Apenas reativa a etapa atual no servidor
+                $stmt = $pdo->prepare("
+                    UPDATE stages
+                    SET status = 'running', start_time = COALESCE(start_time, NOW())
+                    WHERE config_id = ? AND stage_index = ?
+                ");
+                $stmt->execute([$configId, $currentStageIndex]);
+                
+            } else {
+                // =====================================================
+                // INÍCIO NOVO — zera tudo
+                // =====================================================
+                error_log("[API] Iniciando nova fermentação: config_id={$configId}");
+                
+                $updateData['started_at']          = date('Y-m-d H:i:s');
+                $updateData['current_stage_index'] = 0;
+                
+                $stmt = $pdo->prepare("
+                    UPDATE stages
+                    SET status = 'pending', start_time = NULL, end_time = NULL, target_reached_time = NULL
+                    WHERE config_id = ?
+                ");
+                $stmt->execute([$configId]);
+                
+                $stmt = $pdo->prepare("
+                    UPDATE stages
+                    SET status = 'running', start_time = NOW()
+                    WHERE config_id = ? AND stage_index = 0
+                ");
+                $stmt->execute([$configId]);
+                
+                $stmt = $pdo->prepare("UPDATE configurations SET times_used = times_used + 1 WHERE id = ?");
+                $stmt->execute([$configId]);
+                
+                foreach (['readings', 'ispindel_readings', 'controller_states', 'fermentation_states', 'esp_heartbeat', 'alerts'] as $table) {
+                    $stmt = $pdo->prepare("DELETE FROM {$table} WHERE config_id = ?");
+                    $stmt->execute([$configId]);
+                }
+            }
             
         } elseif ($status === 'paused') {
             $updateData['paused_at'] = date('Y-m-d H:i:s');
+            
         } elseif ($status === 'completed') {
             $updateData['completed_at'] = date('Y-m-d H:i:s');
         }
         
         $setClauses = [];
-        $values = [];
+        $values     = [];
         foreach ($updateData as $key => $value) {
             $setClauses[] = "$key = ?";
-            $values[] = $value;
+            $values[]     = $value;
         }
         $values[] = $configId;
         $values[] = $userId;
         
         $stmt = $pdo->prepare("
-            UPDATE configurations 
+            UPDATE configurations
             SET " . implode(', ', $setClauses) . "
             WHERE id = ? AND user_id = ?
         ");
         $stmt->execute($values);
         
         $pdo->commit();
-        sendResponse(['success' => true]);
+        
+        sendResponse([
+            'success'   => true,
+            'resumed'   => $isResumingFromPause,
+            'new_start' => !$isResumingFromPause && $status === 'active'
+        ]);
         
     } catch (Exception $e) {
         $pdo->rollBack();
@@ -643,7 +650,7 @@ if ($path === 'configurations/status' && $method === 'PUT') {
 }
 
 if ($path === 'configurations/delete' && $method === 'DELETE') {
-    $userId = requireAuth();
+    $userId   = requireAuth();
     $configId = $input['config_id'] ?? null;
     
     if (!$configId) {
@@ -676,7 +683,7 @@ if ($path === 'active' && $method === 'GET') {
     $stmt = $pdo->prepare("
         SELECT c.id, c.name, c.current_stage_index, c.status
         FROM configurations c
-        WHERE c.user_id = ? AND c.status = 'active'
+        WHERE c.user_id = ? AND c.status IN ('active', 'paused')
         ORDER BY c.started_at DESC
         LIMIT 1
     ");
@@ -685,18 +692,19 @@ if ($path === 'active' && $method === 'GET') {
     
     if ($active) {
         sendResponse([
-            'active' => true,
-            'id' => $active['id'],
-            'name' => $active['name'],
-            'currentStageIndex' => $active['current_stage_index']
+            'active'            => true,
+            'paused'            => $active['status'] === 'paused',
+            'id'                => $active['id'],
+            'name'              => $active['name'],
+            'currentStageIndex' => $active['current_stage_index'],
         ]);
     } else {
-        sendResponse(['active' => false, 'id' => null]);
+        sendResponse(['active' => false, 'paused' => false, 'id' => null]);
     }
 }
 
 if ($path === 'active/activate' && $method === 'POST') {
-    $userId = requireAuth();
+    $userId   = requireAuth();
     $configId = $input['config_id'] ?? null;
     
     if (!$configId) {
@@ -742,15 +750,15 @@ if ($path === 'latest-readings' && $method === 'GET') {
     
     if ($ispindel && isset($ispindel['reading_timestamp'])) {
         $lastReading = new DateTime($ispindel['reading_timestamp']);
-        $now = new DateTime();
+        $now         = new DateTime();
         $diffSeconds = $now->getTimestamp() - $lastReading->getTimestamp();
-        $ispindel['is_stale'] = $diffSeconds > 3600;
+        $ispindel['is_stale']            = $diffSeconds > 3600;
         $ispindel['seconds_since_update'] = $diffSeconds;
     }
     
     sendResponse([
-        'reading' => $reading ?: null,
-        'ispindel' => $ispindel ?: null,
+        'reading'   => $reading  ?: null,
+        'ispindel'  => $ispindel ?: null,
         'timestamp' => date('Y-m-d H:i:s')
     ]);
 }
@@ -765,7 +773,6 @@ if ($path === 'state/complete' && $method === 'GET') {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
     
-    // Busca configuração
     $stmt = $pdo->prepare("SELECT * FROM configurations WHERE id = ?");
     $stmt->execute([$configId]);
     $config = $stmt->fetch();
@@ -774,12 +781,10 @@ if ($path === 'state/complete' && $method === 'GET') {
         sendResponse(['error' => 'Configuração não encontrada'], 404);
     }
     
-    // Busca etapas
     $stmt = $pdo->prepare("SELECT * FROM stages WHERE config_id = ? ORDER BY stage_index");
     $stmt->execute([$configId]);
     $stages = $stmt->fetchAll();
     
-    // Busca estado da fermentação
     $stmt = $pdo->prepare("
         SELECT * FROM fermentation_states 
         WHERE config_id = ?
@@ -794,7 +799,6 @@ if ($path === 'state/complete' && $method === 'GET') {
         $stateData = json_decode($state['state_data'], true) ?? [];
     }
     
-    // Busca leituras recentes (últimas 24h)
     $stmt = $pdo->prepare("
         SELECT id, config_id, temp_fridge, temp_fermenter, temp_target, reading_timestamp
         FROM readings 
@@ -805,7 +809,6 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $readings = $stmt->fetchAll();
     
-    // Busca última leitura do iSpindel
     $stmt = $pdo->prepare("
         SELECT * FROM ispindel_readings 
         WHERE config_id = ?
@@ -817,13 +820,12 @@ if ($path === 'state/complete' && $method === 'GET') {
     
     if ($ispindel && isset($ispindel['reading_timestamp'])) {
         $lastReading = new DateTime($ispindel['reading_timestamp']);
-        $now = new DateTime();
+        $now         = new DateTime();
         $diffSeconds = $now->getTimestamp() - $lastReading->getTimestamp();
-        $ispindel['is_stale'] = $diffSeconds > 3600;
+        $ispindel['is_stale']            = $diffSeconds > 3600;
         $ispindel['seconds_since_update'] = $diffSeconds;
     }
     
-    // Busca leituras do iSpindel das últimas 24h
     $stmt = $pdo->prepare("
         SELECT id, config_id, temperature, gravity, battery, reading_timestamp
         FROM ispindel_readings 
@@ -834,7 +836,6 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $ispindelReadings = $stmt->fetchAll();
     
-    // Busca histórico de estados do controlador
     $stmt = $pdo->prepare("
         SELECT * FROM controller_states 
         WHERE config_id = ?
@@ -844,7 +845,6 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $controllerHistory = $stmt->fetchAll();
     
-    // Busca estado atual do controlador
     $stmt = $pdo->prepare("
         SELECT * FROM controller_states 
         WHERE config_id = ?
@@ -854,9 +854,8 @@ if ($path === 'state/complete' && $method === 'GET') {
     $stmt->execute([$configId]);
     $controller = $stmt->fetch();
     
-    // Busca último heartbeat
     $heartbeat = null;
-    $isOnline = false;
+    $isOnline  = false;
     try {
         $stmt = $pdo->prepare("
             SELECT * FROM esp_heartbeat
@@ -869,8 +868,8 @@ if ($path === 'state/complete' && $method === 'GET') {
         
         if ($heartbeat) {
             $lastSeen = new DateTime($heartbeat['heartbeat_timestamp']);
-            $now = new DateTime();
-            $diff = $now->getTimestamp() - $lastSeen->getTimestamp();
+            $now      = new DateTime();
+            $diff     = $now->getTimestamp() - $lastSeen->getTimestamp();
             $isOnline = $diff < 120;
             
             if (isset($heartbeat['control_status']) && is_string($heartbeat['control_status'])) {
@@ -881,7 +880,6 @@ if ($path === 'state/complete' && $method === 'GET') {
         error_log("Error fetching heartbeat: " . $e->getMessage());
     }
     
-    // Busca alertas não lidos
     $unreadAlerts = 0;
     try {
         $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM alerts WHERE config_id = ? AND is_read = 0");
@@ -892,35 +890,33 @@ if ($path === 'state/complete' && $method === 'GET') {
     }
     
     sendResponse([
-        'config' => array_merge($config, ['stages' => $stages]),
-        'state' => $stateData,
-        'readings' => $readings,
-        'ispindel' => $ispindel ?: null,
-        'ispindel_readings' => $ispindelReadings ?: [],
-        'controller' => $controller ?: null,
+        'config'             => array_merge($config, ['stages' => $stages]),
+        'state'              => $stateData,
+        'readings'           => $readings,
+        'ispindel'           => $ispindel          ?: null,
+        'ispindel_readings'  => $ispindelReadings  ?: [],
+        'controller'         => $controller        ?: null,
         'controller_history' => $controllerHistory ?: [],
-        'heartbeat' => $heartbeat ?: null,
-        'is_online' => $isOnline,
-        'unread_alerts' => $unreadAlerts,
-        'timestamp' => date('Y-m-d H:i:s')
+        'heartbeat'          => $heartbeat         ?: null,
+        'is_online'          => $isOnline,
+        'unread_alerts'      => $unreadAlerts,
+        'timestamp'          => date('Y-m-d H:i:s')
     ]);
 }
 
 // ==================== LEITURAS ====================
+
 if ($path === 'readings' && $method === 'POST') {
-    // Aceita tanto formato comprimido quanto expandido
-    $configId = $input['config_id'] ?? $input['cid'] ?? null;
-    $tempFridge = $input['temp_fridge'] ?? $input['tf'] ?? null;
+    $configId     = $input['config_id'] ?? $input['cid'] ?? null;
+    $tempFridge    = $input['temp_fridge']    ?? $input['tf'] ?? null;
     $tempFermenter = $input['temp_fermenter'] ?? $input['tb'] ?? null;
-    $tempTarget = $input['temp_target'] ?? $input['tt'] ?? null;
+    $tempTarget    = $input['temp_target']    ?? $input['tt'] ?? null;
     
-    // Validação básica
     if ($tempFridge === null || $tempFermenter === null || $tempTarget === null) {
         sendResponse(['error' => 'Dados incompletos: temperaturas obrigatórias'], 400);
     }
     
     try {
-        // Se não tem config_id, busca fermentação ativa
         if (!$configId) {
             $stmt = $pdo->prepare("
                 SELECT id FROM configurations 
@@ -934,39 +930,30 @@ if ($path === 'readings' && $method === 'POST') {
             if ($activeConfig) {
                 $configId = $activeConfig['id'];
             } else {
-                // Sem fermentação ativa - AINDA ASSIM salva a leitura (config_id = null)
                 error_log("[API] Salvando leitura sem fermentação ativa");
             }
         }
         
-        // ✅ INSERT DA LEITURA
         $stmt = $pdo->prepare("
             INSERT INTO readings (config_id, temp_fridge, temp_fermenter, temp_target)
             VALUES (?, ?, ?, ?)
         ");
-        
         $stmt->execute([$configId, $tempFridge, $tempFermenter, $tempTarget]);
         $readingId = $pdo->lastInsertId();
         
-        // Limpeza automática se tiver config_id
         if ($configId) {
             DatabaseCleanup::cleanupTable($pdo, 'readings', $configId);
         }
         
-        // Log de sucesso
         error_log(sprintf(
             "[API] ✅ Leitura salva: ID=%d, Config=%s, Ferm=%.1f, Fridge=%.1f, Target=%.1f",
-            $readingId,
-            $configId ?? 'null',
-            $tempFermenter,
-            $tempFridge,
-            $tempTarget
+            $readingId, $configId ?? 'null', $tempFermenter, $tempFridge, $tempTarget
         ));
         
         sendResponse([
-            'success' => true, 
+            'success'   => true,
             'reading_id' => $readingId,
-            'config_id' => $configId
+            'config_id'  => $configId
         ], 201);
         
     } catch (Exception $e) {
@@ -978,11 +965,11 @@ if ($path === 'readings' && $method === 'POST') {
 // ==================== ISPINDEL ====================
 
 if ($path === 'ispindel/data' && $method === 'POST') {
-    $name = $input['name'] ?? 'iSpindel';
-    $temperature = $input['temperature'] ?? null;
-    $gravity = $input['gravity'] ?? null;
-    $battery = $input['battery'] ?? null;
-    $configIdFromEsp = $input['config_id'] ?? null;
+    $name            = $input['name']        ?? 'iSpindel';
+    $temperature     = $input['temperature'] ?? null;
+    $gravity         = $input['gravity']     ?? null;
+    $battery         = $input['battery']     ?? null;
+    $configIdFromEsp = $input['config_id']   ?? null;
     
     if ($temperature === null || $gravity === null) {
         sendResponse(['error' => 'temperature and gravity are required'], 400);
@@ -995,18 +982,13 @@ if ($path === 'ispindel/data' && $method === 'POST') {
             $stmt = $pdo->prepare("SELECT id FROM configurations WHERE id = ? AND status = 'active'");
             $stmt->execute([$configIdFromEsp]);
             $validConfig = $stmt->fetch();
-            
             if ($validConfig) {
                 $configId = $configIdFromEsp;
             }
         }
         
         if (!$configId) {
-            $stmt = $pdo->prepare("
-                SELECT c.id FROM configurations c
-                WHERE c.status = 'active'
-                LIMIT 1
-            ");
+            $stmt = $pdo->prepare("SELECT c.id FROM configurations c WHERE c.status = 'active' LIMIT 1");
             $stmt->execute();
             $activeConfig = $stmt->fetch();
             $configId = $activeConfig ? $activeConfig['id'] : null;
@@ -1023,8 +1005,8 @@ if ($path === 'ispindel/data' && $method === 'POST') {
         }
         
         sendResponse([
-            'success' => true, 
-            'message' => 'iSpindel data saved',
+            'success'   => true,
+            'message'   => 'iSpindel data saved',
             'config_id' => $configId
         ], 201);
         
@@ -1037,9 +1019,9 @@ if ($path === 'ispindel/data' && $method === 'POST') {
 
 if ($path === 'control' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
-    $setpoint = $input['setpoint'] ?? null;
-    $cooling = $input['cooling'] ?? false;
-    $heating = $input['heating'] ?? false;
+    $setpoint = $input['setpoint']  ?? null;
+    $cooling  = $input['cooling']   ?? false;
+    $heating  = $input['heating']   ?? false;
     
     if (!$configId || $setpoint === null) {
         sendResponse(['error' => 'Dados incompletos'], 400);
@@ -1065,16 +1047,14 @@ if ($path === 'fermentation-state' && $method === 'POST') {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
     
-    // ✅ DESCOMPRIME PRIMEIRO
     decompressStateData($input);
     
-    // ✅ DEPOIS captura os valores (com fallback para nomes comprimidos)
     $stageStartEpoch = null;
     if (isset($input['stageStartEpoch'])) {
         $stageStartEpoch = (int)$input['stageStartEpoch'];
     } elseif (isset($input['stageStart'])) {
         $stageStartEpoch = (int)$input['stageStart'];
-    } elseif (isset($input['sst'])) {  // nome comprimido possível
+    } elseif (isset($input['sst'])) {
         $stageStartEpoch = (int)$input['sst'];
     }
     
@@ -1082,16 +1062,14 @@ if ($path === 'fermentation-state' && $method === 'POST') {
     if (isset($input['targetReached'])) {
         $targetReached = $input['targetReached'] ? 1 : 0;
     } elseif (isset($input['tr'])) {
-        // tr pode ser array [dias, horas, min, status] ou boolean
         if (is_bool($input['tr'])) {
             $targetReached = $input['tr'] ? 1 : 0;
         } elseif (is_array($input['tr'])) {
-            $targetReached = 1;  // Se tem array de timeRemaining, alvo foi atingido
+            $targetReached = 1;
         }
     }
     
-    // Log para debug
-    error_log("Salvando estado - stageStartEpoch: " . ($stageStartEpoch ?? 'NULL') . 
+    error_log("Salvando estado - stageStartEpoch: " . ($stageStartEpoch ?? 'NULL') .
               ", targetReached: " . ($targetReached ?? 'NULL'));
     
     $stmt = $pdo->prepare("
@@ -1103,7 +1081,7 @@ if ($path === 'fermentation-state' && $method === 'POST') {
         ) VALUES (?, ?, ?, ?)
     ");
     $stmt->execute([
-        $configId, 
+        $configId,
         json_encode($input),
         $stageStartEpoch,
         $targetReached
@@ -1117,12 +1095,12 @@ if ($path === 'fermentation-state' && $method === 'POST') {
 // ==================== HEARTBEAT ====================
 
 if ($path === 'heartbeat' && $method === 'POST') {
-    $configId = $input['config_id'] ?? $input['cid'] ?? null;
-    $uptime = $input['uptime'] ?? $input['uptime_seconds'] ?? null;
-    $freeHeap = $input['free_heap'] ?? null;
+    $configId      = $input['config_id']  ?? $input['cid'] ?? null;
+    $uptime        = $input['uptime']     ?? $input['uptime_seconds'] ?? null;
+    $freeHeap      = $input['free_heap']  ?? null;
     $controlStatus = $input['control_status'] ?? null;
     $tempFermenter = $input['temp_fermenter'] ?? null;
-    $tempFridge = $input['temp_fridge'] ?? null;
+    $tempFridge    = $input['temp_fridge']    ?? null;
     
     if (!$configId) {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
@@ -1145,8 +1123,8 @@ if ($path === 'heartbeat' && $method === 'POST') {
             VALUES (?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
-            $configId, 
-            $uptime, 
+            $configId,
+            $uptime,
             $freeHeap,
             $tempFermenter,
             $tempFridge,
@@ -1155,12 +1133,10 @@ if ($path === 'heartbeat' && $method === 'POST') {
         
         DatabaseCleanup::cleanupTable($pdo, 'esp_heartbeat', $configId);
         
-        // Limpeza ocasional de órfãos (5% de chance)
         if (rand(1, 20) === 1) {
             DatabaseCleanup::cleanupOrphans($pdo);
         }
         
-        // ✅ Verificar alertas após heartbeat
         checkAlertsIfEnabled($pdo, $configId);
         
         sendResponse(['success' => true], 201);
@@ -1170,10 +1146,39 @@ if ($path === 'heartbeat' && $method === 'POST') {
     }
 }
 
+// ==================== COMANDOS ESP ====================
+
+if ($path === 'commands' && $method === 'POST') {
+    requireAuth();
+
+    $command = $input['command'] ?? '';
+
+    $allowed = ['ADVANCE_STAGE', 'CLEAR_EEPROM'];
+    if (!in_array($command, $allowed)) {
+        sendResponse(['error' => 'Comando inválido'], 400);
+    }
+
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO esp_commands (command, status, created_at)
+            VALUES (?, 'pending', NOW())
+        ");
+        $stmt->execute([$command]);
+
+        error_log("[API] ✅ Comando inserido: {$command}");
+
+        sendResponse(['success' => true, 'command' => $command], 201);
+
+    } catch (Exception $e) {
+        error_log("[API] ❌ Erro ao inserir comando: " . $e->getMessage());
+        sendResponse(['error' => 'Erro ao inserir comando: ' . $e->getMessage()], 500);
+    }
+}
+
 // ==================== NOTIFICAÇÃO DE ETAPA (do ESP) ====================
 
 if ($path === 'stage/advance' && $method === 'POST') {
-    $configId = $input['config_id'] ?? null;
+    $configId      = $input['config_id']   ?? null;
     $newStageIndex = $input['stage_index'] ?? $input['currentStageIndex'] ?? null;
     
     if (!$configId || $newStageIndex === null) {
@@ -1188,7 +1193,6 @@ if ($path === 'stage/advance' && $method === 'POST') {
     $pdo->beginTransaction();
     
     try {
-        // Buscar informações da configuração e etapas
         $stmt = $pdo->prepare("SELECT name, current_stage_index FROM configurations WHERE id = ?");
         $stmt->execute([$configId]);
         $config = $stmt->fetch();
@@ -1198,14 +1202,12 @@ if ($path === 'stage/advance' && $method === 'POST') {
         }
         
         $previousIndex = $config['current_stage_index'];
-        $configName = $config['name'];
+        $configName    = $config['name'];
         
-        // Buscar total de etapas
         $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM stages WHERE config_id = ?");
         $stmt->execute([$configId]);
         $totalStages = $stmt->fetch()['total'];
         
-        // Marcar etapa anterior como concluída
         $stmt = $pdo->prepare("
             UPDATE stages 
             SET status = 'completed', end_time = NOW() 
@@ -1213,28 +1215,24 @@ if ($path === 'stage/advance' && $method === 'POST') {
         ");
         $stmt->execute([$configId, $previousIndex]);
         
-        // Buscar nome da etapa concluída
         $stmt = $pdo->prepare("SELECT type, target_temp FROM stages WHERE config_id = ? AND stage_index = ?");
         $stmt->execute([$configId, $previousIndex]);
-        $completedStage = $stmt->fetch();
+        $completedStage     = $stmt->fetch();
         $completedStageName = "Etapa " . ($previousIndex + 1) . " (" . ($completedStage['type'] ?? 'unknown') . ")";
         
-        // Registrar no action_history
         $stmt = $pdo->prepare("
             INSERT INTO action_history (config_id, action_type, action_details)
             VALUES (?, 'stage_advanced', ?)
         ");
         $stmt->execute([$configId, json_encode([
-            'previous_stage' => $previousIndex,
-            'new_stage' => $newStageIndex,
+            'previous_stage'  => $previousIndex,
+            'new_stage'       => $newStageIndex,
             'new_target_temp' => null,
-            'timestamp' => date('Y-m-d H:i:s'),
-            'source' => 'esp8266'
+            'timestamp'       => date('Y-m-d H:i:s'),
+            'source'          => 'esp8266'
         ])]);
         
-        // Verificar se é a última etapa
         if ($newStageIndex >= $totalStages) {
-            // Fermentação concluída
             $stmt = $pdo->prepare("
                 UPDATE configurations 
                 SET status = 'completed', completed_at = NOW() 
@@ -1244,17 +1242,15 @@ if ($path === 'stage/advance' && $method === 'POST') {
             
             $pdo->commit();
             
-            // ✅ Disparar alerta de fermentação concluída (APÓS commit)
             error_log("[API] Fermentação concluída! Disparando alerta...");
             triggerFermentationCompletedAlert($pdo, $configId, $configName);
             
             sendResponse([
-                'success' => true,
+                'success'                => true,
                 'fermentation_completed' => true,
-                'message' => 'Fermentação concluída!'
+                'message'                => 'Fermentação concluída!'
             ]);
         } else {
-            // Ativar nova etapa
             $stmt = $pdo->prepare("
                 UPDATE stages 
                 SET status = 'running', start_time = NOW() 
@@ -1262,7 +1258,6 @@ if ($path === 'stage/advance' && $method === 'POST') {
             ");
             $stmt->execute([$configId, $newStageIndex]);
             
-            // Atualizar índice na configuração
             $stmt = $pdo->prepare("
                 UPDATE configurations 
                 SET current_stage_index = ? 
@@ -1270,20 +1265,17 @@ if ($path === 'stage/advance' && $method === 'POST') {
             ");
             $stmt->execute([$newStageIndex, $configId]);
             
-            // Buscar nova temperatura alvo
             $stmt = $pdo->prepare("SELECT type, target_temp FROM stages WHERE config_id = ? AND stage_index = ?");
             $stmt->execute([$configId, $newStageIndex]);
-            $newStage = $stmt->fetch();
-            $newStageName = "Etapa " . ($newStageIndex + 1) . " (" . ($newStage['type'] ?? 'unknown') . ")";
+            $newStage      = $stmt->fetch();
+            $newStageName  = "Etapa " . ($newStageIndex + 1) . " (" . ($newStage['type'] ?? 'unknown') . ")";
             $newTargetTemp = $newStage['target_temp'] ?? null;
             
-            // Atualizar temperatura alvo na configuração
             if ($newTargetTemp !== null) {
                 $stmt = $pdo->prepare("UPDATE configurations SET current_target_temp = ? WHERE id = ?");
                 $stmt->execute([$newTargetTemp, $configId]);
             }
             
-            // Atualizar action_history com target_temp
             $stmt = $pdo->prepare("
                 UPDATE action_history 
                 SET action_details = ? 
@@ -1291,24 +1283,23 @@ if ($path === 'stage/advance' && $method === 'POST') {
                 ORDER BY action_timestamp DESC LIMIT 1
             ");
             $stmt->execute([json_encode([
-                'previous_stage' => $previousIndex,
-                'new_stage' => $newStageIndex,
+                'previous_stage'  => $previousIndex,
+                'new_stage'       => $newStageIndex,
                 'new_target_temp' => $newTargetTemp,
-                'timestamp' => date('Y-m-d H:i:s'),
-                'source' => 'esp8266'
+                'timestamp'       => date('Y-m-d H:i:s'),
+                'source'          => 'esp8266'
             ]), $configId]);
             
             $pdo->commit();
             
-            // ✅ Disparar alerta de etapa concluída (APÓS commit)
             error_log("[API] Etapa avançou: {$completedStageName} -> {$newStageName}. Disparando alerta...");
             triggerStageCompletedAlert($pdo, $configId, $previousIndex, $completedStageName, $newStageName);
             
             sendResponse([
-                'success' => true,
+                'success'              => true,
                 'previous_stage_index' => $previousIndex,
-                'current_stage_index' => $newStageIndex,
-                'new_target_temp' => $newTargetTemp
+                'current_stage_index'  => $newStageIndex,
+                'new_target_temp'      => $newTargetTemp
             ]);
         }
         
@@ -1322,18 +1313,17 @@ if ($path === 'stage/advance' && $method === 'POST') {
 // ==================== NOTIFICAÇÃO DE ALVO ATINGIDO (do ESP) ====================
 
 if ($path === 'target/reached' && $method === 'POST') {
-    $configId = $input['config_id'] ?? null;
-    $stageIndex = $input['stage_index'] ?? null;
-    $targetType = $input['target_type'] ?? 'temperature';
+    $configId     = $input['config_id']    ?? null;
+    $stageIndex   = $input['stage_index']  ?? null;
+    $targetType   = $input['target_type']  ?? 'temperature';
     $currentValue = $input['current_value'] ?? null;
-    $targetValue = $input['target_value'] ?? null;
+    $targetValue  = $input['target_value']  ?? null;
     
     if (!$configId) {
         sendResponse(['error' => 'config_id é obrigatório'], 400);
     }
     
     try {
-        // Atualizar target_reached_time na etapa
         $stmt = $pdo->prepare("
             UPDATE stages 
             SET target_reached_time = NOW() 
@@ -1341,19 +1331,17 @@ if ($path === 'target/reached' && $method === 'POST') {
         ");
         $stmt->execute([$configId, $stageIndex ?? 0]);
         
-        // Registrar no action_history
         $stmt = $pdo->prepare("
             INSERT INTO action_history (config_id, action_type, action_details)
             VALUES (?, 'target_reached', ?)
         ");
         $stmt->execute([$configId, json_encode([
-            'target_type' => $targetType,
+            'target_type'   => $targetType,
             'current_value' => $currentValue,
-            'target_value' => $targetValue,
-            'stage_index' => $stageIndex
+            'target_value'  => $targetValue,
+            'stage_index'   => $stageIndex
         ])]);
         
-        // ✅ Se for gravidade, disparar alerta específico
         if ($targetType === 'gravity' && $currentValue !== null && $targetValue !== null) {
             triggerGravityReachedAlert($pdo, $configId, $currentValue, $targetValue);
         }
@@ -1365,18 +1353,18 @@ if ($path === 'target/reached' && $method === 'POST') {
     }
 }
 
-// ==================== ALERTAS (API SIMPLIFICADA) ====================
+// ==================== ALERTAS ====================
 
 if ($path === 'alerts' && $method === 'GET') {
     requireAuth();
     $configId = $_GET['config_id'] ?? null;
     
     try {
-        $sql = "SELECT * FROM alerts WHERE is_read = 0";
+        $sql    = "SELECT * FROM alerts WHERE is_read = 0";
         $params = [];
         
         if ($configId) {
-            $sql .= " AND config_id = ?";
+            $sql     .= " AND config_id = ?";
             $params[] = $configId;
         }
         
@@ -1388,8 +1376,8 @@ if ($path === 'alerts' && $method === 'GET') {
         
         sendResponse([
             'success' => true,
-            'count' => count($alerts),
-            'alerts' => $alerts
+            'count'   => count($alerts),
+            'alerts'  => $alerts
         ]);
     } catch (Exception $e) {
         sendResponse(['error' => $e->getMessage()], 500);
@@ -1418,11 +1406,11 @@ if ($path === 'alerts/read-all' && $method === 'POST') {
     $configId = $input['config_id'] ?? null;
     
     try {
-        $sql = "UPDATE alerts SET is_read = 1 WHERE is_read = 0";
+        $sql    = "UPDATE alerts SET is_read = 1 WHERE is_read = 0";
         $params = [];
         
         if ($configId) {
-            $sql .= " AND config_id = ?";
+            $sql     .= " AND config_id = ?";
             $params[] = $configId;
         }
         
@@ -1447,18 +1435,16 @@ if ($path === 'cleanup' && $method === 'POST') {
         $cleaned = 0;
         foreach ($configs as $config) {
             $configId = $config['id'];
-            
             DatabaseCleanup::cleanupTable($pdo, 'readings', $configId);
             DatabaseCleanup::cleanupTable($pdo, 'controller_states', $configId);
             DatabaseCleanup::cleanupTable($pdo, 'fermentation_states', $configId);
             DatabaseCleanup::cleanupTable($pdo, 'esp_heartbeat', $configId);
             DatabaseCleanup::cleanupTable($pdo, 'ispindel_readings', $configId);
-            
             $cleaned++;
         }
         
         sendResponse([
-            'success' => true, 
+            'success' => true,
             'message' => "Limpeza executada em {$cleaned} configurações"
         ]);
         
@@ -1485,24 +1471,53 @@ if ($path === 'emergency-cleanup' && $method === 'POST') {
         
         foreach ($configs as $configId) {
             $results["config_{$configId}"] = [
-                'readings' => DatabaseCleanup::aggressiveCleanup($pdo, 'readings', $configId, 200),
-                'controller_states' => DatabaseCleanup::aggressiveCleanup($pdo, 'controller_states', $configId, 200),
-                'esp_heartbeat' => DatabaseCleanup::aggressiveCleanup($pdo, 'esp_heartbeat', $configId, 50),
+                'readings'            => DatabaseCleanup::aggressiveCleanup($pdo, 'readings', $configId, 200),
+                'controller_states'   => DatabaseCleanup::aggressiveCleanup($pdo, 'controller_states', $configId, 200),
+                'esp_heartbeat'       => DatabaseCleanup::aggressiveCleanup($pdo, 'esp_heartbeat', $configId, 50),
                 'fermentation_states' => DatabaseCleanup::aggressiveCleanup($pdo, 'fermentation_states', $configId, 100),
-                'ispindel_readings' => DatabaseCleanup::aggressiveCleanup($pdo, 'ispindel_readings', $configId, 500)
+                'ispindel_readings'   => DatabaseCleanup::aggressiveCleanup($pdo, 'ispindel_readings', $configId, 500)
             ];
         }
         
         $results['orphans_cleaned'] = DatabaseCleanup::cleanupOrphans($pdo);
         
         sendResponse([
-            'success' => true,
-            'results' => $results,
+            'success'   => true,
+            'results'   => $results,
             'timestamp' => date('Y-m-d H:i:s')
         ]);
         
     } catch (Exception $e) {
         sendResponse(['error' => 'Erro na limpeza emergencial: ' . $e->getMessage()], 500);
+    }
+}
+
+if ($path === 'commands/pending' && $method === 'GET') {
+    $configId = $_GET['config_id'] ?? null;
+    if (!$configId) sendResponse(['command' => null]);
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT id, command FROM esp_commands
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT 1
+        ");
+        $stmt->execute();
+        $cmd = $stmt->fetch();
+
+        if ($cmd) {
+            $pdo->prepare("
+                UPDATE esp_commands 
+                SET status = 'executed', executed_at = NOW() 
+                WHERE id = ?
+            ")->execute([$cmd['id']]);
+            sendResponse(['command' => $cmd['command']]);
+        } else {
+            sendResponse(['command' => null]);
+        }
+    } catch (Exception $e) {
+        sendResponse(['command' => null]);
     }
 }
 

@@ -211,6 +211,23 @@ bool FermentadorHTTPClient::updateStageIndex(const char* configId, int newStageI
     return result;
 }
 
+String FermentadorHTTPClient::getPendingCommand(int configId) {
+    String endpoint = "api.php?path=commands/pending&config_id=" + String(configId);
+    String response;
+    
+    yield();
+    if (!makeRequest(endpoint, "GET", nullptr, response)) {
+        return "";
+    }
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, response);
+    if (error) return "";
+    
+    const char* cmd = doc["command"] | "";
+    return String(cmd);
+}
+
 bool FermentadorHTTPClient::sendSensorError(const char* configId, float tempTarget) {
     JsonDocument doc;
     if (configId && strlen(configId) > 0) {
@@ -405,4 +422,3 @@ bool FermentadorHTTPClient::sendSensorsData(const JsonDocument& sensorsDoc) {
     return makeRequest("api/esp/sensors.php?action=save_detected", 
                       "POST", &sensorsDoc, response);
 }
-

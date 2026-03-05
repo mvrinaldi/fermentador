@@ -501,14 +501,14 @@ void loop() {
     
     if (now - lastTemperatureControl >= 5000) {
         lastTemperatureControl = now;
-        
-        if (fermentacaoState.active) {
+
+        // ← MODIFICADO: roda controle também quando pausado
+        if (fermentacaoState.active || fermentacaoState.paused) {
             brewPiControl.update();
-            
             state.currentTemp = tempToFloat(brewPiControl.getBeerTemp());
             state.targetTemp = fermentacaoState.tempTarget;
         }
-        
+
         if (isHTTPOnline()) {
             verificarTargetAtingido();
             enviarEstadoCompletoMySQL();
