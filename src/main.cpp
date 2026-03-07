@@ -40,6 +40,7 @@
 #include "network_manager.h"
 #include "preferences_utils.h"
 #include "http_commands.h"
+#include <LittleFS.h>
 
 ESP8266WebServer server(80);
 
@@ -259,6 +260,13 @@ void setup() {
         brewPiControl.init();
     }
     
+// ✅ Monta LittleFS antes de restaurar estado
+    if (!LittleFS.begin()) {
+        LOG_MAIN(F("[LittleFS] ❌ Falha ao montar! Cache offline indisponível."));
+    } else {
+        LOG_MAIN(F("[LittleFS] ✅ Montado"));
+    }
+
     setupActiveListener();
     networkSetup(server);
     
@@ -515,12 +523,15 @@ void loop() {
         }
     }
 
-    if (isHTTPOnline() && fermentacaoState.active && strlen(fermentacaoState.activeId) > 0) {
+if (isHTTPOnline() && strlen(fermentacaoState.activeId) > 0) {
+    // Envia heartbeat se estiver ativo OU pausado
+    if (fermentacaoState.active || fermentacaoState.paused) {
         int configId = atoi(fermentacaoState.activeId);
         if (configId > 0) {
             sendHeartbeatMySQL(configId);
         }
     }
+}
 
     static unsigned long lastCheck = 0;
     if (isHTTPOnline() && now - lastCheck >= ACTIVE_CHECK_INTERVAL) {

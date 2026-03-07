@@ -558,7 +558,7 @@ bool sendHeartbeatMySQL(int configId) {
     static unsigned long lastHeartbeat = 0;
     unsigned long now = millis();
     if (now - lastHeartbeat < 30000) {
-        return true; // Não é erro, apenas ainda não é hora
+        return true;
     }
     lastHeartbeat = now;
     

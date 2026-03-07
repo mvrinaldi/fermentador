@@ -6,13 +6,10 @@
  * e DatabaseCleanup centralizado
  * 
  * @author Marcos Rinaldi
- * @version 2.6 - Fix definitivo pause/resume timer reset
- *               Bug A: status IN ('active','paused') — ESP agora vê paused:true
- *               Bug B: stageStartEpoch vem de stages.start_time (autoritativo)
- *               Bug C: resume ajusta start_time += pause_duration no servidor,
- *                      eliminando dependência do ESP para corrigir o epoch.
- *                      COALESCE em fermentation-state removido para targetReached=true,
- *                      pois o servidor agora é autoritativo após o resume.
+ * @version 2.7 - Fix pausedAtEpoch em esp/active e active (frontend)
+ *               Bug: $row['paused_at'] → $config['paused_at'] (variável errada)
+ *               Bug: paused_at ausente no SELECT de esp/active
+ *               Bug: pausedAtEpoch ausente no endpoint active (frontend)
  * @date Março 2026
  */
 
@@ -305,19 +302,6 @@ if ($path === 'configurations/status' && $method === 'PUT') {
             $updateData['paused_at'] = null; $updateData['completed_at'] = null;
             if ($isResumingFromPause) {
                 error_log("[API] Retomando fermentação pausada: config_id={$configId}, stage={$currentStageIndex}");
-
-                // =========================================================
-                // Bug C FIX: Ajusta start_time adicionando a duração da pausa.
-                //
-                // Se start_time existia e paused_at foi registrado:
-                //   new_start_time = start_time + (NOW() - paused_at)
-                //
-                // Isso faz o servidor devolver o epoch correto no próximo
-                // poll do ESP, sem depender do firmware para corrigir.
-                //
-                // Se start_time era NULL (alvo ainda não atingido), mantém NULL
-                // e o firmware seta o epoch quando o alvo for atingido.
-                // =========================================================
                 $stmt = $pdo->prepare("
                     UPDATE stages s
                     JOIN configurations c ON c.id = s.config_id
@@ -333,7 +317,6 @@ if ($path === 'configurations/status' && $method === 'PUT') {
                     WHERE s.config_id = ? AND s.stage_index = ?
                 ");
                 $stmt->execute([$configId, $currentStageIndex]);
-
                 error_log("[API] start_time ajustado pela duração da pausa (paused_at=" .
                           ($current['paused_at'] ?? 'NULL') . ")");
             } else {
@@ -369,22 +352,15 @@ if ($path === 'configurations/delete' && $method === 'DELETE') {
 
 // ==================== ESP: FERMENTAÇÃO ATIVA (sem autenticação — chamado pelo firmware) ====================
 //
-// Migrado de api/esp/active.php. Correções aplicadas:
-//
-//   Bug A (crítico): query anterior usava WHERE c.status = 'active', nunca retornando
-//   fermentações pausadas. O firmware recebia active:false durante pausa e disparava
-//   a lógica de "nenhuma fermentação ativa", ou pior, acionava o resume loop
-//   porque nunca via paused:true. Corrigido para IN ('active', 'paused').
-//
-//   Bug B (crítico): stageStartEpoch vinha de fermentation_states.stage_started_epoch
-//   (tabela de log, desatualizada). Corrigido para ler stages.start_time, que é a
-//   fonte autoritativa atualizada pelo endpoint fermentation-state com COALESCE.
+//   Bug A: IN ('active', 'paused') — firmware recebe paused:true durante pausa
+//   Bug B: stageStartEpoch vem de stages.start_time (fonte autoritativa)
+//   v2.7: paused_at incluído no SELECT; $row corrigido para $config
 //
 if ($path === 'esp/active' && $method === 'GET') {
 
-    // ✅ Bug A: inclui 'paused' — firmware agora recebe paused:true durante pausa
+    // ✅ v2.7: paused_at incluído no SELECT
     $stmt = $pdo->prepare("
-        SELECT c.id, c.name, c.status, c.current_stage_index
+        SELECT c.id, c.name, c.status, c.current_stage_index, c.paused_at
         FROM configurations c
         WHERE c.status IN ('active', 'paused')
         ORDER BY c.started_at DESC
@@ -394,8 +370,6 @@ if ($path === 'esp/active' && $method === 'GET') {
     $config = $stmt->fetch();
 
     if ($config) {
-        // ✅ Bug B: stageStartEpoch lido de stages.start_time (fonte autoritativa)
-        //    e targetReached de stages.target_reached_time
         $stmt = $pdo->prepare("
             SELECT
                 UNIX_TIMESTAMP(start_time)           AS stage_start_epoch,
@@ -409,11 +383,13 @@ if ($path === 'esp/active' && $method === 'GET') {
 
         echo json_encode([
             'active'            => true,
-            'paused'            => $config['status'] === 'paused',  // ✅ Bug A
+            'paused'            => $config['status'] === 'paused',
+            // ✅ v2.7: $config (antes era $row — variável inexistente)
+            'pausedAtEpoch'     => $config['paused_at'] ? strtotime($config['paused_at']) : 0,
             'id'                => (string)$config['id'],
             'name'              => $config['name'],
             'currentStageIndex' => (int)$config['current_stage_index'],
-            'stageStartEpoch'   => $stageRow ? (int)$stageRow['stage_start_epoch'] : 0,  // ✅ Bug B
+            'stageStartEpoch'   => $stageRow ? (int)$stageRow['stage_start_epoch'] : 0,
             'targetReached'     => $stageRow ? (bool)$stageRow['target_reached']   : false,
         ]);
     } else {
@@ -427,18 +403,41 @@ if ($path === 'esp/active' && $method === 'GET') {
 }
 
 // ==================== FERMENTAÇÃO ATIVA (frontend — requer autenticação) ====================
-
+//
+//   v2.7: paused_at incluído no SELECT; pausedAtEpoch adicionado à resposta
+//
 if ($path === 'active' && $method === 'GET') {
     $userId = requireAuth();
-    $stmt = $pdo->prepare("SELECT c.id, c.name, c.current_stage_index, c.status FROM configurations c WHERE c.user_id = ? AND c.status IN ('active', 'paused') ORDER BY c.started_at DESC LIMIT 1");
+    // ✅ v2.7: paused_at incluído no SELECT
+    $stmt = $pdo->prepare("
+        SELECT c.id, c.name, c.current_stage_index, c.status, c.paused_at
+        FROM configurations c
+        WHERE c.user_id = ? AND c.status IN ('active', 'paused')
+        ORDER BY c.started_at DESC
+        LIMIT 1
+    ");
     $stmt->execute([$userId]); $active = $stmt->fetch();
     if ($active) {
-        $stmt = $pdo->prepare("SELECT UNIX_TIMESTAMP(start_time) AS stage_start_epoch, target_reached_time IS NOT NULL AS target_reached FROM stages WHERE config_id = ? AND stage_index = ? LIMIT 1");
+        $stmt = $pdo->prepare("
+            SELECT
+                UNIX_TIMESTAMP(start_time)          AS stage_start_epoch,
+                target_reached_time IS NOT NULL     AS target_reached
+            FROM stages
+            WHERE config_id = ? AND stage_index = ?
+            LIMIT 1
+        ");
         $stmt->execute([$active['id'], $active['current_stage_index']]); $stageRow = $stmt->fetch();
-        sendResponse(['active' => true, 'paused' => $active['status'] === 'paused', 'id' => $active['id'], 'name' => $active['name'],
+        sendResponse([
+            'active'            => true,
+            'paused'            => $active['status'] === 'paused',
+            // ✅ v2.7: pausedAtEpoch adicionado — usado pelo frontend para congelar timer
+            'pausedAtEpoch'     => $active['paused_at'] ? strtotime($active['paused_at']) : 0,
+            'id'                => $active['id'],
+            'name'              => $active['name'],
             'currentStageIndex' => $active['current_stage_index'],
             'targetReached'     => $stageRow ? (bool)$stageRow['target_reached']   : false,
-            'stageStartEpoch'   => $stageRow ? (int)$stageRow['stage_start_epoch'] : 0]);
+            'stageStartEpoch'   => $stageRow ? (int)$stageRow['stage_start_epoch'] : 0,
+        ]);
     } else { sendResponse(['active' => false, 'paused' => false, 'id' => null]); }
 }
 
@@ -566,10 +565,6 @@ if ($path === 'fermentation-state' && $method === 'POST') {
     $MIN_VALID_EPOCH = 1577836800; // 2020-01-01
 
     if ($stageIndex !== null && $stageStartEpoch && $stageStartEpoch > $MIN_VALID_EPOCH) {
-        // Aceita epoch do ESP normalmente.
-        // O servidor já ajustou start_time corretamente no resume (Bug C fix),
-        // então não há risco de sobrescrever com valor errado.
-        // COALESCE removido: permitir que o ESP corrija o servidor se necessário.
         $stmt = $pdo->prepare("
             UPDATE stages
             SET start_time = FROM_UNIXTIME(?)

@@ -362,22 +362,22 @@ bool FermentadorHTTPClient::getAssignedSensors(String& fermenterAddr, String& fr
 
 bool FermentadorHTTPClient::sendHeartbeat(int configId, const DetailedControlStatus& status, 
                                           temperature beerTemp, temperature fridgeTemp) {
-    JsonDocument doc; // ArduinoJson v7 gerenciando memória [9]
+    JsonDocument doc; // ArduinoJson v7 gerenciando memória
 
-    // Dados de Identificação e Saúde [1]
+    // Dados de Identificação e Saúde
     doc["config_id"] = configId;
     doc["uptime"] = millis() / 1000;
     doc["free_heap"] = ESP.getFreeHeap();
 
-    // Temperaturas convertidas de Fixed-Point para Float [5, 10, 11]
+    // Temperaturas convertidas de Fixed-Point para Float
     if (beerTemp != INVALID_TEMP) doc["temp_fermenter"] = tempToFloat(beerTemp);
     if (fridgeTemp != INVALID_TEMP) doc["temp_fridge"] = tempToFloat(fridgeTemp);
 
-    // Estado dos Atuadores (Relés) [5, 12]
+    // Estado dos Atuadores (Relés)
     doc["cooler_active"] = status.coolerActive ? 1 : 0;
     doc["heater_active"] = status.heaterActive ? 1 : 0;
 
-    // Status Detalhado do Controle BrewPi [6, 13]
+    // Status Detalhado do Controle BrewPi
     JsonObject ctrl = doc["control_status"].to<JsonObject>();
     ctrl["state"] = status.stateName;
     ctrl["is_waiting"] = status.isWaiting;
@@ -386,7 +386,7 @@ bool FermentadorHTTPClient::sendHeartbeat(int configId, const DetailedControlSta
         ctrl["wait_seconds"] = status.waitTimeRemaining;
         ctrl["wait_reason"] = status.waitReason;
         
-        // Formatação do tempo de espera sem usar Strings pesadas [7, 14, 15]
+        // Formatação do tempo de espera sem usar Strings pesadas
         char waitDisplay[16];
         if (status.waitTimeRemaining < 60) {
             snprintf(waitDisplay, sizeof(waitDisplay), "%us", status.waitTimeRemaining);

@@ -2,7 +2,7 @@
 const API_BASE_URL = '/api.php?path=';
 
 // ========== CONFIGURAÇÃO DE DEBUG ==========
-const DEBUG_MODE = false; // false para produção, true para debug
+const DEBUG_MODE = true; // false para produção, true para debug
 
 // ========== VARIÁVEIS GLOBAIS ==========
 let chart = null;
@@ -11,15 +11,14 @@ let isAppInitialized = false;
 
 const REFRESH_INTERVAL = 30000;
 const ESP_OFFLINE_THRESHOLD = 120000;
-const ISPINDEL_STALE_THRESHOLD = 3600000; // 1 hora em ms
+const ISPINDEL_STALE_THRESHOLD = 3600000;
 const SAO_PAULO_UTC_OFFSET = -3 * 60 * 60 * 1000;
 
-// Limites de memória heap do ESP8266 (em bytes)
-const HEAP_WARNING_THRESHOLD = 30000;  // Abaixo disso: atenção (amarelo)
-const HEAP_CRITICAL_THRESHOLD = 15000; // Abaixo disso: crítico (vermelho)
+const HEAP_WARNING_THRESHOLD = 30000;
+const HEAP_CRITICAL_THRESHOLD = 15000;
 
 // ========== CONFIGURAÇÃO DO GRÁFICO ==========
-let selectedPeriod = 24; // horas (padrão 24)
+let selectedPeriod = 24;
 const PERIOD_OPTIONS = {
     6: 6 * 60 * 60 * 1000,
     12: 12 * 60 * 60 * 1000,
@@ -42,7 +41,10 @@ let appState = {
     heartbeat: null,
     lastUpdate: null,
     latestReading: null,
-    isPaused: false
+    isPaused: false,
+    // ✅ Fonte autoritativa: vem de stages.start_time via esp/active (não de fermentation_states)
+    stageStartEpoch: 0,
+    targetReached: false
 };
 
 // ========== FUNÇÕES DE API ==========
@@ -56,12 +58,10 @@ async function apiRequest(endpoint, options = {}) {
             },
             credentials: 'same-origin'
         });
-        
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.error || 'Erro na requisição');
         }
-        
         return await response.json();
     } catch (error) {
         throw error;
@@ -71,108 +71,67 @@ async function apiRequest(endpoint, options = {}) {
 // ========== FILTRO DE DADOS DO GRÁFICO ==========
 function filterReadingsByPeriod(readings, period) {
     if (!readings || readings.length === 0) return [];
-    
-    if (period === 'all') {
-        return readings; // Retorna todos os dados
-    }
-    
+    if (period === 'all') return readings;
     const now = new Date();
-    const periodMs = period * 60 * 60 * 1000; // Converte horas para milissegundos
+    const periodMs = period * 60 * 60 * 1000;
     const cutoffTime = new Date(now.getTime() - periodMs);
-    
     return readings.filter(reading => {
-        // Converte o timestamp da leitura para objeto Date
         let readingDate;
         if (reading.reading_timestamp) {
-            // Normaliza o timestamp (adiciona Z se necessário)
             let timestamp = reading.reading_timestamp;
             if (typeof timestamp === 'string') {
-                // Se vier no formato "2026-02-15 21:58:57"
                 timestamp = timestamp.replace(' ', 'T');
-                if (!timestamp.endsWith('Z') && !timestamp.includes('+')) {
-                    timestamp += 'Z';
-                }
+                if (!timestamp.endsWith('Z') && !timestamp.includes('+')) timestamp += 'Z';
             }
             readingDate = new Date(timestamp);
         } else {
             return false;
         }
-        
-        // ✅ CORREÇÃO: Comparação direta de timestamps
         return readingDate >= cutoffTime;
     });
 }
 
-// Função para filtrar histórico do controlador pelo mesmo período
 function filterControllerHistoryByPeriod(history, readings, period) {
     if (!history || history.length === 0 || !readings || readings.length === 0) return [];
-    
-    if (period === 'all') {
-        return history;
-    }
-    
-    // Pega o timestamp da leitura mais antiga no período filtrado
+    if (period === 'all') return history;
     const oldestReading = readings[0];
     if (!oldestReading) return [];
-    
-    // Converte o timestamp da leitura mais antiga
     let oldestTimestamp = oldestReading.reading_timestamp;
     if (typeof oldestTimestamp === 'string') {
         oldestTimestamp = oldestTimestamp.replace(' ', 'T');
-        if (!oldestTimestamp.endsWith('Z') && !oldestTimestamp.includes('+')) {
-            oldestTimestamp += 'Z';
-        }
+        if (!oldestTimestamp.endsWith('Z') && !oldestTimestamp.includes('+')) oldestTimestamp += 'Z';
     }
     const cutoffTime = new Date(oldestTimestamp);
-    
     return history.filter(state => {
         if (!state.state_timestamp) return false;
-        
         let stateTime = state.state_timestamp;
         if (typeof stateTime === 'string') {
             stateTime = stateTime.replace(' ', 'T');
-            if (!stateTime.endsWith('Z') && !stateTime.includes('+')) {
-                stateTime += 'Z';
-            }
+            if (!stateTime.endsWith('Z') && !stateTime.includes('+')) stateTime += 'Z';
         }
-        const stateDate = new Date(stateTime);
-        return stateDate >= cutoffTime;
+        return new Date(stateTime) >= cutoffTime;
     });
 }
 
-// Função para filtrar leituras do iSpindel
 function filterIspindelReadingsByPeriod(ispindelReadings, readings, period) {
     if (!ispindelReadings || ispindelReadings.length === 0 || !readings || readings.length === 0) return [];
-    
-    if (period === 'all') {
-        return ispindelReadings;
-    }
-    
+    if (period === 'all') return ispindelReadings;
     const oldestReading = readings[0];
     if (!oldestReading) return [];
-    
-    // Converte o timestamp da leitura mais antiga
     let oldestTimestamp = oldestReading.reading_timestamp;
     if (typeof oldestTimestamp === 'string') {
         oldestTimestamp = oldestTimestamp.replace(' ', 'T');
-        if (!oldestTimestamp.endsWith('Z') && !oldestTimestamp.includes('+')) {
-            oldestTimestamp += 'Z';
-        }
+        if (!oldestTimestamp.endsWith('Z') && !oldestTimestamp.includes('+')) oldestTimestamp += 'Z';
     }
     const cutoffTime = new Date(oldestTimestamp);
-    
     return ispindelReadings.filter(ir => {
         if (!ir.reading_timestamp) return false;
-        
         let irTime = ir.reading_timestamp;
         if (typeof irTime === 'string') {
             irTime = irTime.replace(' ', 'T');
-            if (!irTime.endsWith('Z') && !irTime.includes('+')) {
-                irTime += 'Z';
-            }
+            if (!irTime.endsWith('Z') && !irTime.includes('+')) irTime += 'Z';
         }
-        const irDate = new Date(irTime);
-        return irDate >= cutoffTime;
+        return new Date(irTime) >= cutoffTime;
     });
 }
 
@@ -180,22 +139,12 @@ function filterIspindelReadingsByPeriod(ispindelReadings, readings, period) {
 async function login() {
     const email = document.getElementById('login-email').value;
     const password = document.getElementById('login-password').value;
-    
-    if (!email || !password) {
-        showError('Por favor, preencha email e senha');
-        return;
-    }
-    
+    if (!email || !password) { showError('Por favor, preencha email e senha'); return; }
     try {
-        await apiRequest('auth/login', {
-            method: 'POST',
-            body: JSON.stringify({ email, password })
-        });
-        
+        await apiRequest('auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
         hideError();
         hideLoginScreen();
         await initAppAfterAuth();
-        
     } catch (error) {
         showError(error.message || 'Erro no login');
     }
@@ -204,32 +153,14 @@ async function login() {
 async function logout() {
     try {
         await apiRequest('auth/logout', { method: 'POST' });
-        
         appState = {
-            config: null,
-            espState: null,
-            readings: [],
-            ispindel: null,
-            ispindelReadings: [],
-            controller: null,
-            controllerHistory: [],
-            heartbeat: null,
-            lastUpdate: null,
-            latestReading: null
+            config: null, espState: null, readings: [], ispindel: null, ispindelReadings: [],
+            controller: null, controllerHistory: [], heartbeat: null, lastUpdate: null,
+            latestReading: null, isPaused: false, stageStartEpoch: 0, targetReached: false
         };
-        
-        if (refreshInterval) {
-            clearInterval(refreshInterval);
-            refreshInterval = null;
-        }
-        
-        if (chart) {
-            chart.destroy();
-            chart = null;
-        }
-        
+        if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+        if (chart) { chart.destroy(); chart = null; }
         showLoginScreen();
-        
     } catch (error) {
         alert('Erro ao fazer logout: ' + error.message);
     }
@@ -238,13 +169,9 @@ async function logout() {
 async function checkAuthStatus() {
     try {
         const result = await apiRequest('auth/check');
-        
         if (result.authenticated) {
             hideLoginScreen();
-            if (!isAppInitialized) {
-                await initAppAfterAuth();
-                isAppInitialized = true;
-            }
+            if (!isAppInitialized) { await initAppAfterAuth(); isAppInitialized = true; }
         } else {
             showLoginScreen();
         }
@@ -256,28 +183,21 @@ async function checkAuthStatus() {
 function showError(message) {
     const errorDiv = document.getElementById('login-error');
     const errorMessage = document.getElementById('error-message');
-    
     if (errorDiv && errorMessage) {
         errorMessage.textContent = message;
         errorDiv.classList.remove('hidden');
         errorDiv.classList.add('flex', 'items-center', 'gap-2');
-    } else {
-        alert(message);
-    }
+    } else { alert(message); }
 }
 
 function hideError() {
     const errorDiv = document.getElementById('login-error');
-    if (errorDiv) {
-        errorDiv.classList.add('hidden');
-        errorDiv.classList.remove('flex');
-    }
+    if (errorDiv) { errorDiv.classList.add('hidden'); errorDiv.classList.remove('flex'); }
 }
 
 function showLoginScreen() {
     const loginScreen = document.getElementById('login-screen');
     const container = document.querySelector('.container');
-    
     if (loginScreen) loginScreen.style.display = 'flex';
     if (container) container.style.display = 'none';
 }
@@ -285,54 +205,43 @@ function showLoginScreen() {
 function hideLoginScreen() {
     const loginScreen = document.getElementById('login-screen');
     const container = document.querySelector('.container');
-    
     if (loginScreen) loginScreen.style.display = 'none';
     if (container) container.style.display = 'block';
 }
 
 // ========== DATA/HORA ==========
 function utcToSaoPaulo(dateString) {
-    if (!dateString) {
-        const now = new Date();
-        return new Date(now.getTime() + SAO_PAULO_UTC_OFFSET);
-    }
-    
+    if (!dateString) return new Date(new Date().getTime() + SAO_PAULO_UTC_OFFSET);
     let date;
-    
     if (dateString instanceof Date) {
         date = dateString;
     } else {
         let normalized = dateString;
-        if (!dateString.endsWith('Z') && dateString.includes('T')) {
-            normalized = dateString + 'Z';
-        }
+        if (!dateString.endsWith('Z') && dateString.includes('T')) normalized = dateString + 'Z';
         date = new Date(normalized);
-        
-        if (isNaN(date.getTime())) {
-            return new Date(new Date().getTime() + SAO_PAULO_UTC_OFFSET);
-        }
+        if (isNaN(date.getTime())) return new Date(new Date().getTime() + SAO_PAULO_UTC_OFFSET);
     }
-    
     return new Date(date.getTime() + SAO_PAULO_UTC_OFFSET);
 }
 
 function calculateTimeDifference(utcTimestamp) {
     if (!utcTimestamp) return Infinity;
-    
-    const nowUTC = new Date();
-    const timestampUTC = new Date(utcTimestamp);
-    
-    return nowUTC - timestampUTC;
+
+    let normalized = utcTimestamp;
+    if (typeof normalized === 'string') {
+        normalized = normalized.replace(' ', 'T');
+        if (!normalized.endsWith('Z') && !normalized.includes('+')) normalized += 'Z';
+    }
+
+    return new Date() - new Date(normalized);
 }
 
 function formatTimeDifference(ms) {
     if (ms === Infinity) return 'sem dados';
-    
     const seconds = Math.floor(ms / 1000);
     const minutes = Math.floor(seconds / 60);
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
-    
     if (days > 0) return `${days}d ${hours % 24}h`;
     if (hours > 0) return `${hours}h ${minutes % 60}min`;
     if (minutes > 0) return `${minutes} minuto${minutes > 1 ? 's' : ''}`;
@@ -341,91 +250,116 @@ function formatTimeDifference(ms) {
 
 function formatTimestamp(date) {
     if (!date) return '--:--';
-    
     const saoPauloDate = utcToSaoPaulo(date);
-    
-    const day = saoPauloDate.getDate().toString().padStart(2, '0');
-    const month = (saoPauloDate.getMonth() + 1).toString().padStart(2, '0');
-    const year = saoPauloDate.getFullYear();
-    const hour = saoPauloDate.getHours().toString().padStart(2, '0');
+    const day    = saoPauloDate.getDate().toString().padStart(2, '0');
+    const month  = (saoPauloDate.getMonth() + 1).toString().padStart(2, '0');
+    const year   = saoPauloDate.getFullYear();
+    const hour   = saoPauloDate.getHours().toString().padStart(2, '0');
     const minute = saoPauloDate.getMinutes().toString().padStart(2, '0');
-    
     return `${day}/${month}/${year} ${hour}:${minute}`;
 }
 
 function formatTimeRemaining(tr) {
-    if (!tr) {
-        return '--';
-    }
-    
+    if (!tr) return '--';
     if (tr.status === 'completed' || tr.unit === 'completed' || tr.display === 'Fermentação concluída') {
         return 'Fermentação concluída';
     }
-    
     if (tr.unit === 'detailed' && tr.days !== undefined) {
         const parts = [];
-        
-        if (tr.days > 0) {
-            parts.push(`${tr.days}d`);
-        }
-        if (tr.hours > 0) {
-            parts.push(`${tr.hours}h`);
-        }
-        if (tr.minutes > 0) {
-            parts.push(`${tr.minutes}m`);
-        }
-        
-        if (parts.length === 0) {
-            return '< 1m';
-        }
-        
-        return parts.join(' ');
+        if (tr.days > 0)    parts.push(`${tr.days}d`);
+        if (tr.hours > 0)   parts.push(`${tr.hours}h`);
+        if (tr.minutes > 0) parts.push(`${tr.minutes}m`);
+        return parts.length === 0 ? '< 1m' : parts.join(' ');
     }
-    
     if (tr.value !== undefined && tr.unit) {
-        if (tr.unit === 'indefinite' || tr.unit === 'ind') {
-            return 'Aguardando gravidade';
-        }
-        
+        if (tr.unit === 'indefinite' || tr.unit === 'ind') return 'Aguardando gravidade';
         if (tr.unit === 'hours') {
             const totalHours = parseFloat(tr.value);
             const hours = Math.floor(totalHours);
             const minutes = Math.round((totalHours - hours) * 60);
-            
-            if (totalHours < 1) {
-                return `${Math.round(totalHours * 60)}min`;
-            } else if (minutes > 0) {
-                return `${hours}h ${minutes}min`;
-            } else {
-                return `${hours}h`;
-            }
-        } 
-        else if (tr.unit === 'days') {
+            if (totalHours < 1) return `${Math.round(totalHours * 60)}min`;
+            else if (minutes > 0) return `${hours}h ${minutes}min`;
+            else return `${hours}h`;
+        } else if (tr.unit === 'days') {
             const totalDays = parseFloat(tr.value);
-            
-            if (totalDays >= 1) {
-                return `${totalDays.toFixed(1)} dias`;
-            } else {
-                const hours = Math.round(totalDays * 24);
-                return `${hours}h`;
-            }
-        }
-        else if (tr.unit === 'minutes') {
+            if (totalDays >= 1) return `${totalDays.toFixed(1)} dias`;
+            else return `${Math.round(totalDays * 24)}h`;
+        } else if (tr.unit === 'minutes') {
             return `${Math.round(tr.value)}min`;
         }
-        
         return `${tr.value} ${tr.unit}`;
     }
-    
     return '--';
+}
+
+// ========== CÁLCULO DE TEMPO RESTANTE (FONTE AUTORITATIVA) ==========
+// Calcula a partir de appState.stageStartEpoch (vem de stages.start_time via esp/active),
+// eliminando a dependência de fermentation_states.state_data que pode estar incompleto.
+// ========== CÁLCULO DE TEMPO RESTANTE (FONTE AUTORITATIVA) ==========
+function computeTimeRemaining() {
+    if (!appState.targetReached || !appState.stageStartEpoch) return null;
+
+    const stage = appState.config?.stages?.[appState.config.current_stage_index];
+    if (!stage) return null;
+
+    // Fermentação totalmente concluída (mantendo temperatura)
+    const fermentationCompleted = appState.espState?.fermentationCompleted === true ||
+                                   appState.espState?.timeRemaining?.status === 'completed';
+    if (fermentationCompleted) {
+        return { value: 0, unit: 'completed', status: 'completed', display: 'Fermentação concluída' };
+    }
+
+    // ✅ CORREÇÃO: Se pausado, usa o epoch salvo no momento da pausa
+    // Se não estiver pausado, usa o tempo atual
+    let referenceEpoch;
+    
+    if (appState.isPaused && appState.pausedAtEpoch) {
+        // Quando pausado, congela no momento da pausa
+        referenceEpoch = appState.pausedAtEpoch;
+    } else {
+        // Quando ativo, usa o tempo atual
+        referenceEpoch = Math.floor(Date.now() / 1000);
+    }
+    
+    const elapsedH = (referenceEpoch - appState.stageStartEpoch) / 3600;
+
+    if (stage.type === 'gravity') {
+        return { unit: 'indefinite', status: 'waiting_gravity' };
+    }
+
+    if (stage.type === 'gravity_time') {
+        const totalH     = parseFloat(stage.max_duration) * 24;
+        const remainingH = Math.max(0, totalH - elapsedH);
+        const totalMin   = Math.round(remainingH * 60);
+        return {
+            days:    Math.floor(totalMin / (24 * 60)),
+            hours:   Math.floor((totalMin % (24 * 60)) / 60),
+            minutes: totalMin % 60,
+            unit: 'detailed',
+            status: 'waiting_gravity'
+        };
+    }
+
+    // temperature ou ramp
+    const totalH = stage.type === 'ramp'
+        ? parseFloat(stage.ramp_time)
+        : parseFloat(stage.duration) * 24;
+
+    const remainingH = Math.max(0, totalH - elapsedH);
+    const totalMin   = Math.round(remainingH * 60);
+    return {
+        days:    Math.floor(totalMin / (24 * 60)),
+        hours:   Math.floor((totalMin % (24 * 60)) / 60),
+        minutes: totalMin % 60,
+        unit: 'detailed',
+        status: 'running'
+    };
 }
 
 // ========== FUNÇÃO DE DESCOMPRESSÃO DOS DADOS ==========
 function decompressData(data) {
-    if (!data || typeof data !== 'object') {
-        return data;
-    }
-    
+    if (!data || typeof data !== 'object') return data;
+
     const messageMap = {
         'fc': 'Fermentação concluída automaticamente - mantendo temperatura',
         'fconc': 'Fermentação concluída automaticamente - mantendo temperatura',
@@ -451,221 +385,107 @@ function decompressData(data) {
         'off': 'Desligado',
         'wg': 'waiting_gravity'
     };
-    
-    const unitMap = {
-        'h': 'hours',
-        'd': 'days',
-        'm': 'minutes',
-        'ind': 'indefinite',
-        'tc': 'completed'
-    };
-    
-    const statusMap = {
-        'r': 'running',
-        'run': 'running',
-        'w': 'waiting',
-        'wait': 'waiting',
-        'wg': 'waiting_gravity',
-        'tc': 'completed'
-    };
-    
-    const stageTypeMap = {
-        't': 'temperature',
-        'r': 'ramp',
-        'g': 'gravity',
-        'gt': 'gravity_time'
-    };
-    
+
+    const unitMap   = { 'h': 'hours', 'd': 'days', 'm': 'minutes', 'ind': 'indefinite', 'tc': 'completed' };
+    const statusMap = { 'r': 'running', 'run': 'running', 'w': 'waiting', 'wait': 'waiting', 'wg': 'waiting_gravity', 'tc': 'completed' };
+    const stageTypeMap = { 't': 'temperature', 'r': 'ramp', 'g': 'gravity', 'gt': 'gravity_time' };
+
     const result = { ...data };
-    
-    if (DEBUG_MODE) {
-        console.log('🔍 DEBUG decompressData INPUT:', result);
-    }
-    
+
+    if (DEBUG_MODE) console.log('🔍 DEBUG decompressData INPUT:', result);
+
     const fieldMap = {
-        'cn': 'config_name',
-        'csi': 'currentStageIndex',
-        'ts': 'totalStages',
-        'stt': 'stageTargetTemp',
-        'ptt': 'pidTargetTemp',
-        'ctt': 'currentTargetTemp',
-        'c': 'cooling',
-        'h': 'heating',
-        's': 'status',
-        'msg': 'message',
-        'cid': 'config_id',
-        'ca': 'completedAt',
-        'tms': 'timestamp',
-        'um': 'uptime_ms',
-        'rp': 'rampProgress',
-        'st': 'stageType'
+        'cn': 'config_name', 'csi': 'currentStageIndex', 'ts': 'totalStages',
+        'stt': 'stageTargetTemp', 'ptt': 'pidTargetTemp', 'ctt': 'currentTargetTemp',
+        'c': 'cooling', 'h': 'heating', 's': 'status', 'msg': 'message',
+        'cid': 'config_id', 'ca': 'completedAt', 'tms': 'timestamp',
+        'um': 'uptime_ms', 'rp': 'rampProgress', 'st': 'stageType'
     };
-    
+
     Object.keys(fieldMap).forEach(short => {
-        if (result[short] !== undefined) {
-            result[fieldMap[short]] = result[short];
-            delete result[short];
-        }
+        if (result[short] !== undefined) { result[fieldMap[short]] = result[short]; delete result[short]; }
     });
-    
+
     if (result.tr !== undefined) {
-        
         if (Array.isArray(result.tr)) {
             if (result.tr.length === 1 && result.tr[0] === 'tc') {
-                result.timeRemaining = {
-                    value: 0,
-                    unit: 'completed',
-                    status: 'completed',
-                    display: 'Fermentação concluída'
-                };
+                result.timeRemaining = { value: 0, unit: 'completed', status: 'completed', display: 'Fermentação concluída' };
                 result.targetReached = true;
                 result.fermentationCompleted = true;
-                if (DEBUG_MODE) {
-                    console.log('✅ tr é ["tc"] - Fermentação concluída');
-                }
-            }
-            else if (result.tr.length === 4 && 
-                typeof result.tr[0] === 'number' && 
-                typeof result.tr[1] === 'number' && 
+            } else if (result.tr.length === 4 &&
+                typeof result.tr[0] === 'number' &&
+                typeof result.tr[1] === 'number' &&
                 typeof result.tr[2] === 'number') {
-                
                 result.timeRemaining = {
-                    days: result.tr[0],
-                    hours: result.tr[1],
-                    minutes: result.tr[2],
+                    days: result.tr[0], hours: result.tr[1], minutes: result.tr[2],
                     unit: 'detailed',
-                    status: statusMap[result.tr[3]] || 
-                           messageMap[result.tr[3]] || 
-                           result.tr[3] || 'unknown'
+                    status: statusMap[result.tr[3]] || messageMap[result.tr[3]] || result.tr[3] || 'unknown'
                 };
                 result.targetReached = true;
-                
             } else if (result.tr.length >= 3) {
                 result.timeRemaining = {
                     value: result.tr[0],
                     unit: unitMap[result.tr[1]] || result.tr[1],
-                    status: statusMap[result.tr[2]] || 
-                           messageMap[result.tr[2]] || 
-                           result.tr[2] || 'unknown'
+                    status: statusMap[result.tr[2]] || messageMap[result.tr[2]] || result.tr[2] || 'unknown'
                 };
                 result.targetReached = true;
             }
-        } 
-        else if (typeof result.tr === 'boolean') {
+        } else if (typeof result.tr === 'boolean') {
             result.targetReached = result.tr;
-        }
-        else if (typeof result.tr === 'string' && result.tr === 'tc') {
-            result.timeRemaining = {
-                value: 0,
-                unit: 'completed',
-                status: 'completed',
-                display: 'Fermentação concluída'
-            };
+        } else if (typeof result.tr === 'string' && result.tr === 'tc') {
+            result.timeRemaining = { value: 0, unit: 'completed', status: 'completed', display: 'Fermentação concluída' };
             result.targetReached = true;
             result.fermentationCompleted = true;
-            if (DEBUG_MODE) {
-                console.log('✅ tr é "tc" (string) - Fermentação concluída');
-            }
         }
-        
         delete result.tr;
     }
-    
+
     if (result.targetReached === undefined) {
         if (result.timeRemaining) {
             result.targetReached = true;
-            if (DEBUG_MODE) {
-                console.log('✅ Inferido targetReached = true (tem timeRemaining)');
-            }
         } else if (result.status === 'running' || result.status === 'Executando') {
             result.targetReached = false;
-            if (DEBUG_MODE) {
-                console.log('✅ Inferido targetReached = false (status running, sem timeRemaining)');
-            }
         } else if (result.status === 'waiting' || result.status === 'Aguardando') {
             result.targetReached = false;
-            if (DEBUG_MODE) {
-                console.log('✅ Inferido targetReached = false (status waiting)');
-            }
         }
     }
-    
-    if (result.status && messageMap[result.status]) {
-        result.status = messageMap[result.status];
-    }
-    
-    if (result.message && messageMap[result.message]) {
-        result.message = messageMap[result.message];
-    }
-    
-    if (result.stageType && stageTypeMap[result.stageType]) {
-        result.stageType = stageTypeMap[result.stageType];
-    }
-    
+
+    if (result.status && messageMap[result.status]) result.status = messageMap[result.status];
+    if (result.message && messageMap[result.message]) result.message = messageMap[result.message];
+    if (result.stageType && stageTypeMap[result.stageType]) result.stageType = stageTypeMap[result.stageType];
+
     if (result.control_status && typeof result.control_status === 'object') {
         const cs = result.control_status;
-        
-        if (cs.s && messageMap[cs.s]) {
-            cs.state = messageMap[cs.s];
-            delete cs.s;
-        }
-        
-        const csMap = {
-            'iw': 'is_waiting',
-            'wr': 'wait_reason',
-            'ws': 'wait_seconds',
-            'wd': 'wait_display',
-            'pd': 'peak_detection',
-            'ep': 'estimated_peak'
-        };
-        
+        if (cs.s && messageMap[cs.s]) { cs.state = messageMap[cs.s]; delete cs.s; }
+        const csMap = { 'iw': 'is_waiting', 'wr': 'wait_reason', 'ws': 'wait_seconds', 'wd': 'wait_display', 'pd': 'peak_detection', 'ep': 'estimated_peak' };
         Object.keys(csMap).forEach(short => {
-            if (cs[short] !== undefined) {
-                cs[csMap[short]] = cs[short];
-                delete cs[short];
-            }
+            if (cs[short] !== undefined) { cs[csMap[short]] = cs[short]; delete cs[short]; }
         });
     }
+
     return result;
 }
 
 // ========== FUNÇÃO PARA OBTER DADOS DO ISPINDEL ==========
 function getIspindelData() {
     const ispindel = appState.ispindel;
-    
-    if (!ispindel) {
-        return {
-            gravity: null,
-            temperature: null,
-            battery: null,
-            isStale: true,
-            lastUpdate: null,
-            staleMessage: 'Sem dados do iSpindel'
-        };
-    }
-    
+    if (!ispindel) return { gravity: null, temperature: null, battery: null, isStale: true, lastUpdate: null, staleMessage: 'Sem dados do iSpindel' };
+
     const isStale = ispindel.is_stale === true;
     const secondsSinceUpdate = ispindel.seconds_since_update || 0;
-    
+
     let staleMessage = null;
     if (isStale) {
         const hours = Math.floor(secondsSinceUpdate / 3600);
         const minutes = Math.floor((secondsSinceUpdate % 3600) / 60);
-        
-        if (hours > 0) {
-            staleMessage = `Última leitura há ${hours}h ${minutes}min`;
-        } else {
-            staleMessage = `Última leitura há ${minutes}min`;
-        }
+        staleMessage = hours > 0 ? `Última leitura há ${hours}h ${minutes}min` : `Última leitura há ${minutes}min`;
     }
-    
+
     return {
         gravity: parseFloat(ispindel.gravity) || null,
         temperature: parseFloat(ispindel.temperature) || null,
         battery: parseFloat(ispindel.battery) || null,
-        isStale: isStale,
-        lastUpdate: ispindel.reading_timestamp,
-        staleMessage: staleMessage
+        isStale, lastUpdate: ispindel.reading_timestamp, staleMessage
     };
 }
 
@@ -676,27 +496,14 @@ function checkSensorStatus() {
     const problems = [];
     const lastReading = appState.readings?.[appState.readings.length - 1];
     if (lastReading) {
-        // Verifica flag explícito do ESP
         if (lastReading.sensor_error == 1) {
-            if (lastReading.temp_fermenter === null) {
-                problems.push('Sensor do fermentador desconectado ou com falha');
-            }
-            if (lastReading.temp_fridge === null) {
-                problems.push('Sensor da geladeira desconectado ou com falha');
-            }
-            if (problems.length === 0) {
-                problems.push('Falha de leitura em sensor');
-            }
-        }
-        // Fallback: valores impossíveis do DS18B20
-        else {
+            if (lastReading.temp_fermenter === null) problems.push('Sensor do fermentador desconectado ou com falha');
+            if (lastReading.temp_fridge === null) problems.push('Sensor da geladeira desconectado ou com falha');
+            if (problems.length === 0) problems.push('Falha de leitura em sensor');
+        } else {
             const isBad = v => v !== null && (parseFloat(v) <= -50 || parseFloat(v) >= 84);
-            if (isBad(lastReading.temp_fermenter)) {
-                problems.push(`Sensor do fermentador com leitura inválida (${lastReading.temp_fermenter}°C)`);
-            }
-            if (isBad(lastReading.temp_fridge)) {
-                problems.push(`Sensor da geladeira com leitura inválida (${lastReading.temp_fridge}°C)`);
-            }
+            if (isBad(lastReading.temp_fermenter)) problems.push(`Sensor do fermentador com leitura inválida (${lastReading.temp_fermenter}°C)`);
+            if (isBad(lastReading.temp_fridge)) problems.push(`Sensor da geladeira com leitura inválida (${lastReading.temp_fridge}°C)`);
         }
     }
     if (problems.length > 0) {
@@ -711,9 +518,8 @@ function checkSensorStatus() {
 async function loadCompleteState() {
     try {
         const activeData = await apiRequest('active');
-        
-        if (!activeData.active || !activeData.id) {
-            // Mesmo sem fermentação ativa, busca últimos dados dos sensores
+
+        if ((!activeData.active && !activeData.paused) || !activeData.id) {
             appState.isPaused = false;
             appState.config = null;
             appState.espState = {};
@@ -724,8 +530,9 @@ async function loadCompleteState() {
             appState.controllerHistory = [];
             appState.heartbeat = null;
             appState.latestReading = null;
-            
-            // Tenta buscar últimos dados disponíveis
+            appState.stageStartEpoch = 0;
+            appState.targetReached = false;
+
             try {
                 const latestData = await apiRequest('latest-readings');
                 if (latestData) {
@@ -733,54 +540,55 @@ async function loadCompleteState() {
                     appState.ispindel = latestData.ispindel || null;
                 }
             } catch (e) {
-                if (DEBUG_MODE) {
-                    console.log('Não foi possível buscar últimas leituras:', e);
-                }
+                if (DEBUG_MODE) console.log('Não foi possível buscar últimas leituras:', e);
             }
-            
+
             renderNoActiveFermentation();
             return;
         }
-        
-        const completeState = await apiRequest(`state/complete&config_id=${activeData.id}`);
-        
+
+        // ✅ Armazena epoch e targetReached a partir da fonte autoritativa (stages.start_time)
+        appState.stageStartEpoch = activeData.stageStartEpoch || 0;
+        appState.targetReached   = activeData.targetReached   || false;
+        appState.pausedAtEpoch   = activeData.pausedAtEpoch   || 0;
+
         if (DEBUG_MODE) {
-            console.log('🔍 DADOS BRUTOS DO SERVIDOR (completo):', completeState);
+            console.log('🔍 activeData:', {
+                stageStartEpoch: appState.stageStartEpoch,
+                targetReached: appState.targetReached
+            });
         }
-        
+
+        const completeState = await apiRequest(`state/complete&config_id=${activeData.id}`);
+
+        if (DEBUG_MODE) console.log('🔍 DADOS BRUTOS DO SERVIDOR (completo):', completeState);
+
         if (completeState.state) {
-            if (DEBUG_MODE) {
-                console.log('🔍 Estado ANTES da descompressão:', completeState.state);
-            }
-            
+            if (DEBUG_MODE) console.log('🔍 Estado ANTES da descompressão:', completeState.state);
             completeState.state = decompressData(completeState.state);
-            
-            if (DEBUG_MODE) {
-                console.log('🔍 Estado APÓS descompressão:', {
-                    targetReached: completeState.state.targetReached,
-                    timeRemaining: completeState.state.timeRemaining,
-                    status: completeState.state.status,
-                    config_name: completeState.state.config_name,
-                    fermentationCompleted: completeState.state.fermentationCompleted
-                });
-            }
+            if (DEBUG_MODE) console.log('🔍 Estado APÓS descompressão:', {
+                targetReached: completeState.state.targetReached,
+                timeRemaining: completeState.state.timeRemaining,
+                status: completeState.state.status,
+                fermentationCompleted: completeState.state.fermentationCompleted
+            });
         }
-        
-        appState.config = completeState.config;
-        appState.espState = completeState.state || {};
-        appState.readings = completeState.readings || [];
-        appState.ispindel = completeState.ispindel || null;
+
+        appState.config           = completeState.config;
+        appState.espState         = completeState.state || {};
+        appState.readings         = completeState.readings || [];
+        appState.ispindel         = completeState.ispindel || null;
         appState.ispindelReadings = completeState.ispindel_readings || [];
-        appState.controller = completeState.controller;
+        appState.controller       = completeState.controller;
         appState.controllerHistory = completeState.controller_history || [];
-        appState.lastUpdate = completeState.timestamp;
-        appState.heartbeat = completeState.heartbeat;
-        appState.isPaused = activeData.paused === true;
-        appState.latestReading = null;
-        
+        appState.lastUpdate       = completeState.timestamp;
+        appState.heartbeat        = completeState.heartbeat;
+        appState.isPaused         = activeData.paused === true;
+        appState.latestReading    = null;
+
         checkESPStatus();
         renderUI();
-        
+
     } catch (error) {
         console.error('Erro ao carregar estado:', error);
         renderNoActiveFermentation();
@@ -789,14 +597,7 @@ async function loadCompleteState() {
 
 function getStatusText(tr) {
     if (!tr || !tr.status) return '';
-    
-    const statusMap = {
-        'running': 'restantes',
-        'waiting': 'aguardando temperatura',
-        'waiting_gravity': 'aguardando gravidade',
-        'completed': ''
-    };
-    
+    const statusMap = { 'running': 'restantes', 'waiting': 'aguardando temperatura', 'waiting_gravity': 'aguardando gravidade', 'completed': '' };
     return statusMap[tr.status] || tr.status;
 }
 
@@ -813,64 +614,85 @@ function checkESPStatus() {
     const alertDiv = document.getElementById('esp-status-alert');
     const badgeDiv = document.getElementById('esp-status-badge');
     const offlineTimeSpan = document.getElementById('esp-offline-time');
-    
     if (!alertDiv || !badgeDiv) return;
-    
+
+    const updateRelayStatus_ = () => { updateRelayStatus(); updateHeapStatus(); checkSensorStatus(); };
+
     const updateLastUpdateText = (timestamp) => {
         const formatted = formatTimestamp(timestamp);
-        document.querySelectorAll('.esp-last-update-text').forEach(span => {
-            span.textContent = formatted;
-        });
+        document.querySelectorAll('.esp-last-update-text').forEach(span => { span.textContent = formatted; });
     };
-    
-    updateRelayStatus();
-    updateHeapStatus();
-    checkSensorStatus();
-    
+
+    updateRelayStatus_();
+
+    // ✅ CORREÇÃO: Verificar heartbeat primeiro (fonte mais confiável)
     if (appState.heartbeat && appState.heartbeat.heartbeat_timestamp) {
         const lastTimestamp = appState.heartbeat.heartbeat_timestamp;
         const diffMs = calculateTimeDifference(lastTimestamp);
-        
         updateLastUpdateText(lastTimestamp);
         
+        // ✅ Se estiver pausado, considera online se heartbeat for recente
+        if (appState.isPaused) {
+            // Quando pausado, heartbeat é suficiente para considerar online
+            if (diffMs <= ESP_OFFLINE_THRESHOLD * 2) { // Dobra o threshold para pausado
+                alertDiv.classList.add('hidden'); 
+                badgeDiv.classList.remove('hidden');
+            } else {
+                alertDiv.classList.remove('hidden'); 
+                badgeDiv.classList.add('hidden');
+                if (offlineTimeSpan) offlineTimeSpan.textContent = formatTimeDifference(diffMs);
+            }
+            return;
+        }
+        
+        // Comportamento normal para não pausado
         if (diffMs > ESP_OFFLINE_THRESHOLD) {
-            alertDiv.classList.remove('hidden');
+            alertDiv.classList.remove('hidden'); 
             badgeDiv.classList.add('hidden');
             if (offlineTimeSpan) offlineTimeSpan.textContent = formatTimeDifference(diffMs);
         } else {
-            alertDiv.classList.add('hidden');
+            alertDiv.classList.add('hidden'); 
             badgeDiv.classList.remove('hidden');
         }
         return;
     }
-    
+
+    // Fallback para readings/controller
     let lastTimestamp = null;
-    
     if (appState.readings && appState.readings.length > 0) {
-        const lastReading = appState.readings[appState.readings.length - 1];
-        lastTimestamp = lastReading.reading_timestamp;
+        lastTimestamp = appState.readings[appState.readings.length - 1].reading_timestamp;
     } else if (appState.controller && appState.controller.state_timestamp) {
         lastTimestamp = appState.controller.state_timestamp;
     }
-    
+
     if (!lastTimestamp) {
-        alertDiv.classList.remove('hidden');
+        // ✅ Se pausado e sem dados, ainda considera online se heartbeat existir
+        if (appState.isPaused && appState.heartbeat) {
+            alertDiv.classList.add('hidden'); 
+            badgeDiv.classList.remove('hidden');
+            updateLastUpdateText(appState.heartbeat.heartbeat_timestamp || new Date().toISOString());
+            return;
+        }
+        
+        alertDiv.classList.remove('hidden'); 
         badgeDiv.classList.add('hidden');
         if (offlineTimeSpan) offlineTimeSpan.textContent = 'sem dados';
         updateLastUpdateText(new Date().toISOString());
         return;
     }
-    
+
     const diffMs = calculateTimeDifference(lastTimestamp);
-    
     updateLastUpdateText(lastTimestamp);
     
-    if (diffMs > ESP_OFFLINE_THRESHOLD) {
-        alertDiv.classList.remove('hidden');
+    // ✅ Se pausado, usa threshold maior
+    const threshold = appState.isPaused ? ESP_OFFLINE_THRESHOLD * 2 : ESP_OFFLINE_THRESHOLD;
+    
+    if (diffMs > threshold) {
+        alertDiv.classList.remove('hidden'); 
         badgeDiv.classList.add('hidden');
         if (offlineTimeSpan) offlineTimeSpan.textContent = formatTimeDifference(diffMs);
     } else {
-        alertDiv.classList.add('hidden');
+        alertDiv.classList.add('hidden'); 
         badgeDiv.classList.remove('hidden');
     }
 }
@@ -879,145 +701,73 @@ function checkESPStatus() {
 function updateHeapStatus() {
     const relayContainer = document.getElementById('relay-status');
     if (!relayContainer) return;
-    
-    // Remove alerta existente se houver
     let existingHeapAlert = document.getElementById('heap-status-alert');
-    
-    // Busca free_heap do heartbeat
     const freeHeap = appState.heartbeat?.free_heap;
-    
-    // Alerta deve aparecer APENAS quando freeHeap for BAIXO
-    // Se não tem dado ou está saudável (> 30KB), esconde o alerta
     if (!freeHeap || freeHeap > HEAP_WARNING_THRESHOLD) {
-        if (existingHeapAlert) {
-            existingHeapAlert.classList.add('hidden');
-        }
+        if (existingHeapAlert) existingHeapAlert.classList.add('hidden');
         return;
     }
-    
-    // Cria/mostra alerta APENAS quando a memória está baixa
-    if (freeHeap <= HEAP_WARNING_THRESHOLD) {
-        // Cria o elemento se não existir
-        if (!existingHeapAlert) {
-            existingHeapAlert = document.createElement('div');
-            existingHeapAlert.id = 'heap-status-alert';
-            existingHeapAlert.className = 'flex items-center gap-1 text-sm';
-            relayContainer.appendChild(existingHeapAlert);
-        }
-        
-        // Formata o valor em KB
-        const heapKB = (freeHeap / 1024).toFixed(1);
-        
-        // Determina se é crítico ou apenas atenção
-        const isCritical = freeHeap < HEAP_CRITICAL_THRESHOLD;
-        
-        if (isCritical) {
-            existingHeapAlert.innerHTML = `
-                <i class="fas fa-exclamation-triangle text-red-600"></i>
-                <span class="font-semibold text-red-700">
-                    Memória crítica: ${heapKB}KB
-                </span>
-            `;
-            existingHeapAlert.title = 'Memória do ESP8266 muito baixa! Risco de travamento. Considere reiniciar o dispositivo.';
-        } else {
-            existingHeapAlert.innerHTML = `
-                <i class="fas fa-exclamation-circle text-yellow-600"></i>
-                <span class="font-semibold text-yellow-700">
-                    Memória baixa: ${heapKB}KB
-                </span>
-            `;
-            existingHeapAlert.title = 'Memória do ESP8266 abaixo do ideal. Monitore para possíveis problemas.';
-        }
-        
-        existingHeapAlert.classList.remove('hidden');
-        
-        if (DEBUG_MODE) {
-            console.log(`⚠️ Heap ${isCritical ? 'CRÍTICO' : 'baixo'}: ${heapKB}KB (${freeHeap} bytes)`);
-        }
-    } else {
-        // Se a memória estiver OK (> 30KB), esconde o alerta
-        if (existingHeapAlert) {
-            existingHeapAlert.classList.add('hidden');
-        }
+    if (!existingHeapAlert) {
+        existingHeapAlert = document.createElement('div');
+        existingHeapAlert.id = 'heap-status-alert';
+        existingHeapAlert.className = 'flex items-center gap-1 text-sm';
+        relayContainer.appendChild(existingHeapAlert);
     }
+    const heapKB = (freeHeap / 1024).toFixed(1);
+    const isCritical = freeHeap < HEAP_CRITICAL_THRESHOLD;
+    if (isCritical) {
+        existingHeapAlert.innerHTML = `<i class="fas fa-exclamation-triangle text-red-600"></i><span class="font-semibold text-red-700">Memória crítica: ${heapKB}KB</span>`;
+        existingHeapAlert.title = 'Memória do ESP8266 muito baixa! Risco de travamento.';
+    } else {
+        existingHeapAlert.innerHTML = `<i class="fas fa-exclamation-circle text-yellow-600"></i><span class="font-semibold text-yellow-700">Memória baixa: ${heapKB}KB</span>`;
+        existingHeapAlert.title = 'Memória do ESP8266 abaixo do ideal.';
+    }
+    existingHeapAlert.classList.remove('hidden');
 }
 
-// ========== STATUS RELÉS (CORRIGIDO) ==========
+// ========== STATUS RELÉS ==========
 function updateRelayStatus() {
     const coolerStatusDiv = document.getElementById('cooler-status');
     const heaterStatusDiv = document.getElementById('heater-status');
-    const relayContainer = document.getElementById('relay-status');
-    
+    const relayContainer  = document.getElementById('relay-status');
     if (!coolerStatusDiv || !heaterStatusDiv || !relayContainer) return;
-    
-    let coolerActive = false;
-    let heaterActive = false;
-    let waitingStatus = null;
-    let isWaiting = false;
-    
-    // ✅ Fonte 1: espState (fermentation_states) - dados mais completos do ESP
-    // O ESP envia cooling/heating no estado completo a cada 30s
+
+    let coolerActive = false, heaterActive = false, waitingStatus = null, isWaiting = false;
+
     if (appState.espState) {
         coolerActive = appState.espState.cooling === true || appState.espState.cooling === 1;
         heaterActive = appState.espState.heating === true || appState.espState.heating === 1;
-        
         if (appState.espState.control_status) {
             const cs = appState.espState.control_status;
             if (cs.is_waiting && cs.wait_reason) {
                 isWaiting = true;
-                waitingStatus = {
-                    reason: cs.wait_reason,
-                    display: cs.wait_display || 'aguardando'
-                };
+                waitingStatus = { reason: cs.wait_reason, display: cs.wait_display || 'aguardando' };
             }
         }
     }
-    
-    // ✅ Fonte 2: controller_states - tabela dedicada de controle
+
     if (!coolerActive && !heaterActive && appState.controller) {
         coolerActive = appState.controller.cooling === 1 || appState.controller.cooling === true;
         heaterActive = appState.controller.heating === 1 || appState.controller.heating === true;
     }
-    
-    // ✅ Fonte 3: heartbeat control_status (para waiting status)
+
     if (appState.heartbeat && appState.heartbeat.control_status) {
         const cs = appState.heartbeat.control_status;
-        
         if (cs.is_waiting && cs.wait_reason) {
             isWaiting = true;
-            if (!waitingStatus) {
-                waitingStatus = {
-                    reason: cs.wait_reason,
-                    display: cs.wait_display || 'aguardando'
-                };
-            }
+            if (!waitingStatus) waitingStatus = { reason: cs.wait_reason, display: cs.wait_display || 'aguardando' };
         }
     }
-    
-    // ✅ LÓGICA CORRIGIDA: Se está aguardando, NÃO mostra cooler/heater
-    // Aguardando = o sistema QUER ligar mas NÃO PODE ainda (tempo mínimo, etc)
+
     if (isWaiting) {
-        // Esconde cooler/heater quando está aguardando
         coolerStatusDiv.classList.add('hidden');
         heaterStatusDiv.classList.add('hidden');
     } else {
-        // Mostra cooler/heater apenas se realmente estiverem ativos E não estiver aguardando
-        if (coolerActive) {
-            coolerStatusDiv.classList.remove('hidden');
-        } else {
-            coolerStatusDiv.classList.add('hidden');
-        }
-        
-        if (heaterActive) {
-            heaterStatusDiv.classList.remove('hidden');
-        } else {
-            heaterStatusDiv.classList.add('hidden');
-        }
+        coolerActive ? coolerStatusDiv.classList.remove('hidden') : coolerStatusDiv.classList.add('hidden');
+        heaterActive ? heaterStatusDiv.classList.remove('hidden') : heaterStatusDiv.classList.add('hidden');
     }
-    
-    // Mostra waiting status
+
     let existingWaitDiv = document.getElementById('waiting-status');
-    
     if (waitingStatus && isWaiting) {
         if (!existingWaitDiv) {
             existingWaitDiv = document.createElement('div');
@@ -1025,18 +775,10 @@ function updateRelayStatus() {
             existingWaitDiv.className = 'flex items-center gap-1 text-sm';
             relayContainer.appendChild(existingWaitDiv);
         }
-        
-        existingWaitDiv.innerHTML = `
-            <i class="fas fa-hourglass-half text-yellow-600"></i>
-            <span class="font-semibold text-yellow-700">
-                ${waitingStatus.reason} (${waitingStatus.display})
-            </span>
-        `;
+        existingWaitDiv.innerHTML = `<i class="fas fa-hourglass-half text-yellow-600"></i><span class="font-semibold text-yellow-700">${waitingStatus.reason} (${waitingStatus.display})</span>`;
         existingWaitDiv.classList.remove('hidden');
     } else {
-        if (existingWaitDiv) {
-            existingWaitDiv.classList.add('hidden');
-        }
+        if (existingWaitDiv) existingWaitDiv.classList.add('hidden');
     }
 }
 
@@ -1047,9 +789,7 @@ const cardTemplate = ({ title, icon, value, subtitle, subtitleStyle = '', color 
             <i class="${icon}" style="color: ${color}; font-size: 1.5rem;"></i>
             <span class="text-sm font-medium text-gray-600">${title}</span>
         </div>
-        <div class="text-3xl font-bold text-gray-800">
-            ${value}
-        </div>
+        <div class="text-3xl font-bold text-gray-800">${value}</div>
         ${subtitle ? `<div class="text-sm text-gray-600 mt-1"${subtitleStyle ? ` style="${subtitleStyle}"` : ''}>${subtitle}</div>` : ''}
     </div>
 `;
@@ -1058,21 +798,11 @@ const stageTemplate = (stage, index, isCurrent, isCompleted) => {
     let borderColor = 'border-gray-200';
     let bgColor = 'bg-gray-50';
     let statusText = 'Aguardando';
-
-    if (isCurrent) {
-        borderColor = 'border-blue-500';
-        bgColor = 'bg-blue-50';
-        statusText = 'Em andamento';
-    } else if (isCompleted) {
-        borderColor = 'border-green-500';
-        bgColor = 'bg-green-50';
-        statusText = 'Concluída';
-    }
+    if (isCurrent) { borderColor = 'border-blue-500'; bgColor = 'bg-blue-50'; statusText = 'Em andamento'; }
+    else if (isCompleted) { borderColor = 'border-green-500'; bgColor = 'bg-green-50'; statusText = 'Concluída'; }
 
     const totalStages = appState.config?.stages?.length ?? 0;
     const isLast = index === totalStages - 1;
-    
-    // ✅ NOVO: Verifica se é etapa de rampa
     const isRampStage = stage.type === 'ramp';
 
     return `
@@ -1085,49 +815,29 @@ const stageTemplate = (stage, index, isCurrent, isCompleted) => {
                     ${isCurrent ? `<span class="ml-2 text-sm text-blue-600">(${statusText})</span>` : ''}
                     ${isCompleted ? '<span class="ml-2 text-sm text-green-600">(Concluída)</span>' : ''}
                 </h3>
-                <p class="text-sm text-gray-600 mt-1">
-                    ${getStageDescription(stage)}
-                </p>
+                <p class="text-sm text-gray-600 mt-1">${getStageDescription(stage)}</p>
             </div>
-
-${isCurrent ? `
+            ${isCurrent ? `
             <div class="flex gap-2 ml-4 flex-shrink-0">
                 ${appState.isPaused ? `
-                <button
-                    onclick="resumeFermentation()"
-                    id="btn-resume-stage"
-                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
-                           bg-green-100 text-green-800 border border-green-300
-                           hover:bg-green-200 transition-colors"
+                <button onclick="resumeFermentation()" id="btn-resume-stage"
+                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg bg-green-100 text-green-800 border border-green-300 hover:bg-green-200 transition-colors"
                     title="Retomar fermentação">
-                    <i class="fas fa-play"></i>
-                    <span>Retomar</span>
+                    <i class="fas fa-play"></i><span>Retomar</span>
                 </button>
                 ` : `
-                <!-- ✅ MODIFICADO: Botão Pausar NÃO aparece em etapas de rampa -->
                 ${!isRampStage ? `
-                <button
-                    onclick="pauseFermentationFromMonitor()"
-                    id="btn-pause-stage"
-                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
-                           bg-yellow-100 text-yellow-800 border border-yellow-300
-                           hover:bg-yellow-200 transition-colors"
+                <button onclick="pauseFermentationFromMonitor()" id="btn-pause-stage"
+                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg bg-yellow-100 text-yellow-800 border border-yellow-300 hover:bg-yellow-200 transition-colors"
                     title="Pausar fermentação mantendo temperatura">
-                    <i class="fas fa-pause"></i>
-                    <span>Pausar</span>
+                    <i class="fas fa-pause"></i><span>Pausar</span>
                 </button>
                 ` : ''}
-
                 ${!isLast ? `
-                <button
-                    onclick="advanceStage()"
-                    id="btn-advance-stage"
-                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
-                           bg-blue-100 text-blue-800 border border-blue-300
-                           hover:bg-blue-200 transition-colors"
+                <button onclick="advanceStage()" id="btn-advance-stage"
+                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg bg-blue-100 text-blue-800 border border-blue-300 hover:bg-blue-200 transition-colors"
                     title="Avançar para a próxima etapa">
-                    <i class="fas fa-forward"></i>
-                    <span>Avançar</span>
+                    <i class="fas fa-forward"></i><span>Avançar</span>
                 </button>
                 ` : ''}
                 `}
@@ -1140,23 +850,14 @@ ${isCurrent ? `
 
 function getStageDescription(stage) {
     const formatDurationDisplay = (days) => {
-        if (days >= 1) {
-            return days % 1 === 0 ? `${days} dias` : `${days.toFixed(1)} dias`;
-        } else {
-            const totalHours = days * 24;
-            const hours = Math.floor(totalHours);
-            const minutes = Math.round((totalHours - hours) * 60);
-            
-            if (hours === 0 && minutes === 0) {
-                return "menos de 1 minuto";
-            } else if (hours === 0) {
-                return `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-            } else if (minutes === 0) {
-                return `${hours} hora${hours !== 1 ? 's' : ''}`;
-            } else {
-                return `${hours} hora${hours !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-            }
-        }
+        if (days >= 1) return days % 1 === 0 ? `${days} dias` : `${days.toFixed(1)} dias`;
+        const totalHours = days * 24;
+        const hours = Math.floor(totalHours);
+        const minutes = Math.round((totalHours - hours) * 60);
+        if (hours === 0 && minutes === 0) return "menos de 1 minuto";
+        else if (hours === 0) return `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+        else if (minutes === 0) return `${hours} hora${hours !== 1 ? 's' : ''}`;
+        else return `${hours} hora${hours !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
     };
 
     switch(stage.type) {
@@ -1166,66 +867,40 @@ function getStageDescription(stage) {
             return `${stage.target_temp}°C até ${stage.target_gravity} SG`;
         case 'gravity_time':
             return `${stage.target_temp}°C até ${stage.target_gravity} SG (máx ${formatDurationDisplay(stage.max_duration)})`;
-        case 'ramp':
+        case 'ramp': {
             const direction = stage.direction === 'up' ? '▲' : '▼';
-            
-            let rampTimeDisplay;
             const rampDays = stage.ramp_time / 24;
-            
+            let rampTimeDisplay;
             if (rampDays >= 1) {
                 rampTimeDisplay = rampDays % 1 === 0 ? `${rampDays} dias` : `${rampDays.toFixed(1)} dias`;
             } else {
                 const hours = stage.ramp_time;
                 const minutes = Math.round((hours - Math.floor(hours)) * 60);
-                
-                if (hours === 0 && minutes === 0) {
-                    rampTimeDisplay = "menos de 1 minuto";
-                } else if (Math.floor(hours) === 0) {
-                    rampTimeDisplay = `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-                } else if (minutes === 0) {
-                    rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''}`;
-                } else {
-                    rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
-                }
+                if (hours === 0 && minutes === 0) rampTimeDisplay = "menos de 1 minuto";
+                else if (Math.floor(hours) === 0) rampTimeDisplay = `${minutes} minuto${minutes !== 1 ? 's' : ''}`;
+                else if (minutes === 0) rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''}`;
+                else rampTimeDisplay = `${Math.floor(hours)} hora${Math.floor(hours) !== 1 ? 's' : ''} e ${minutes} minuto${minutes !== 1 ? 's' : ''}`;
             }
-            
             return `${direction} ${stage.start_temp}°C → ${stage.target_temp}°C em ${rampTimeDisplay}`;
-        default:
-            return '';
+        }
+        default: return '';
     }
 }
 
 // ========== AÇÕES DA ETAPA EM ANDAMENTO ==========
-
 async function pauseFermentationFromMonitor() {
     const configId = appState.config?.id;
-    if (!configId) {
-        alert('Nenhuma fermentação ativa encontrada.');
-        return;
-    }
-
-    if (!confirm('Pausar a fermentação?\n\nA temperatura será mantida e a contagem da etapa ficará suspensa até a retomada.')) {
-        return;
-    }
-
+    if (!configId) { alert('Nenhuma fermentação ativa encontrada.'); return; }
+    if (!confirm('Pausar a fermentação?\n\nA temperatura será mantida e a contagem da etapa ficará suspensa até a retomada.')) return;
     const btnPause = document.getElementById('btn-pause-stage');
     const btnAdvance = document.getElementById('btn-advance-stage');
-
     try {
         if (btnPause) { btnPause.disabled = true; btnPause.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pausando...'; }
         if (btnAdvance) btnAdvance.disabled = true;
-
-        await apiRequest('configurations/status', {
-            method: 'PUT',
-            body: JSON.stringify({ config_id: configId, status: 'paused' })
-        });
-
+        await apiRequest('configurations/status', { method: 'PUT', body: JSON.stringify({ config_id: configId, status: 'paused' }) });
         await apiRequest('active/deactivate', { method: 'POST' });
-
         alert('⏸️ Fermentação pausada!\n\nO ESP manterá a temperatura atual até ser retomada.');
-
         setTimeout(() => loadCompleteState(), 3000);
-
     } catch (error) {
         alert('Erro ao pausar: ' + error.message);
     } finally {
@@ -1236,34 +911,15 @@ async function pauseFermentationFromMonitor() {
 
 async function resumeFermentation() {
     const configId = appState.config?.id;
-    if (!configId) {
-        alert('Nenhuma fermentação pausada encontrada.');
-        return;
-    }
-
-    if (!confirm('Retomar a fermentação?\n\nA contagem da etapa será ajustada para excluir o tempo pausado.')) {
-        return;
-    }
-
+    if (!configId) { alert('Nenhuma fermentação pausada encontrada.'); return; }
+    if (!confirm('Retomar a fermentação?\n\nA contagem da etapa será ajustada para excluir o tempo pausado.')) return;
     const btnResume = document.getElementById('btn-resume-stage');
-
     try {
         if (btnResume) { btnResume.disabled = true; btnResume.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Retomando...'; }
-
-        await apiRequest('configurations/status', {
-            method: 'PUT',
-            body: JSON.stringify({ config_id: configId, status: 'active' })
-        });
-
-        await apiRequest('active/activate', {
-            method: 'POST',
-            body: JSON.stringify({ config_id: configId })
-        });
-
+        await apiRequest('configurations/status', { method: 'PUT', body: JSON.stringify({ config_id: configId, status: 'active' }) });
+        await apiRequest('active/activate', { method: 'POST', body: JSON.stringify({ config_id: configId }) });
         alert('▶️ Fermentação retomada!\n\nO ESP continuará a partir de onde parou.');
-
         setTimeout(() => loadCompleteState(), 3000);
-
     } catch (error) {
         alert('Erro ao retomar: ' + error.message);
     } finally {
@@ -1274,35 +930,17 @@ async function resumeFermentation() {
 async function advanceStage() {
     const currentIdx = appState.config?.current_stage_index ?? 0;
     const totalStages = appState.config?.stages?.length ?? 0;
-
-    if (currentIdx >= totalStages - 1) {
-        alert('Já está na última etapa.');
-        return;
-    }
-
-    const currentNum = currentIdx + 1;
-    const nextNum = currentIdx + 2;
-
-    if (!confirm(`Avançar da etapa ${currentNum} para a etapa ${nextNum}?\n\nO tempo restante da etapa atual será descartado.`)) {
-        return;
-    }
-
+    if (currentIdx >= totalStages - 1) { alert('Já está na última etapa.'); return; }
+    const currentNum = currentIdx + 1, nextNum = currentIdx + 2;
+    if (!confirm(`Avançar da etapa ${currentNum} para a etapa ${nextNum}?\n\nO tempo restante da etapa atual será descartado.`)) return;
     const btnAdvance = document.getElementById('btn-advance-stage');
-    const btnPause = document.getElementById('btn-pause-stage');
-
+    const btnPause   = document.getElementById('btn-pause-stage');
     try {
         if (btnAdvance) { btnAdvance.disabled = true; btnAdvance.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Enviando...'; }
         if (btnPause) btnPause.disabled = true;
-
-        await apiRequest('commands', {
-            method: 'POST',
-            body: JSON.stringify({ command: 'ADVANCE_STAGE' })
-        });
-
+        await apiRequest('commands', { method: 'POST', body: JSON.stringify({ command: 'ADVANCE_STAGE' }) });
         alert(`✅ Comando enviado!\n\nO ESP avançará para a etapa ${nextNum} na próxima verificação (até 10s).`);
-
         setTimeout(() => loadCompleteState(), 12000);
-
     } catch (error) {
         alert('Erro ao avançar etapa: ' + error.message);
     } finally {
@@ -1313,112 +951,59 @@ async function advanceStage() {
 
 // ========== RENDERIZAÇÃO ==========
 function renderUI() {
-    if (DEBUG_MODE) {
-        console.log('🔍 RenderUI chamada', {
-            temConfig: !!appState.config,
-            temStages: appState.config?.stages?.length || 0,
-            temEspState: !!appState.espState,
-            timeRemaining: appState.espState?.timeRemaining,
-            fermentationCompleted: appState.espState?.fermentationCompleted
-        });
-    }
-    
+    if (DEBUG_MODE) console.log('🔍 RenderUI chamada', { temConfig: !!appState.config, stageStartEpoch: appState.stageStartEpoch, targetReached: appState.targetReached });
+
     const noFermentationCard = document.getElementById('no-fermentation-card');
-    if (noFermentationCard) {
-        noFermentationCard.style.display = 'none';
-    }
-    
+    if (noFermentationCard) noFermentationCard.style.display = 'none';
+
     if (!appState.config || !appState.config.stages || appState.config.stages.length === 0) {
         renderNoActiveFermentation();
         return;
     }
 
-    const nameElement = document.getElementById('fermentation-name');
+    const nameElement  = document.getElementById('fermentation-name');
     const stageElement = document.getElementById('stage-info');
-    
     if (nameElement) nameElement.textContent = appState.config.name || 'Sem nome';
-    
+
     if (stageElement) {
         const currentStage = (appState.config.current_stage_index || 0) + 1;
-        const totalStages = appState.config.stages.length;
-        
-        if (appState.espState?.fermentationCompleted || 
-            appState.espState?.timeRemaining?.status === 'completed') {
+        const totalStages  = appState.config.stages.length;
+        if (appState.espState?.fermentationCompleted || appState.espState?.timeRemaining?.status === 'completed') {
             stageElement.textContent = `Todas as ${totalStages} etapas concluídas`;
         } else {
             stageElement.textContent = `Etapa ${currentStage} de ${totalStages}`;
         }
     }
-    
+
     const timeElement = document.getElementById('time-remaining');
-    if (timeElement && appState.espState) {
-        const tr = appState.espState.timeRemaining;
-        const targetReached = appState.espState.targetReached === true;
-        const fermentationCompleted = appState.espState.fermentationCompleted === true;
-        
-        if (DEBUG_MODE) {
-            console.log('⏱️ Time Element Debug:', {
-                hasTimeRemaining: !!tr,
-                targetReached: targetReached,
-                fermentationCompleted: fermentationCompleted,
-                timeRemaining: tr
-            });
-        }
-        
+    if (timeElement) {
+        // ✅ USA computeTimeRemaining() — calculado de stages.start_time, sempre consistente
+        const tr = computeTimeRemaining();
+        const targetReached = appState.targetReached === true;
+        const fermentationCompleted = appState.espState?.fermentationCompleted === true ||
+                                       appState.espState?.timeRemaining?.status === 'completed';
+
+        if (DEBUG_MODE) console.log('⏱️ Time Element Debug:', { tr, targetReached, fermentationCompleted, stageStartEpoch: appState.stageStartEpoch });
+
         if (fermentationCompleted || tr?.status === 'completed' || tr?.unit === 'completed') {
-            timeElement.innerHTML = `
-                <i class="fas fa-check-circle text-green-600"></i> 
-                <span class="text-green-600 font-semibold">
-                    Fermentação concluída
-                </span>
-            `;
+            timeElement.innerHTML = `<i class="fas fa-check-circle text-green-600"></i> <span class="text-green-600 font-semibold">Fermentação concluída</span>`;
             timeElement.style.display = 'flex';
-            if (DEBUG_MODE) {
-                console.log('🎨 Time element: Fermentação concluída');
-            }
-        }
-        else if (tr && targetReached) {
+        } else if (tr && targetReached) {
             let icon = 'fas fa-hourglass-half';
             let statusClass = 'text-green-600';
-            
-            if (tr.status === 'waiting_gravity') {
-                icon = 'fas fa-hourglass-start';
-                statusClass = 'text-blue-600';
-            }
-            
+            if (tr.status === 'waiting_gravity') { icon = 'fas fa-hourglass-start'; statusClass = 'text-blue-600'; }
             const timeDisplay = formatTimeRemaining(tr);
-            
-            let statusText = '';
-            if (tr.status !== 'waiting_gravity' && tr.unit !== 'indefinite' && tr.unit !== 'ind') {
-                statusText = ' restantes';
-            }
-            
-            timeElement.innerHTML = `
-                <i class="${icon} ${statusClass}"></i> 
-                <span class="${statusClass}">
-                    ${timeDisplay}${statusText}
-                </span>
-            `;
+            const statusText  = (tr.status !== 'waiting_gravity' && tr.unit !== 'indefinite' && tr.unit !== 'ind') ? ' restantes' : '';
+            timeElement.innerHTML = `<i class="${icon} ${statusClass}"></i> <span class="${statusClass}">${timeDisplay}${statusText}</span>`;
             timeElement.style.display = 'flex';
-            
-            if (DEBUG_MODE) {
-                console.log(`🎨 Time element (targetReached=true): ${timeDisplay}${statusText}`);
-            }
         } else if (targetReached === false) {
-            timeElement.innerHTML = `
-                <i class="fas fa-hourglass-start text-yellow-600"></i>
-                <span class="text-yellow-600">
-                    Aguardando temperatura alvo
-                </span>
-            `;
+            timeElement.innerHTML = `<i class="fas fa-hourglass-start text-yellow-600"></i><span class="text-yellow-600">Aguardando temperatura alvo</span>`;
             timeElement.style.display = 'flex';
-            if (DEBUG_MODE) {
-                console.log('🎨 Time element (targetReached=false): Aguardando temperatura alvo');
-            }
         } else {
             timeElement.style.display = 'none';
         }
     }
+
     // Banner de pausa
     let pausedBanner = document.getElementById('paused-banner');
     if (appState.isPaused) {
@@ -1426,17 +1011,10 @@ function renderUI() {
             pausedBanner = document.createElement('div');
             pausedBanner.id = 'paused-banner';
             pausedBanner.className = 'flex items-center gap-3 px-4 py-3 mb-4 rounded-lg bg-yellow-50 border border-yellow-300 text-yellow-800';
-            const header = document.getElementById('fermentation-name')?.closest('.card') 
-                        || document.getElementById('time-remaining')?.parentElement;
+            const header = document.getElementById('fermentation-name')?.closest('.card') || document.getElementById('time-remaining')?.parentElement;
             if (header) header.insertAdjacentElement('afterend', pausedBanner);
         }
-        pausedBanner.innerHTML = `
-            <i class="fas fa-pause-circle text-yellow-500 text-xl"></i>
-            <div>
-                <span class="font-semibold">Fermentação pausada</span>
-                <span class="ml-2 text-sm">— temperatura mantida, contagem suspensa</span>
-            </div>
-        `;
+        pausedBanner.innerHTML = `<i class="fas fa-pause-circle text-yellow-500 text-xl"></i><div><span class="font-semibold">Fermentação pausada</span><span class="ml-2 text-sm">— temperatura mantida, contagem suspensa</span></div>`;
         pausedBanner.classList.remove('hidden');
     } else {
         if (pausedBanner) pausedBanner.classList.add('hidden');
@@ -1451,41 +1029,25 @@ function renderUI() {
 function renderInfoCards() {
     const infoCards = document.getElementById('info-cards');
     if (!infoCards) return;
-    
-    const lastReading = appState.readings[appState.readings.length - 1] || {};
+
+    const lastReading  = appState.readings[appState.readings.length - 1] || {};
     const currentStage = appState.config.stages[appState.config.current_stage_index] || {};
-    
-    const currentTemp = parseFloat(lastReading.temp_fermenter) || 0;
-    const fridgeTemp = parseFloat(lastReading.temp_fridge) || 0;
-    
-    const targetTemp = parseFloat(lastReading.temp_target) ||
-                       parseFloat(currentStage.target_temp) || 0;
-    
-    let tempStatus = '';
-    let tempColor = '#9ca3af';
-    
+    const currentTemp  = parseFloat(lastReading.temp_fermenter) || 0;
+    const fridgeTemp   = parseFloat(lastReading.temp_fridge) || 0;
+    const targetTemp   = parseFloat(lastReading.temp_target) || parseFloat(currentStage.target_temp) || 0;
+
+    let tempStatus = '', tempColor = '#9ca3af';
     if (!isNaN(currentTemp) && !isNaN(targetTemp) && currentTemp !== null && targetTemp !== null) {
         const diff = Math.abs(currentTemp - targetTemp);
-        if (diff <= 0.3) {
-            tempStatus = '✅ No alvo';
-            tempColor = '#10b981';
-        } else if (currentTemp < targetTemp) {
-            tempStatus = '⬇️ Abaixo do alvo';
-            tempColor = '#3b82f6';
-        } else {
-            tempStatus = '⬆️ Acima do alvo';
-            tempColor = '#ef4444';
-        }
+        if (diff <= 0.3) { tempStatus = '✅ No alvo'; tempColor = '#10b981'; }
+        else if (currentTemp < targetTemp) { tempStatus = '⬇️ Abaixo do alvo'; tempColor = '#3b82f6'; }
+        else { tempStatus = '⬆️ Acima do alvo'; tempColor = '#ef4444'; }
     }
 
     const ispindelData = getIspindelData();
-    
-    let spindelSubtitle = '';
-    let spindelSubtitleColor = '';
-    
+    let spindelSubtitle = '', spindelSubtitleColor = '';
     if (ispindelData.isStale && ispindelData.staleMessage) {
-        spindelSubtitle = `⚠️ ${ispindelData.staleMessage}`;
-        spindelSubtitleColor = 'color: #f59e0b;';
+        spindelSubtitle = `⚠️ ${ispindelData.staleMessage}`; spindelSubtitleColor = 'color: #f59e0b;';
     } else if (ispindelData.temperature || ispindelData.battery) {
         const parts = [];
         if (ispindelData.temperature) parts.push(`${ispindelData.temperature.toFixed(1)}°C`);
@@ -1493,136 +1055,55 @@ function renderInfoCards() {
         spindelSubtitle = parts.join(' • ');
     }
 
-    const targetGravity = (currentStage.type === 'gravity' || currentStage.type === 'gravity_time') 
-        ? parseFloat(currentStage.target_gravity) || 0 
-        : 0;
-    
+    const targetGravity = (currentStage.type === 'gravity' || currentStage.type === 'gravity_time') ? parseFloat(currentStage.target_gravity) || 0 : 0;
     let gravityTargetSubtitle = '';
     if (targetGravity > 0 && ispindelData.gravity) {
         const diff = ispindelData.gravity - targetGravity;
-        if (Math.abs(diff) < 0.001) {
-            gravityTargetSubtitle = '✅ No alvo';
-        } else if (diff > 0) {
-            gravityTargetSubtitle = `⬇️ ${Math.abs(diff).toFixed(3)} acima`;
-        } else {
-            gravityTargetSubtitle = `⬆️ ${Math.abs(diff).toFixed(3)} abaixo`;
-        }
+        if (Math.abs(diff) < 0.001) gravityTargetSubtitle = '✅ No alvo';
+        else if (diff > 0) gravityTargetSubtitle = `⬇️ ${Math.abs(diff).toFixed(3)} acima`;
+        else gravityTargetSubtitle = `⬆️ ${Math.abs(diff).toFixed(3)} abaixo`;
     } else if (targetGravity > 0) {
         gravityTargetSubtitle = 'Aguardando leitura';
     } else {
         gravityTargetSubtitle = 'Sem alvo definido';
     }
 
-    const fermentationCompleted = appState.espState?.fermentationCompleted === true ||
-                                   appState.espState?.timeRemaining?.status === 'completed';
-    const isReallyRunning = appState.espState?.targetReached === true;
-    
+    const fermentationCompleted = appState.espState?.fermentationCompleted === true || appState.espState?.timeRemaining?.status === 'completed';
+    const isReallyRunning = appState.targetReached === true;
+
     let countingStatus, countingColor;
-    
-    if (fermentationCompleted) {
-        countingStatus = '✅ Fermentação concluída';
-        countingColor = '#10b981';
-    } else if (isReallyRunning) {
-        countingStatus = '✅ Contagem iniciada';
-        countingColor = '#10b981';
-    } else {
-        countingStatus = '⏳ Aguardando alvo';
-        countingColor = '#f59e0b';
-    }
+    if (fermentationCompleted) { countingStatus = '✅ Fermentação concluída'; countingColor = '#10b981'; }
+    else if (isReallyRunning) { countingStatus = '✅ Contagem iniciada'; countingColor = '#10b981'; }
+    else { countingStatus = '⏳ Aguardando alvo'; countingColor = '#f59e0b'; }
 
     infoCards.innerHTML = `
-        ${cardTemplate({
-            title: 'Temp. Fermentador',
-            icon: 'fas fa-thermometer-full',
-            value: !isNaN(currentTemp) && currentTemp !== null ? `${currentTemp.toFixed(1)}°C` : '--',
-            subtitle: tempStatus,
-            color: tempColor
-        })}
-        ${cardTemplate({
-            title: 'Temp. Geladeira',
-            icon: 'fas fa-thermometer-half',
-            value: !isNaN(fridgeTemp) && fridgeTemp !== null ? `${fridgeTemp.toFixed(1)}°C` : '--',
-            subtitle: 'Sensor ambiente',
-            color: '#3b82f6'
-        })}
-        ${cardTemplate({
-            title: 'Temperatura Alvo',
-            icon: 'fas fa-crosshairs',
-            value: !isNaN(targetTemp) && targetTemp !== null ? `${targetTemp.toFixed(1)}°C` : '--',
-            subtitle: countingStatus,
-            color: countingColor
-        })}
-        ${cardTemplate({
-            title: 'Gravidade Atual',
-            icon: 'fas fa-tint',
-            value: ispindelData.gravity ? ispindelData.gravity.toFixed(3) : '--',
-            subtitle: spindelSubtitle,
-            subtitleStyle: spindelSubtitleColor,
-            color: ispindelData.isStale ? '#f59e0b' : '#10b981'
-        })}
-        ${cardTemplate({
-            title: 'Gravidade Alvo',
-            icon: 'fas fa-bullseye',
-            value: targetGravity > 0 ? targetGravity.toFixed(3) : '--',
-            subtitle: gravityTargetSubtitle,
-            color: targetGravity > 0 ? '#8b5cf6' : '#9ca3af'
-        })}
+        ${cardTemplate({ title: 'Temp. Fermentador', icon: 'fas fa-thermometer-full', value: !isNaN(currentTemp) ? `${currentTemp.toFixed(1)}°C` : '--', subtitle: tempStatus, color: tempColor })}
+        ${cardTemplate({ title: 'Temp. Geladeira', icon: 'fas fa-thermometer-half', value: !isNaN(fridgeTemp) ? `${fridgeTemp.toFixed(1)}°C` : '--', subtitle: 'Sensor ambiente', color: '#3b82f6' })}
+        ${cardTemplate({ title: 'Temperatura Alvo', icon: 'fas fa-crosshairs', value: !isNaN(targetTemp) ? `${targetTemp.toFixed(1)}°C` : '--', subtitle: countingStatus, color: countingColor })}
+        ${cardTemplate({ title: 'Gravidade Atual', icon: 'fas fa-tint', value: ispindelData.gravity ? ispindelData.gravity.toFixed(3) : '--', subtitle: spindelSubtitle, subtitleStyle: spindelSubtitleColor, color: ispindelData.isStale ? '#f59e0b' : '#10b981' })}
+        ${cardTemplate({ title: 'Gravidade Alvo', icon: 'fas fa-bullseye', value: targetGravity > 0 ? targetGravity.toFixed(3) : '--', subtitle: gravityTargetSubtitle, color: targetGravity > 0 ? '#8b5cf6' : '#9ca3af' })}
     `;
-
-    if (appState.heartbeat && appState.heartbeat.control_status) {
-        const cs = appState.heartbeat.control_status;
-        const coolerActive = appState.heartbeat.cooler_active === 1 || appState.heartbeat.cooler_active === true;
-        const heaterActive = appState.heartbeat.heater_active === 1 || appState.heartbeat.heater_active === true;
-        
-        let statusIcon = 'fas fa-check-circle';
-        let statusText = 'Sistema Estável';
-        let statusColor = '#10b981';
-        let statusSubtitle = '';
-        
-        if (cs.is_waiting && cs.wait_reason) {
-            statusIcon = 'fas fa-hourglass-half';
-            statusText = 'Aguardando';
-            statusSubtitle = cs.wait_reason;
-            if (cs.wait_display) {
-                statusSubtitle += ` (${cs.wait_display})`;
-            }
-            statusColor = '#f59e0b';
-        } else if (coolerActive) {
-            statusIcon = 'fas fa-snowflake';
-            statusText = 'Resfriando';
-            statusColor = '#3b82f6';
-        } else if (heaterActive) {
-            statusIcon = 'fas fa-fire';
-            statusText = 'Aquecendo';
-            statusColor = '#ef4444';
-        }
-    }
 }
 
 function renderStagesList() {
     const stagesList = document.getElementById('stages-list');
     if (!stagesList || !appState.config) return;
-    
     const currentIndex = appState.config.current_stage_index;
-    const fermentationCompleted = appState.espState?.fermentationCompleted === true ||
-                                   appState.espState?.timeRemaining?.status === 'completed';
-    
+    const fermentationCompleted = appState.espState?.fermentationCompleted === true || appState.espState?.timeRemaining?.status === 'completed';
     stagesList.innerHTML = appState.config.stages
         .map((stage, index) => {
-            const isCurrent = !fermentationCompleted && index === currentIndex;
+            const isCurrent  = !fermentationCompleted && index === currentIndex;
             const isCompleted = fermentationCompleted || stage.status === 'completed' || index < currentIndex;
-            
             return stageTemplate(stage, index, isCurrent, isCompleted);
         })
         .join('');
 }
 
-// ========== GRÁFICO (MODIFICADO) ==========
+// ========== GRÁFICO ==========
 function renderChart() {
     const canvas = document.getElementById('fermentation-chart');
     const ctx = canvas ? canvas.getContext('2d') : null;
     const noDataMsg = document.getElementById('no-data-message');
-    const periodSelector = document.getElementById('period-selector');
 
     if (!ctx || !appState.config || appState.readings.length === 0) {
         if (canvas) canvas.style.display = 'none';
@@ -1630,440 +1111,210 @@ function renderChart() {
         return;
     }
 
-    // Filtra as leituras pelo período selecionado
     const filteredReadings = filterReadingsByPeriod(appState.readings, selectedPeriod);
-    
-    // Se não houver dados no período, mostra mensagem
     if (filteredReadings.length === 0) {
         if (canvas) canvas.style.display = 'none';
-        if (noDataMsg) {
-            noDataMsg.style.display = 'block';
-            noDataMsg.innerHTML = `Sem dados para o período selecionado (${selectedPeriod === 'all' ? 'todos os dados' : `últimas ${selectedPeriod} horas`})`;
-        }
+        if (noDataMsg) { noDataMsg.style.display = 'block'; noDataMsg.innerHTML = `Sem dados para o período selecionado (${selectedPeriod === 'all' ? 'todos os dados' : `últimas ${selectedPeriod} horas`})`; }
         return;
     }
 
     if (canvas) canvas.style.display = 'block';
     if (noDataMsg) noDataMsg.style.display = 'none';
-
-    if (chart) {
-        chart.destroy();
-    }
+    if (chart) { chart.destroy(); }
 
     const labels = filteredReadings.map(r => {
         const date = utcToSaoPaulo(r.reading_timestamp);
-        const day = date.getDate().toString().padStart(2, '0');
-        const month = (date.getMonth() + 1).toString().padStart(2, '0');
-        const hour = date.getHours().toString().padStart(2, '0');
-        const minute = date.getMinutes().toString().padStart(2, '0');
-        return `${day}/${month} ${hour}:${minute}`;
+        return `${date.getDate().toString().padStart(2,'0')}/${(date.getMonth()+1).toString().padStart(2,'0')} ${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
     });
 
-    // Filtra o histórico do controlador para o mesmo período
-    const filteredControllerHistory = filterControllerHistoryByPeriod(
-        appState.controllerHistory, 
-        filteredReadings, 
-        selectedPeriod
-    );
+    const filteredControllerHistory = filterControllerHistoryByPeriod(appState.controllerHistory, filteredReadings, selectedPeriod);
+    const coolerData = [], heaterData = [];
 
-    const coolerData = [];
-    const heaterData = [];
-    
     if (filteredControllerHistory && filteredControllerHistory.length > 0) {
-        filteredReadings.forEach((reading, idx) => {
+        filteredReadings.forEach((reading) => {
             const readingTime = new Date(reading.reading_timestamp).getTime();
-            
             const controllerState = filteredControllerHistory.find(cs => {
-                const stateTime = new Date(cs.state_timestamp).getTime();
-                const diff = Math.abs(stateTime - readingTime);
-                return diff < 300000; // 5 minutos de tolerância
+                const diff = Math.abs(new Date(cs.state_timestamp).getTime() - readingTime);
+                return diff < 300000;
             });
-            
             if (controllerState) {
-                const coolerActive = controllerState.cooling === 1 || controllerState.cooling === true;
-                const heaterActive = controllerState.heating === 1 || controllerState.heating === true;
-                
-                coolerData.push(coolerActive ? parseFloat(reading.temp_fridge) : null);
-                heaterData.push(heaterActive ? parseFloat(reading.temp_fridge) : null);
+                coolerData.push(controllerState.cooling === 1 || controllerState.cooling === true ? parseFloat(reading.temp_fridge) : null);
+                heaterData.push(controllerState.heating === 1 || controllerState.heating === true ? parseFloat(reading.temp_fridge) : null);
             } else {
-                coolerData.push(null);
-                heaterData.push(null);
+                coolerData.push(null); heaterData.push(null);
             }
         });
     }
 
-    // Filtra leituras do iSpindel
-    const filteredIspindelReadings = filterIspindelReadingsByPeriod(
-        appState.ispindelReadings,
-        filteredReadings,
-        selectedPeriod
-    );
-
+    const filteredIspindelReadings = filterIspindelReadingsByPeriod(appState.ispindelReadings, filteredReadings, selectedPeriod);
     const gravityMap = new Map();
     if (filteredIspindelReadings && filteredIspindelReadings.length > 0) {
-        filteredIspindelReadings.forEach(ir => {
-            const timestamp = new Date(ir.reading_timestamp).getTime();
-            gravityMap.set(timestamp, parseFloat(ir.gravity));
-        });
+        filteredIspindelReadings.forEach(ir => gravityMap.set(new Date(ir.reading_timestamp).getTime(), parseFloat(ir.gravity)));
     }
-    
     const gravityData = filteredReadings.map(r => {
         const readingTime = new Date(r.reading_timestamp).getTime();
-        
-        let closestGravity = null;
-        let closestDiff = Infinity;
-        
+        let closestGravity = null, closestDiff = Infinity;
         gravityMap.forEach((gravity, timestamp) => {
             const diff = Math.abs(timestamp - readingTime);
-            if (diff < closestDiff && diff < 1800000) { // 30 minutos
-                closestDiff = diff;
-                closestGravity = gravity;
-            }
+            if (diff < closestDiff && diff < 1800000) { closestDiff = diff; closestGravity = gravity; }
         });
-        
         return closestGravity;
     });
 
     const datasets = [
-        {
-            label: 'Temp. Geladeira',
-            data: filteredReadings.map(r => parseFloat(r.temp_fridge)),
-            borderColor: '#3b82f6',
-            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-            tension: 0.4,
-            fill: false,
-            order: 2
-        },
-        {
-            label: 'Temp. Fermentador',
-            data: filteredReadings.map(r => parseFloat(r.temp_fermenter)),
-            borderColor: '#1e40af',
-            backgroundColor: 'rgba(30, 64, 175, 0.1)',
-            tension: 0.4,
-            fill: false,
-            order: 2
-        },
-        {
-            label: 'Temperatura Alvo',
-            data: filteredReadings.map(r => parseFloat(r.temp_target)),
-            borderColor: '#ef4444',
-            borderDash: [5, 5],
-            backgroundColor: 'rgba(239, 68, 68, 0.1)',
-            tension: 0.4,
-            fill: false,
-            pointRadius: 0,
-            order: 2
-        },
-        {
-            label: 'Gravidade',
-            data: gravityData,
-            borderColor: '#10b981',
-            backgroundColor: 'rgba(16, 185, 129, 0.1)',
-            tension: 0.4,
-            fill: false,
-            yAxisID: 'y1',
-            order: 2,
-            spanGaps: true
-        }
+        { label: 'Temp. Geladeira', data: filteredReadings.map(r => parseFloat(r.temp_fridge)), borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', tension: 0.4, fill: false, order: 2 },
+        { label: 'Temp. Fermentador', data: filteredReadings.map(r => parseFloat(r.temp_fermenter)), borderColor: '#1e40af', backgroundColor: 'rgba(30,64,175,0.1)', tension: 0.4, fill: false, order: 2 },
+        { label: 'Temperatura Alvo', data: filteredReadings.map(r => parseFloat(r.temp_target)), borderColor: '#ef4444', borderDash: [5,5], backgroundColor: 'rgba(239,68,68,0.1)', tension: 0.4, fill: false, pointRadius: 0, order: 2 },
+        { label: 'Gravidade', data: gravityData, borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.1)', tension: 0.4, fill: false, yAxisID: 'y1', order: 2, spanGaps: true }
     ];
 
     if (coolerData.some(v => v !== null)) {
-        datasets.push({
-            label: '❄️ Cooler Ativo',
-            data: coolerData,
-            backgroundColor: 'rgba(59, 130, 246, 0.25)',
-            borderColor: 'rgba(59, 130, 246, 0.5)',
-            borderWidth: 1,
-            fill: true,
-            pointRadius: 0,
-            tension: 0,
-            order: 1
-        });
+        datasets.push({ label: '❄️ Cooler Ativo', data: coolerData, backgroundColor: 'rgba(59,130,246,0.25)', borderColor: 'rgba(59,130,246,0.5)', borderWidth: 1, fill: true, pointRadius: 0, tension: 0, order: 1 });
     }
-
     if (heaterData.some(v => v !== null)) {
-        datasets.push({
-            label: '🔥 Heater Ativo',
-            data: heaterData,
-            backgroundColor: 'rgba(239, 68, 68, 0.25)',
-            borderColor: 'rgba(239, 68, 68, 0.5)',
-            borderWidth: 1,
-            fill: true,
-            pointRadius: 0,
-            tension: 0,
-            order: 1
-        });
+        datasets.push({ label: '🔥 Heater Ativo', data: heaterData, backgroundColor: 'rgba(239,68,68,0.25)', borderColor: 'rgba(239,68,68,0.5)', borderWidth: 1, fill: true, pointRadius: 0, tension: 0, order: 1 });
     }
 
     chart = new Chart(ctx, {
         type: 'line',
-        data: {
-            labels: labels,
-            datasets: datasets
-        },
+        data: { labels, datasets },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: {
-                mode: 'index',
-                intersect: false
-            },
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
             plugins: {
-                legend: {
-                    display: true,
-                    position: 'top',
-                    labels: {
-                        usePointStyle: true,
-                        padding: 15,
-                        font: { size: 11 }
+                legend: { display: true, position: 'top', labels: { usePointStyle: true, padding: 15, font: { size: 11 } } },
+                tooltip: { callbacks: { label: function(context) {
+                    let label = context.dataset.label || '';
+                    if (label.includes('Cooler Ativo') || label.includes('Heater Ativo')) return context.parsed.y !== null ? label : null;
+                    if (label) label += ': ';
+                    if (context.parsed.y !== null) {
+                        label += context.dataset.yAxisID === 'y1' ? context.parsed.y.toFixed(3) : context.parsed.y.toFixed(1) + '°C';
                     }
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            let label = context.dataset.label || '';
-                            
-                            if (label.includes('Cooler Ativo') || label.includes('Heater Ativo')) {
-                                return context.parsed.y !== null ? label : null;
-                            }
-                            
-                            if (label) label += ': ';
-                            if (context.parsed.y !== null) {
-                                if (context.dataset.yAxisID === 'y1') {
-                                    label += context.parsed.y.toFixed(3);
-                                } else {
-                                    label += context.parsed.y.toFixed(1) + '°C';
-                                }
-                            }
-                            return label;
-                        }
-                    }
-                },
-                title: {
-                    display: selectedPeriod !== 'all',
-                    text: `Mostrando ${filteredReadings.length} leituras das últimas ${selectedPeriod} horas`,
-                    position: 'bottom',
-                    font: { size: 12, style: 'italic' },
-                    color: '#666'
-                }
+                    return label;
+                }}},
+                title: { display: selectedPeriod !== 'all', text: `Mostrando ${filteredReadings.length} leituras das últimas ${selectedPeriod} horas`, position: 'bottom', font: { size: 12, style: 'italic' }, color: '#666' }
             },
             scales: {
-                y: {
-                    type: 'linear',
-                    display: true,
-                    position: 'left',
-                    title: { display: true, text: 'Temperatura (°C)' }
-                },
-                y1: {
-                    type: 'linear',
-                    display: true,
-                    position: 'right',
-                    title: { display: true, text: 'Gravidade' },
-                    grid: { drawOnChartArea: false },
-                    ticks: {
-                        callback: function(value) {
-                            return value.toFixed(3);
-                        }
-                    }
-                }
+                y:  { type: 'linear', display: true, position: 'left', title: { display: true, text: 'Temperatura (°C)' } },
+                y1: { type: 'linear', display: true, position: 'right', title: { display: true, text: 'Gravidade' }, grid: { drawOnChartArea: false }, ticks: { callback: function(value) { return value.toFixed(3); } } }
             }
         }
     });
 }
 
-// ========== EVENT LISTENER DO SELETOR DE PERÍODO ==========
+// ========== SELETOR DE PERÍODO ==========
 function setupPeriodSelector() {
     const periodSelector = document.getElementById('period-selector');
     if (periodSelector) {
         periodSelector.addEventListener('change', (e) => {
             const value = e.target.value;
             selectedPeriod = value === 'all' ? 'all' : parseInt(value);
-            
-            // Re-renderiza o gráfico com o novo período
-            if (appState.config && appState.config.stages && appState.config.stages.length > 0) {
-                renderChart();
-            } else {
-                // Se não tem fermentação ativa, usa os dados que temos
-                renderNoActiveFermentation();
-            }
-            
-            // Feedback visual (opcional)
-            console.log(`Período alterado para: ${selectedPeriod === 'all' ? 'todos os dados' : `últimas ${selectedPeriod} horas`}`);
+            if (appState.config && appState.config.stages && appState.config.stages.length > 0) renderChart();
+            else renderNoActiveFermentation();
         });
     }
 }
 
-// Modifique o DOMContentLoaded para incluir o setup:
-document.addEventListener('DOMContentLoaded', async () => {
-    const emailInput = document.getElementById('login-email');
-    const passwordInput = document.getElementById('login-password');
-    
-    if (emailInput && passwordInput) {
-        const handleEnterKey = (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                login();
-            }
-        };
-        
-        emailInput.addEventListener('keypress', handleEnterKey);
-        passwordInput.addEventListener('keypress', handleEnterKey);
-    }
-    
-    // Setup do seletor de período
-    setupPeriodSelector();
-    
-    await checkAuthStatus();
-});
-
+// ========== SEM FERMENTAÇÃO ATIVA ==========
 function renderNoActiveFermentation() {
-    const nameElement = document.getElementById('fermentation-name');
+    const nameElement  = document.getElementById('fermentation-name');
     const stageElement = document.getElementById('stage-info');
-    const timeElement = document.getElementById('time-remaining');
-    
-    if (nameElement) nameElement.textContent = 'Nenhuma fermentação';
+    const timeElement  = document.getElementById('time-remaining');
+    if (nameElement)  nameElement.textContent  = 'Nenhuma fermentação';
     if (stageElement) stageElement.textContent = 'Inicie uma fermentação para monitorar';
-    if (timeElement) timeElement.style.display = 'none';
-    
-    // Pega dados reais dos sensores (se disponíveis)
-    const lastReading = appState.latestReading || {};
+    if (timeElement)  timeElement.style.display = 'none';
+
+    const lastReading  = appState.latestReading || {};
     const ispindelData = getIspindelData();
-    
-    const currentTemp = parseFloat(lastReading.temp_fermenter) || null;
-    const fridgeTemp = parseFloat(lastReading.temp_fridge) || null;
-    
-    // Monta o subtitle do iSpindel
-    let spindelSubtitle = '';
-    let spindelSubtitleColor = '';
-    
+    const currentTemp  = parseFloat(lastReading.temp_fermenter) || null;
+    const fridgeTemp   = parseFloat(lastReading.temp_fridge) || null;
+
+    let spindelSubtitle = '', spindelSubtitleColor = '';
     if (ispindelData.gravity) {
-        if (ispindelData.isStale && ispindelData.staleMessage) {
-            spindelSubtitle = `⚠️ ${ispindelData.staleMessage}`;
-            spindelSubtitleColor = 'color: #f59e0b;';
-        } else if (ispindelData.temperature || ispindelData.battery) {
+        if (ispindelData.isStale && ispindelData.staleMessage) { spindelSubtitle = `⚠️ ${ispindelData.staleMessage}`; spindelSubtitleColor = 'color: #f59e0b;'; }
+        else if (ispindelData.temperature || ispindelData.battery) {
             const parts = [];
             if (ispindelData.temperature) parts.push(`${ispindelData.temperature.toFixed(1)}°C`);
             if (ispindelData.battery) parts.push(`${ispindelData.battery.toFixed(2)}V`);
             spindelSubtitle = parts.join(' • ');
         }
-    } else {
-        spindelSubtitle = 'Sem dados do iSpindel';
-    }
-    
+    } else { spindelSubtitle = 'Sem dados do iSpindel'; }
+
     const infoCards = document.getElementById('info-cards');
     if (infoCards) {
         infoCards.innerHTML = `
-            ${cardTemplate({
-                title: 'Temp. Fermentador',
-                icon: 'fas fa-thermometer-full',
-                value: currentTemp !== null ? `${currentTemp.toFixed(1)}°C` : '--',
-                subtitle: currentTemp !== null ? 'Leitura atual' : 'Sem dados',
-                color: currentTemp !== null ? '#10b981' : '#9ca3af'
-            })}
-            ${cardTemplate({
-                title: 'Temp. Geladeira',
-                icon: 'fas fa-thermometer-half',
-                value: fridgeTemp !== null ? `${fridgeTemp.toFixed(1)}°C` : '--',
-                subtitle: fridgeTemp !== null ? 'Leitura atual' : 'Sem dados',
-                color: fridgeTemp !== null ? '#3b82f6' : '#9ca3af'
-            })}
-            ${cardTemplate({
-                title: 'Temperatura Alvo',
-                icon: 'fas fa-crosshairs',
-                value: '--',
-                subtitle: 'Sem fermentação ativa',
-                color: '#9ca3af'
-            })}
-            ${cardTemplate({
-                title: 'Gravidade Atual',
-                icon: 'fas fa-tint',
-                value: ispindelData.gravity ? ispindelData.gravity.toFixed(3) : '--',
-                subtitle: spindelSubtitle,
-                subtitleStyle: spindelSubtitleColor,
-                color: ispindelData.gravity ? (ispindelData.isStale ? '#f59e0b' : '#10b981') : '#9ca3af'
-            })}
-            ${cardTemplate({
-                title: 'Gravidade Alvo',
-                icon: 'fas fa-bullseye',
-                value: '--',
-                subtitle: 'Sem alvo definido',
-                color: '#9ca3af'
-            })}
+            ${cardTemplate({ title: 'Temp. Fermentador', icon: 'fas fa-thermometer-full', value: currentTemp !== null ? `${currentTemp.toFixed(1)}°C` : '--', subtitle: currentTemp !== null ? 'Leitura atual' : 'Sem dados', color: currentTemp !== null ? '#10b981' : '#9ca3af' })}
+            ${cardTemplate({ title: 'Temp. Geladeira', icon: 'fas fa-thermometer-half', value: fridgeTemp !== null ? `${fridgeTemp.toFixed(1)}°C` : '--', subtitle: fridgeTemp !== null ? 'Leitura atual' : 'Sem dados', color: fridgeTemp !== null ? '#3b82f6' : '#9ca3af' })}
+            ${cardTemplate({ title: 'Temperatura Alvo', icon: 'fas fa-crosshairs', value: '--', subtitle: 'Sem fermentação ativa', color: '#9ca3af' })}
+            ${cardTemplate({ title: 'Gravidade Atual', icon: 'fas fa-tint', value: ispindelData.gravity ? ispindelData.gravity.toFixed(3) : '--', subtitle: spindelSubtitle, subtitleStyle: spindelSubtitleColor, color: ispindelData.gravity ? (ispindelData.isStale ? '#f59e0b' : '#10b981') : '#9ca3af' })}
+            ${cardTemplate({ title: 'Gravidade Alvo', icon: 'fas fa-bullseye', value: '--', subtitle: 'Sem alvo definido', color: '#9ca3af' })}
         `;
     }
-    
+
     const canvas = document.getElementById('fermentation-chart');
     const noDataMsg = document.getElementById('no-data-message');
     const chartContainer = canvas ? canvas.parentElement : null;
-    
     if (canvas) canvas.style.display = 'none';
     if (noDataMsg) noDataMsg.style.display = 'none';
-    
+
     let noFermentationCard = document.getElementById('no-fermentation-card');
-    
     if (!noFermentationCard && chartContainer) {
         noFermentationCard = document.createElement('div');
         noFermentationCard.id = 'no-fermentation-card';
         chartContainer.appendChild(noFermentationCard);
     }
-    
     if (noFermentationCard) {
         noFermentationCard.className = 'flex flex-col items-center justify-center py-16';
         noFermentationCard.innerHTML = `
             <i class="fas fa-chart-line" style="font-size: 4rem; color: #9ca3af; margin-bottom: 1rem;"></i>
             <h2 class="text-2xl font-semibold text-gray-700 mb-2">Nenhuma Fermentação Ativa</h2>
-            <p class="text-gray-500 mb-6 text-center max-w-md">
-                Configure e inicie uma fermentação para visualizar o gráfico de temperatura e gravidade aqui.
-            </p>
+            <p class="text-gray-500 mb-6 text-center max-w-md">Configure e inicie uma fermentação para visualizar o gráfico de temperatura e gravidade aqui.</p>
             <button onclick="location.href='config.html'" class="btn btn-primary flex items-center gap-2">
                 <i class="fas fa-cog"></i> Ir para Configuração
             </button>
         `;
         noFermentationCard.style.display = 'flex';
     }
-    
+
     const stagesList = document.getElementById('stages-list');
     if (stagesList) {
-        stagesList.innerHTML = `
-            <div class="p-4 rounded-lg border-2 border-gray-200 bg-gray-50 text-center">
-                <p class="text-gray-500">
-                    <i class="fas fa-info-circle mr-2"></i>
-                    Nenhuma etapa configurada. Inicie uma fermentação para ver as etapas.
-                </p>
-            </div>
-        `;
+        stagesList.innerHTML = `<div class="p-4 rounded-lg border-2 border-gray-200 bg-gray-50 text-center"><p class="text-gray-500"><i class="fas fa-info-circle mr-2"></i>Nenhuma etapa configurada. Inicie uma fermentação para ver as etapas.</p></div>`;
     }
-    
-    const alertDiv = document.getElementById('esp-status-alert');
-    const badgeDiv = document.getElementById('esp-status-badge');
+
+    const alertDiv  = document.getElementById('esp-status-alert');
+    const badgeDiv  = document.getElementById('esp-status-badge');
     if (alertDiv) alertDiv.classList.add('hidden');
     if (badgeDiv) badgeDiv.classList.add('hidden');
-    
-    const coolerStatusDiv = document.getElementById('cooler-status');
-    const heaterStatusDiv = document.getElementById('heater-status');
-    const waitingStatusDiv = document.getElementById('waiting-status');
-    const heapStatusDiv = document.getElementById('heap-status-alert');
-    if (coolerStatusDiv) coolerStatusDiv.classList.add('hidden');
-    if (heaterStatusDiv) heaterStatusDiv.classList.add('hidden');
-    if (waitingStatusDiv) waitingStatusDiv.classList.add('hidden');
-    if (heapStatusDiv) heapStatusDiv.classList.add('hidden');
+
+    ['cooler-status','heater-status','waiting-status','heap-status-alert'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
+    });
 }
 
 // ========== INICIALIZAÇÃO ==========
 async function initAppAfterAuth() {
     try {
         await loadCompleteState();
-        
-        if (refreshInterval) {
-            clearInterval(refreshInterval);
-        }
-        
+        if (refreshInterval) clearInterval(refreshInterval);
         refreshInterval = setInterval(autoRefreshData, REFRESH_INTERVAL);
     } catch (error) {
         console.error('Erro ao inicializar:', error);
         renderNoActiveFermentation();
     }
 }
+
+document.addEventListener('DOMContentLoaded', async () => {
+    const emailInput    = document.getElementById('login-email');
+    const passwordInput = document.getElementById('login-password');
+    if (emailInput && passwordInput) {
+        const handleEnterKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); login(); } };
+        emailInput.addEventListener('keypress', handleEnterKey);
+        passwordInput.addEventListener('keypress', handleEnterKey);
+    }
+    setupPeriodSelector();
+    await checkAuthStatus();
+});
 
 window.login = login;
 window.logout = logout;

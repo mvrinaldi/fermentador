@@ -18,6 +18,7 @@
 #include "message_codes.h"
 #include "mysql_sender.h"
 #include "http_commands.h"
+#include "config_cache.h"
 
 extern FermentadorHTTPClient httpClient;
 
@@ -483,6 +484,7 @@ void deactivateCurrentFermentation() {
 
     updateTargetTemperature(DEFAULT_TEMPERATURE);
     clearPreferences();
+    clearConfigCache();
     saveStateToPreferences();
     
     #if DEBUG_FERMENTATION
@@ -497,6 +499,27 @@ void setupActiveListener() {
 
     loadStateFromPreferences();
     
+    // Se temos ID ativo mas perdemos as etapas (reboot),
+    // tenta restaurar do cache local antes de precisar do servidor
+    if (fermentacaoState.active &&
+        fermentacaoState.totalStages == 0 &&
+        isValidString(fermentacaoState.activeId)) {
+
+        #if DEBUG_FERMENTATION
+        Serial.println(F("[Cache] totalStages=0 após reboot, tentando cache local..."));
+        #endif
+
+        if (loadConfigCache(fermentacaoState.activeId)) {
+            #if DEBUG_FERMENTATION
+            Serial.println(F("[Cache] ✅ Operação offline possível"));
+            #endif
+        } else {
+            #if DEBUG_FERMENTATION
+            Serial.println(F("[Cache] ⚠️  Cache indisponível, aguardando servidor"));
+            #endif
+        }
+    }
+
     if (fermentacaoState.active) {
         if (fermentacaoState.targetReachedSent && fermentacaoState.stageStartEpoch == 0) {
             #if DEBUG_FERMENTATION
@@ -955,6 +978,9 @@ void loadConfigParameters(const char* configId) {
         Serial.printf("[MySQL] 🌡️  Temperatura alvo: %.1f°C\n", targetTemp);
         #endif
     }
+
+    //Salva cache local para uso offline após reboot
+    saveConfigCache(configId, doc);
 
     #if DEBUG_FERMENTATION
     Serial.printf("[MySQL] ✅ Configuração carregada: %d etapas\n", count);
