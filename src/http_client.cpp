@@ -65,7 +65,7 @@ bool FermentadorHTTPClient::getActiveFermentation(JsonDocument& doc) {
     String response;
     yield();
     // CORREÇÃO: Passar nullptr em vez de "" para requisições GET
-    if (!makeRequest("api/esp/active.php", "GET", nullptr, response)) {
+    if (!makeRequest("api.php?path=esp/active", "GET", nullptr, response)) {
         return false;
     }
     
@@ -100,7 +100,7 @@ bool FermentadorHTTPClient::getConfiguration(const char* configId, JsonDocument&
 }
 
 bool FermentadorHTTPClient::updateFermentationState(const char* configId, const JsonDocument& doc) {
-    String endpoint = "api/esp/state.php?config_id=" + String(configId);
+    String endpoint = "api.php?path=fermentation-state&config_id=" + String(configId);
     String response;
     yield();
 

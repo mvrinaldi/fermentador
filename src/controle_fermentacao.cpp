@@ -32,7 +32,11 @@ char lastActiveId[64] = "";
 bool isFirstCheck = true;
 bool stageStarted = false;
 bool justBootedWithState = false;
-bool justResumed = false;
+
+// ✅ ALTERADO: contador de ciclos pós-retomada (substitui bool justResumed)
+// Protege o epoch ajustado por N ciclos após retomada de pausa,
+// postando o valor correto ao servidor a cada ciclo até zerar.
+int justResumedCycles = 0;
 
 // =====================================================
 // FUNÇÕES AUXILIARES LOCAIS
@@ -98,7 +102,6 @@ time_t getCurrentEpoch() {
         if (!epochInitialized) {
             prefsFerment.begin("ferment", true);  // read-only
             
-            // ✅ CORRIGIDO: Usa ULong64
             lastValidEpoch = (time_t)prefsFerment.getULong64("lastEpoch", 0);
             lastValidMillis = prefsFerment.getULong("lastMillis", 0);
             
@@ -131,7 +134,6 @@ time_t getCurrentEpoch() {
         
         prefsFerment.begin("ferment", false);  // read-write
         
-        // ✅ CORRIGIDO: Usa ULong64
         prefsFerment.putULong64("lastEpoch", (uint64_t)lastValidEpoch);
         prefsFerment.putULong("lastMillis", lastValidMillis);
         
@@ -262,7 +264,7 @@ void loadStateFromPreferences() {
     Serial.println(fermentacaoState.targetReachedSent ? F("true") : F("false"));
 #endif
 
-    // ✅ CORREÇÃO: campos de pausa lidos ANTES de prefsFerment.end()
+    // ✅ Campos de pausa lidos ANTES de prefsFerment.end()
     fermentacaoState.paused             = prefsFerment.getBool("paused", false);
     fermentacaoState.pausedAtEpoch      = (time_t)prefsFerment.getULong64("pausedAt", 0);
     fermentacaoState.elapsedBeforePause = (time_t)prefsFerment.getULong64("elapsedBP", 0);
@@ -579,6 +581,7 @@ void getTargetFermentacao() {
     LOG_FERMENTATION("  fermentacaoState.activeId: '" + String(fermentacaoState.activeId) + "'");
     LOG_FERMENTATION("  fermentacaoState.currentStageIndex: " + String(fermentacaoState.currentStageIndex));
     LOG_FERMENTATION("  lastActiveId: '" + String(lastActiveId) + "'");
+    LOG_FERMENTATION("  justResumedCycles: " + String(justResumedCycles));
 
     if (!isValidString(id)) {
         LOG_FERMENTATION(F("[MySQL] ID é inválido ou vazio!"));
@@ -643,6 +646,7 @@ void getTargetFermentacao() {
             stageStarted                        = false;
             fermentacaoState.targetReachedSent  = false;
             fermentacaoState.stageStartEpoch    = 0;
+            justResumedCycles                   = 0;
 
             saveStateToPreferences();
 
@@ -668,11 +672,21 @@ void getTargetFermentacao() {
             // =====================================================
             LOG_FERMENTATION(F("  → MESMO ID do último conhecido"));
 
+            bool serverPaused = doc["paused"] | false;
+
             // ← RETOMADA DE PAUSA: checa antes de qualquer sync
             if (fermentacaoState.paused) {
+                if (serverPaused) {
+                    // Servidor ainda está pausado — aguarda retomada pelo usuário
+                    LOG_FERMENTATION(F("[MySQL] Fermentação pausada — aguardando retomada pelo servidor"));
+                    isFirstCheck = false;
+                    return;
+                }
+
+                // Servidor não está mais pausado → retomada real
                 LOG_FERMENTATION(F("[MySQL] Retomando fermentação pausada"));
 
-                time_t nowEpoch    = getCurrentEpoch();
+                time_t nowEpoch      = getCurrentEpoch();
                 time_t pauseDuration = 0;
 
                 if (fermentacaoState.pausedAtEpoch > 0 && nowEpoch > 0) {
@@ -689,17 +703,22 @@ void getTargetFermentacao() {
                 fermentacaoState.active        = true;
                 stageStarted                   = true;
 
-                justResumed = true;
+                // ✅ ALTERADO: inicia contador de proteção pós-retomada (3 ciclos ≈ 90s)
+                // A cada ciclo o ESP posta o epoch ajustado ao servidor,
+                // impedindo que o valor antigo do banco sobrescreva o local.
+                justResumedCycles = 3;
+
                 saveStateToPreferences();
 
                 #if DEBUG_FERMENTATION
                 Serial.printf("[MySQL] Pausa durou %ld segundos\n", (long)pauseDuration);
                 Serial.printf("[MySQL] stageStartEpoch ajustado: %s\n",
                               formatTime(fermentacaoState.stageStartEpoch).c_str());
+                Serial.printf("[MySQL] justResumedCycles = %d\n", justResumedCycles);
                 #endif
 
                 isFirstCheck = false;
-                return; // próximo ciclo já roda normalmente
+                return; // próximo ciclo roda a lógica normal com o epoch correto
             }
 
             // =====================================================
@@ -720,29 +739,52 @@ void getTargetFermentacao() {
                 }
             }
 
-            unsigned long serverStageStartEpoch = doc["stageStartEpoch"] | 0;
-            bool serverTargetReached            = doc["targetReached"] | false;
-            
-if (serverStageStartEpoch > 0 && serverStageStartEpoch != fermentacaoState.stageStartEpoch) {
-                LOG_FERMENTATION(F("  → Timestamp diferente - sincronizando com servidor"));
-                LOG_FERMENTATION("     Local:    " + String((unsigned long)fermentacaoState.stageStartEpoch));
-                LOG_FERMENTATION("     Servidor: " + String(serverStageStartEpoch));
-                
-                if (justResumed) {
-                    justResumed = false; // descarta sync desta vez, mantém epoch ajustado
-                } else {
-                    fermentacaoState.stageStartEpoch   = (time_t)serverStageStartEpoch;
-                    fermentacaoState.targetReachedSent = serverTargetReached;
-                    stageStarted                       = true;
-                    saveStateToPreferences();
-                    LOG_FERMENTATION(F("  → Timestamp sincronizado!"));
-                    if (justBootedWithState) {
-                        justBootedWithState = false;
-                        LOG_FERMENTATION(F(" Proteção de boot desativada - sincronização completa"));
-                    }
-                }
-            }
-            
+unsigned long serverStageStartEpoch = doc["stageStartEpoch"] | 0;
+bool serverTargetReached            = doc["targetReached"] | false;
+
+// ✅ PROTEÇÃO DEFINITIVA:
+// Se alvo já foi atingido E temos epoch local válido,
+// o ESP é a única fonte de verdade — servidor pode estar inconsistente.
+// Posta o estado local para corrigir o servidor e não aceita nada dele.
+if (fermentacaoState.targetReachedSent && fermentacaoState.stageStartEpoch > 0) {
+    justResumedCycles = 0;
+    if (httpClient.isConnected()) {
+        JsonDocument stateDoc;
+        stateDoc["config_id"]         = fermentacaoState.activeId;
+        stateDoc["stageStartEpoch"]   = (unsigned long)fermentacaoState.stageStartEpoch;
+        stateDoc["targetReached"]     = true;
+        stateDoc["currentStageIndex"] = fermentacaoState.currentStageIndex;
+        httpClient.updateFermentationState(fermentacaoState.activeId, stateDoc);
+        LOG_FERMENTATION(F("  → targetReached=true: ESP autoritativo, corrigindo servidor"));
+    }
+    // Não processa nenhum sync de epoch vindo do servidor
+}
+// Só aceita epoch do servidor se alvo ainda não foi atingido
+else if (serverStageStartEpoch > 0 &&
+         serverStageStartEpoch != (unsigned long)fermentacaoState.stageStartEpoch) {
+
+    if (justResumedCycles > 0) {
+        justResumedCycles--;
+        if (httpClient.isConnected()) {
+            JsonDocument stateDoc;
+            stateDoc["config_id"]         = fermentacaoState.activeId;
+            stateDoc["stageStartEpoch"]   = (unsigned long)fermentacaoState.stageStartEpoch;
+            stateDoc["targetReached"]     = fermentacaoState.targetReachedSent;
+            stateDoc["currentStageIndex"] = fermentacaoState.currentStageIndex;
+            httpClient.updateFermentationState(fermentacaoState.activeId, stateDoc);
+        }
+    } else {
+        if (fermentacaoState.stageStartEpoch == 0 ||
+            serverStageStartEpoch > (unsigned long)fermentacaoState.stageStartEpoch) {
+            fermentacaoState.stageStartEpoch = (time_t)serverStageStartEpoch;
+            if (serverTargetReached) fermentacaoState.targetReachedSent = true;
+            stageStarted = true;
+            saveStateToPreferences();
+            if (justBootedWithState) justBootedWithState = false;
+        }
+    }
+}
+           
             if (serverStageIndex != fermentacaoState.currentStageIndex) {
                 LOG_FERMENTATION(F("  → Diferença de etapa detectada!"));
                 LOG_FERMENTATION("     Local:    " + String(fermentacaoState.currentStageIndex));
@@ -755,6 +797,7 @@ if (serverStageStartEpoch > 0 && serverStageStartEpoch != fermentacaoState.stage
                     stageStarted                       = false;
                     fermentacaoState.stageStartEpoch   = 0;
                     fermentacaoState.targetReachedSent = false;
+                    justResumedCycles                  = 0;
                     
                     brewPiControl.reset();
                     saveStateToPreferences();
@@ -823,7 +866,7 @@ if (serverStageStartEpoch > 0 && serverStageStartEpoch != fermentacaoState.stage
     
     isFirstCheck = false;
 
-// =====================================================
+    // =====================================================
     // VERIFICA COMANDOS PENDENTES DO SERVIDOR
     // =====================================================
     checkPendingCommands();
@@ -881,15 +924,15 @@ void loadConfigParameters(const char* configId) {
             s.type = STAGE_TEMPERATURE;
         }
 
-        s.targetTemp = jsonToFloat(stage["targetTemp"], 20.0f);
-        s.startTemp = jsonToFloat(stage["startTemp"], 20.0f);
+        s.targetTemp    = jsonToFloat(stage["targetTemp"], 20.0f);
+        s.startTemp     = jsonToFloat(stage["startTemp"], 20.0f);
         s.rampTimeHours = (int)jsonToFloat(stage["rampTime"], 0.0f);
-        s.durationDays = jsonToFloat(stage["duration"], 0.0f);
+        s.durationDays  = jsonToFloat(stage["duration"], 0.0f);
         s.targetGravity = jsonToFloat(stage["targetGravity"], 0.0f);
-        s.timeoutDays = jsonToFloat(stage["timeoutDays"], 0.0f);
+        s.timeoutDays   = jsonToFloat(stage["timeoutDays"], 0.0f);
         
         s.holdTimeHours = s.durationDays * 24.0f;
-        s.maxTimeHours = s.timeoutDays * 24.0f;
+        s.maxTimeHours  = s.timeoutDays * 24.0f;
         
         s.startTime = 0;
         s.completed = false;
@@ -986,12 +1029,12 @@ void verificarTrocaDeFase() {
     }
     
     // =====================================================
-    // ✅ INÍCIO DE ETAPA - CORRIGIDO COM DETECÇÃO DE RESTAURAÇÃO
+    // ✅ INÍCIO DE ETAPA - COM DETECÇÃO DE RESTAURAÇÃO
     // =====================================================
     if (!stageStarted) {
-        // ✅ VERIFICA SE É RESTAURAÇÃO (já tinha começado antes do reinício)
-        bool isRestoration = (fermentacaoState.stageStartEpoch > 0 && 
-                             fermentacaoState.targetReachedSent);
+
+        // Se o alvo foi atingido, SEMPRE é restauração — epoch pode ser 0 temporariamente
+        bool isRestoration = fermentacaoState.targetReachedSent;
         
         #if DEBUG_FERMENTATION
             Serial.println(F("\n═══════════════════════════════════════════════"));
@@ -1009,7 +1052,7 @@ void verificarTrocaDeFase() {
         
         if (isRestoration) {
             // =====================================================
-            // ✅ RESTAURAÇÃO: Mantém tudo que foi salvo
+            // RESTAURAÇÃO: Mantém tudo que foi salvo
             // =====================================================
             #if DEBUG_FERMENTATION
             Serial.println(F("\n╔════════════════════════════════════════════╗"));
@@ -1035,15 +1078,15 @@ void verificarTrocaDeFase() {
             Serial.println(F("╚════════════════════════════════════════════╝\n"));
             #endif
             
-            // ✅ NÃO reseta targetReachedSent nem stageStartEpoch!
-            // ✅ NÃO reseta PID (mantém estado de controle)
+            // NÃO reseta targetReachedSent nem stageStartEpoch!
+            // NÃO reseta PID (mantém estado de controle)
             
         } else {
             // =====================================================
-            // ✅ NOVA ETAPA: Reseta tudo
+            // NOVA ETAPA: Reseta tudo
             // =====================================================
             fermentacaoState.targetReachedSent = false;
-            fermentacaoState.stageStartEpoch = 0;
+            fermentacaoState.stageStartEpoch   = 0;
             
             brewPiControl.reset();
 
@@ -1099,9 +1142,9 @@ void verificarTrocaDeFase() {
                             stage.type == STAGE_GRAVITY_TIME);
 
     if (needsTemperature) {
-        float currentTemp = getCurrentBeerTemp();
+        float currentTemp     = getCurrentBeerTemp();
         float stageTargetTemp = stage.targetTemp;
-        float diff = abs(currentTemp - stageTargetTemp);
+        float diff            = abs(currentTemp - stageTargetTemp);
         targetReached = (diff <= TEMPERATURE_TOLERANCE);
         
         #if DEBUG_FERMENTATION
@@ -1114,20 +1157,16 @@ void verificarTrocaDeFase() {
         }
         #endif
         
-        // ✅ CORRIGIDO: Salva atomicamente (define tudo primeiro, depois salva)
         if (targetReached) {
             if (!fermentacaoState.targetReachedSent) {
-                // Captura timestamp ANTES de modificar variáveis
                 time_t timestampToSave = nowEpoch;
                 
-                // Define todas as variáveis
                 fermentacaoState.targetReachedSent = true;
                 
                 if (fermentacaoState.stageStartEpoch == 0) {
                     fermentacaoState.stageStartEpoch = timestampToSave;
                 }
                 
-                // ✅ SALVA TUDO de uma vez (operação atômica)
                 saveStateToPreferences();
                 
                 #if DEBUG_FERMENTATION
@@ -1141,9 +1180,6 @@ void verificarTrocaDeFase() {
                 Serial.println(F("[Fase] ⚠️ RECUPERAÇÃO: targetReachedSent=true mas stageStartEpoch=0"));
                 Serial.println(F("[Fase] ⚠️ Definindo stageStartEpoch com timestamp atual"));
                 #endif
-                
-                fermentacaoState.stageStartEpoch = nowEpoch;
-                saveStateToPreferences();
             }
         }
     } 
@@ -1282,14 +1318,16 @@ void verificarTrocaDeFase() {
             
             // Atualiza estado local
             fermentacaoState.currentStageIndex = nextStageIndex;
-            stageStarted = false;
-            fermentacaoState.stageStartEpoch = 0;
+            stageStarted                       = false;
+            fermentacaoState.stageStartEpoch   = 0;
             fermentacaoState.targetReachedSent = false;
+            justResumedCycles                  = 0;
             
             brewPiControl.reset();
             saveStateToPreferences();
 
-            LOG_FERMENTATION("[Fase] Indo para etapa " + String(fermentacaoState.currentStageIndex + 1) + "/" + String(fermentacaoState.totalStages));
+            LOG_FERMENTATION("[Fase] Indo para etapa " + String(fermentacaoState.currentStageIndex + 1) +
+                             "/" + String(fermentacaoState.totalStages));
         } else {
             LOG_FERMENTATION(F("[Fase] TODAS AS ETAPAS CONCLUÍDAS!"));
             LOG_FERMENTATION(F("[Fase] Mantendo última temperatura até comando manual"));
@@ -1314,8 +1352,9 @@ void pauseFermentacao() {
     }
 
     fermentacaoState.pausedAtEpoch = getCurrentEpoch();
-    fermentacaoState.paused = true;
-    fermentacaoState.active = false;
+    fermentacaoState.paused        = true;
+    fermentacaoState.active        = false;
+    justResumedCycles              = 0; // zera proteção pós-retomada ao pausar
 
     // NÃO reseta: currentStageIndex, stageStartEpoch, targetReachedSent, tempTarget
     // NÃO chama clearPreferences

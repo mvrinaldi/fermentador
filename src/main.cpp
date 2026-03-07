@@ -1,7 +1,7 @@
 // main.cpp - Fermentador com MySQL e BrewPi
 
-#define FIRMWARE_VERSION "1.0.5"
-#define IMPLEMENTACAO "Correção de restauração após reboot"
+#define FIRMWARE_VERSION "1.0.6"
+#define IMPLEMENTACAO "Correção de restauração após pausa"
 #define BUILD_DATE __DATE__
 #define BUILD_TIME __TIME__
 
@@ -431,11 +431,11 @@ void setup() {
                 <span class="status">✓ ONLINE</span>
             </div>
             <div class="info-row">
-                <span class="info-label">Última implementação:</span>
+                <span class="info-label">Última implementação: </span>
                 <span class="info-value">)" + String(IMPLEMENTACAO) + R"(</span>
             </div>
             <div class="info-row">
-                <span class="info-label">Compilado em:</span>
+                <span class="info-label">Compilado em: </span>
                 <span class="info-value">)" + getBuildDateFormatted() + " às " + getBuildTimeShort() + R"(</span>
             </div>
         </div>
