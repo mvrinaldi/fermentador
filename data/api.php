@@ -1,5 +1,7 @@
 <?php
 /**
+ * api.php
+ * 
  * API Unificada do Sistema de Fermentação
  * 
  * Inclui integração com Sistema de Alertas (WhatsApp/Telegram)

@@ -3,9 +3,6 @@
 
 class DatabaseCleanup {
     
-    /**
-     * Configuração de limites por tabela
-     */
     private static $tableConfig = [
         'readings' => ['keep' => 200, 'timestamp' => 'reading_timestamp'],
         'controller_states' => ['keep' => 200, 'timestamp' => 'state_timestamp'],
@@ -14,14 +11,9 @@ class DatabaseCleanup {
         'ispindel_readings' => ['keep' => 500, 'timestamp' => 'reading_timestamp']
     ];
     
-    /**
-     * Limpa registros antigos de uma tabela específica
-     */
     public static function cleanupTable($pdo, $tableName, $configId, $customKeep = null) {
         try {
-            // Validar tabela
             if (!isset(self::$tableConfig[$tableName])) {
-                error_log("[CLEANUP ERROR] Tabela inválida: {$tableName}");
                 return false;
             }
             
@@ -36,30 +28,30 @@ class DatabaseCleanup {
             
             // 2. Se exceder limite, deletar antigos
             if ($count > $keepCount) {
-                // Buscar timestamp de corte
+
+                $offset = $keepCount - 1;
+
                 $stmt = $pdo->prepare("
                     SELECT `{$timestampColumn}` as cutoff_time 
                     FROM `{$tableName}` 
                     WHERE config_id = ? 
                     ORDER BY `{$timestampColumn}` DESC 
-                    LIMIT 1 OFFSET ?
+                    LIMIT 1 OFFSET {$offset}
                 ");
-                $stmt->execute([$configId, $keepCount]);
+                $stmt->execute([$configId]);
                 $result = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ($result && !empty($result['cutoff_time'])) {
-                    // Deletar registros antigos
+                    $cutoff = $result['cutoff_time'];
+                    
                     $stmt = $pdo->prepare("
                         DELETE FROM `{$tableName}` 
                         WHERE config_id = ? 
                         AND `{$timestampColumn}` < ?
                     ");
-                    $stmt->execute([$configId, $result['cutoff_time']]);
+                    $stmt->execute([$configId, $cutoff]);
                     
                     $deleted = $stmt->rowCount();
-                    if ($deleted > 0) {
-                        error_log("[CLEANUP] {$tableName}: config_id={$configId}, removidos {$deleted} registros");
-                    }
                     return $deleted;
                 }
             }
@@ -70,7 +62,7 @@ class DatabaseCleanup {
             error_log("[CLEANUP ERROR] {$tableName}: " . $e->getMessage());
             return false;
         }
-    }
+    }    
     
     /**
      * Limpa órfãos de todas as tabelas (sem config_id)
@@ -106,8 +98,8 @@ class DatabaseCleanup {
             }
             
             $timestampColumn = self::$tableConfig[$tableName]['timestamp'];
+            $offset = $keepCount - 1;
             
-            // Deletar TUDO exceto os últimos N registros
             $stmt = $pdo->prepare("
                 DELETE FROM `{$tableName}` 
                 WHERE config_id = ? 
@@ -117,17 +109,13 @@ class DatabaseCleanup {
                         FROM `{$tableName}` 
                         WHERE config_id = ? 
                         ORDER BY `{$timestampColumn}` DESC 
-                        LIMIT 1 OFFSET ?
+                        LIMIT 1 OFFSET {$offset}
                     ) as subquery
                 )
             ");
             
-            $stmt->execute([$configId, $configId, $keepCount]);
+            $stmt->execute([$configId, $configId]);
             $deleted = $stmt->rowCount();
-            
-            if ($deleted > 0) {
-                error_log("[AGGRESSIVE CLEANUP] {$tableName}: config_id={$configId}, removidos {$deleted}");
-            }
             
             return $deleted;
             
